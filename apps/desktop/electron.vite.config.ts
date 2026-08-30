@@ -18,6 +18,15 @@ export default defineConfig({
     build: {
       lib: {
         entry: "src/preload/index.ts",
+        // Force CommonJS: an ESM preload can fail to run contextBridge under
+        // contextIsolation. Emit .cjs (not .js) so Electron treats it as CJS
+        // regardless of the package's "type": "module".
+        formats: ["cjs"],
+      },
+      rollupOptions: {
+        output: {
+          entryFileNames: "index.cjs",
+        },
       },
     },
   },
