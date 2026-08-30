@@ -1,0 +1,90 @@
+# CodeRabbit Configuration
+# Documentation: https://docs.coderabbit.ai/guides/configure-coderabbit
+# Adapted from the uzi repo's .coderabbit.yaml for zeo (pnpm/TypeScript/Electron
+# monorepo). The core review settings, auto_review, and root-level
+# tone_instructions are carried over verbatim; the tool disables and path rules
+# are zeo-specific (uzi's Go/handler/web rules do not apply here).
+
+# Reduce review noise by focusing on actionable issues
+reviews:
+  # Two-step review: submit "Request changes" while issues are open, auto-switch
+  # to "Approve" once they are resolved. (Not a severity filter; it can request
+  # changes for lower-severity comments too.)
+  request_changes_workflow: true
+
+  # Reduce comment verbosity
+  high_level_summary: true
+  poem: false
+  review_status: false
+
+  # Collapse less important sections
+  collapse_walkthrough: true
+
+  # Leaner walkthrough (defaults are on; these PRs don't need the effort estimate)
+  estimate_code_review_effort: false
+  review_details: false
+
+  # Don't re-run the linter zeo's own CI gate already owns. `pnpm lint` runs
+  # eslint (typescript-eslint) over the whole repo in CI, so CodeRabbit's copy
+  # would just duplicate those findings. gitleaks and the rest are left at
+  # default: zeo's CI has no secret scanning, so that coverage is worth keeping.
+  tools:
+    eslint:
+      enabled: false
+
+  # Skip generated, vendored, and build output
+  path_filters:
+    - "!**/node_modules/**"
+    - "!**/dist/**"                           # build output
+    - "!**/out/**"                            # electron-builder output
+    - "!**/.vite/**"                          # vite cache
+    - "!**/playwright-report/**"              # e2e report
+    - "!**/test-results/**"                   # e2e artifacts
+    - "!pnpm-lock.yaml"                       # resolved lockfile
+
+  auto_review:
+    enabled: true
+    drafts: false
+    # Only auto-review PRs whose base is one of these. Add more (or a regex like
+    # "release/.*") if you open PRs against non-default branches.
+    base_branches:
+      - main
+    # Skip dependency bots: CI is the correct validator for a version bump, and a
+    # lockfile/version diff review is noise. Username covers the Mend GitHub App;
+    # the title keywords are the belt-and-braces fallback for any Renovate PR
+    # opened under a different account.
+    ignore_usernames:
+      - "renovate[bot]"
+    ignore_title_keywords:
+      - "chore(deps)"
+      - "fix(deps)"
+      - "build(deps)"
+
+  # Path-specific instructions
+  path_instructions:
+    # Vitest unit tests: correctness/coverage only, and specifically hunt the
+    # vacuous-assertion trap — an assertion against a falsy/zero default or mere
+    # absence-of-throw passes even when the behavior regressed.
+    - path: "**/*.test.{ts,tsx}"
+      instructions: "Focus on test correctness and coverage gaps only; skip style. Flag vacuous assertions: assert the meaningful value, not merely a falsy/zero default or that no error was thrown, which would still pass if the behavior regressed."
+
+    # Playwright e2e specs.
+    - path: "e2e/**/*.spec.ts"
+      instructions: "Focus on test correctness and coverage gaps only; skip style. Flag flaky patterns (unconditional waits, assertions that pass without the app under test actually being driven) and vacuous assertions that would pass even if the behavior regressed."
+
+    - path: "prds/**"
+      instructions: "Only review for clarity and completeness. Skip markdown style suggestions."
+
+    - path: "docs/**"
+      instructions: "Only review for clarity and completeness. Skip markdown style suggestions."
+
+# Limit review scope
+language: "en-US"
+early_access: false
+
+# Reduce nitpick comments (root-level per the CodeRabbit schema; it is ignored
+# when nested under reviews:).
+tone_instructions: "Focus only on critical bugs, security issues, and architectural concerns. Skip style nitpicks and minor improvements unless they significantly impact code quality or maintainability."
+
+chat:
+  auto_reply: false
