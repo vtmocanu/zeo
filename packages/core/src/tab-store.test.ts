@@ -57,8 +57,7 @@ describe("TabStore.create", () => {
     const tab = store.create({ url: "https://a.test" });
     expect(tab.pinned).toBe(false);
     expect(tab.archivedAt).toBeNull();
-    // lastActiveAt comes from the clock's second read within create.
-    expect(tab.lastActiveAt).toBe(1001);
+    expect(tab.lastActiveAt).toBe(tab.createdAt);
   });
 
   test("each create advances the active pointer to the new tab", () => {
@@ -150,11 +149,11 @@ describe("TabStore.activate", () => {
 
   test("stamps lastActiveAt from the clock", () => {
     const store = makeStore();
-    store.create({ url: "https://a.test" }); // t1: lastActiveAt 1001
-    store.create({ url: "https://b.test" }); // t2: lastActiveAt 1003
+    store.create({ url: "https://a.test" });
+    store.create({ url: "https://b.test" });
 
-    store.activate("t1"); // next clock read is 1004
-    expect(store.activeTab?.lastActiveAt).toBe(1004);
+    store.activate("t1");
+    expect(store.activeTab?.lastActiveAt).toBe(1002);
   });
 
   test("throws on an unknown id", () => {
@@ -251,6 +250,15 @@ describe("TabStore.pin / unpin", () => {
     expect(() => store.pin("t1")).toThrow();
   });
 
+  test("unpin on an archived tab throws", () => {
+    const store = makeStore();
+    store.create({ url: "https://a.test" });
+    store.create({ url: "https://b.test" });
+    store.archive("t1");
+
+    expect(() => store.unpin("t1")).toThrow(/archived/);
+  });
+
   test("pin and unpin throw on unknown ids", () => {
     const store = makeStore();
     store.create({ url: "https://a.test" });
@@ -304,7 +312,17 @@ describe("TabStore.reorder", () => {
     store.create({ url: "https://a.test" }); // t1
     store.create({ url: "https://b.test" }); // t2 (active)
     store.archive("t1");
-    expect(() => store.reorder("t1", 0)).toThrow();
+    expect(() => store.reorder("t1", 0)).toThrow(/archived/);
+  });
+
+  test("throws on a non-integer toIndex", () => {
+    const store = makeStore();
+    store.create({ url: "https://a.test" });
+    store.create({ url: "https://b.test" });
+
+    expect(() => store.reorder("t1", Number.NaN)).toThrow(/non-integer/);
+    expect(() => store.reorder("t1", 1.5)).toThrow(/non-integer/);
+    expect(store.list().map((t) => t.id)).toEqual(["t1", "t2"]);
   });
 });
 
@@ -379,6 +397,30 @@ describe("TabStore.close (MRU activation)", () => {
     store.create({ url: "https://a.test" });
     expect(() => store.close("nope")).toThrow();
   });
+
+  test("throws on an archived id (archived tabs stay restorable)", () => {
+    const store = makeStore();
+    store.create({ url: "https://a.test" });
+    store.create({ url: "https://b.test" });
+    store.archive("t1");
+
+    expect(() => store.close("t1")).toThrow(/archived/);
+    expect(store.archived().map((t) => t.id)).toEqual(["t1"]);
+  });
+
+  test("the implicitly activated MRU successor is stamped as an activation", () => {
+    const store = makeStore();
+    store.create({ url: "https://a.test" });
+    store.create({ url: "https://b.test" });
+    store.create({ url: "https://c.test" });
+
+    store.archive("t3");
+    store.restore("t3");
+    store.activate("t1");
+
+    store.close("t1");
+    expect(store.activeTabId).toBe("t2");
+  });
 });
 
 describe("TabStore.archive / restore", () => {
@@ -445,6 +487,17 @@ describe("TabStore.archive / restore", () => {
     expect(() => store.restore("t1")).toThrow();
   });
 
+  test("archive of an already-archived tab throws", () => {
+    const store = makeStore();
+    store.create({ url: "https://a.test" });
+    store.create({ url: "https://b.test" });
+    store.archive("t1");
+    const [archivedTab] = store.archived();
+
+    expect(() => store.archive("t1")).toThrow(/archived/);
+    expect(store.archived()).toEqual([archivedTab]);
+  });
+
   test("archive and restore throw on unknown ids", () => {
     const store = makeStore();
     store.create({ url: "https://a.test" });
@@ -459,9 +512,9 @@ describe("TabStore.archive / restore", () => {
     store.create({ url: "https://c.test" }); // t3 (active)
 
     // All archivedAt share the frozen timestamp; ordering falls to archivalSeq.
-    store.archive("t3"); // archivalSeq 4
-    store.archive("t2"); // archivalSeq 5
-    store.archive("t1"); // archivalSeq 6
+    store.archive("t3");
+    store.archive("t2");
+    store.archive("t1");
 
     // Most recently archived (highest seq) first.
     expect(store.archived().map((t) => t.id)).toEqual(["t1", "t2", "t3"]);

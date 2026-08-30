@@ -97,13 +97,14 @@ export class TabStore {
    * main process.
    */
   create(input: { url: string; title?: string }): Tab {
+    const createdAt = this.now();
     const record: TabRecord = {
       id: this.idFactory(),
       url: input.url,
       title: input.title ?? input.url,
-      createdAt: this.now(),
+      createdAt,
       pinned: false,
-      lastActiveAt: this.now(),
+      lastActiveAt: createdAt,
       archivedAt: null,
       activationSeq: ++this.seq,
       archivalSeq: 0,
@@ -126,6 +127,9 @@ export class TabStore {
     if (index === -1) {
       throw new Error(`Cannot close unknown tab: ${id}`);
     }
+    if (this.tabs[index].archivedAt !== null) {
+      throw new Error(`Cannot close an archived tab: ${id}`);
+    }
 
     const wasActive = this.activeId === id;
     this.tabs.splice(index, 1);
@@ -134,8 +138,18 @@ export class TabStore {
       return;
     }
 
+    this.activateMru();
+  }
+
+  private activateMru(): void {
     const next = this.mruAmong(this.openTabs());
-    this.activeId = next ? next.id : null;
+    if (next === null) {
+      this.activeId = null;
+      return;
+    }
+    next.lastActiveAt = this.now();
+    next.activationSeq = ++this.seq;
+    this.activeId = next.id;
   }
 
   /**
@@ -144,11 +158,12 @@ export class TabStore {
    * id both throw, enforcing that archived tabs never become active.
    */
   activate(id: string): void {
-    const record = this.tabs.find(
-      (tab) => tab.id === id && tab.archivedAt === null,
-    );
+    const record = this.tabs.find((tab) => tab.id === id);
     if (!record) {
       throw new Error(`Cannot activate unknown tab: ${id}`);
+    }
+    if (record.archivedAt !== null) {
+      throw new Error(`Cannot activate an archived tab: ${id}`);
     }
     record.lastActiveAt = this.now();
     record.activationSeq = ++this.seq;
@@ -190,6 +205,9 @@ export class TabStore {
       throw new Error(`Cannot unpin unknown tab: ${id}`);
     }
     const record = this.tabs[index];
+    if (record.archivedAt !== null) {
+      throw new Error(`Cannot unpin an archived tab: ${id}`);
+    }
     if (!record.pinned) {
       return;
     }
@@ -206,11 +224,15 @@ export class TabStore {
    * their positions.
    */
   reorder(id: string, toIndex: number): void {
-    const target = this.tabs.find(
-      (tab) => tab.id === id && tab.archivedAt === null,
-    );
+    if (!Number.isInteger(toIndex)) {
+      throw new Error(`Cannot reorder to a non-integer index: ${toIndex}`);
+    }
+    const target = this.tabs.find((tab) => tab.id === id);
     if (!target) {
       throw new Error(`Cannot reorder unknown tab: ${id}`);
+    }
+    if (target.archivedAt !== null) {
+      throw new Error(`Cannot reorder an archived tab: ${id}`);
     }
 
     // The ordered group (among OPEN tabs) the target belongs to, and the array
@@ -253,13 +275,15 @@ export class TabStore {
     if (record.pinned) {
       throw new Error(`Cannot archive a pinned tab: ${id}`);
     }
+    if (record.archivedAt !== null) {
+      throw new Error(`Cannot archive an archived tab: ${id}`);
+    }
 
     record.archivedAt = this.now();
     record.archivalSeq = ++this.seq;
 
     if (this.activeId === id) {
-      const next = this.mruAmong(this.openTabs());
-      this.activeId = next ? next.id : null;
+      this.activateMru();
     }
   }
 
