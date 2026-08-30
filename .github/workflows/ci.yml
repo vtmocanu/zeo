@@ -1,9 +1,13 @@
 name: ci
 
+permissions:
+  contents: read
+
 on:
   push:
     branches: [main]
     paths:
+      - ".github/workflows/ci.yml"
       - "package.json"
       - "pnpm-lock.yaml"
       - "pnpm-workspace.yaml"
@@ -13,6 +17,7 @@ on:
       - "e2e/**"
   pull_request:
     paths:
+      - ".github/workflows/ci.yml"
       - "package.json"
       - "pnpm-lock.yaml"
       - "pnpm-workspace.yaml"
@@ -22,10 +27,30 @@ on:
       - "e2e/**"
 
 jobs:
+  ready:
+    runs-on: ubuntu-latest
+    outputs:
+      ready: ${{ steps.check.outputs.ready }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - id: check
+        run: |
+          if [ -f pnpm-lock.yaml ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          fi
+
   linux:
+    needs: ready
+    if: needs.ready.outputs.ready == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
@@ -34,19 +59,24 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
       - run: pnpm typecheck
+      - run: pnpm build
       - run: pnpm test
       - run: xvfb-run --auto-servernum pnpm e2e
 
   macos:
+    needs: ready
+    if: needs.ready.outputs.ready == 'true'
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm test
       - run: pnpm build
+      - run: pnpm test
       - run: pnpm e2e

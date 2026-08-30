@@ -21,7 +21,7 @@ built on Electron and Chromium.
 - Windows and Linux releases
 - Chrome extension support (roadmap)
 - Cross-device sync (roadmap)
-- Signed/notarized builds
+- Developer ID signing and notarization (builds are ad-hoc signed only)
 
 ## Architecture
 
@@ -65,15 +65,18 @@ history, downloads metadata, settings.
 
 - `packages/core`: Vitest unit tests
 - `e2e`: Playwright drives the real app (headless under xvfb on Linux)
-- CI: Linux job runs lint, typecheck, unit, e2e; macOS job builds, tests, and
-  packages
+- CI: Linux job runs lint, typecheck, build, unit, e2e; macOS job builds,
+  tests, and runs e2e. Release packaging runs only on tagged releases
+  (milestone 8)
 - Manual review on macOS covers visual polish
 
 ## Distribution
 
 - Ad-hoc signed build, dmg/zip artifacts from CI on tagged releases
 - Homebrew cask in `vtmocanu/homebrew-tap`
-- In-app update check against GitHub Releases prompting `brew upgrade`
+- In-app update check against GitHub Releases: Homebrew-managed installs are
+  prompted to run `brew upgrade`; direct dmg/zip installs are linked to the
+  release page
 
 ## Milestones
 
