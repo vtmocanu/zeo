@@ -162,7 +162,10 @@ test.describe("zeo desktop app", () => {
   });
 
   test.afterEach(async () => {
-    await app.close();
+    // Guard with optional-chaining: if beforeEach's launch rejected, `app` is
+    // undefined and an unguarded close would throw a secondary error masking the
+    // real launch failure.
+    await app?.close();
   });
 
   test("shows the seeded tab and adds one via the new-tab button", async () => {
@@ -208,9 +211,16 @@ test.describe("zeo desktop app", () => {
     await expect(items).toHaveCount(before);
   });
 
-  // Case (b): Cmd/Ctrl+T adds a tab and Cmd/Ctrl+W closes it, proven from BOTH
-  // focus surfaces — the sidebar renderer and a tab's WebContentsView.
-  test("new-tab / close-tab accelerators fire from the sidebar and from a tab view", async () => {
+  // Case (b): the New Tab / Close Tab commands add and close a tab. The commands
+  // are invoked through the application menu in the MAIN process (see the SEAM
+  // note: real accelerator keychords can't be delivered headlessly), so this
+  // path is focus-independent by construction. We still run it twice, once with
+  // the sidebar frontmost and once with a tab's WebContentsView frontmost, to
+  // document that an application-menu command is not scoped to one webContents
+  // (unlike before-input-event) and that the sidebar reflects it either way; the
+  // literal keychord firing is a running-app acceptance criterion, not asserted
+  // here.
+  test("new-tab / close-tab commands add and close a tab, sidebar- and tab-view-frontmost", async () => {
     const items = sidebar.getByTestId("tab-item");
 
     // Phase 1 — sidebar renderer frontmost/focused. Click a neutral element (the
@@ -223,10 +233,9 @@ test.describe("zeo desktop app", () => {
     await pressCloseTab(app);
     await expect(items).toHaveCount(n1);
 
-    // Phase 2 — a tab's WebContentsView frontmost/focused. Because these are
-    // APPLICATION-menu commands (not per-webContents before-input-event), the
-    // command fires and the sidebar still observes the count via the state
-    // broadcast even though a tab view — not the sidebar — is in front.
+    // Phase 2 — a tab's WebContentsView frontmost/focused. The command still runs
+    // and the sidebar observes the count via the state broadcast even though a
+    // tab view — not the sidebar — is in front.
     const tabView = await tabViewWindow(app, sidebar);
     await tabView.bringToFront();
     // Clicking the tab body just moves focus into the view; guard because an
@@ -266,9 +275,11 @@ test.describe("zeo desktop app", () => {
 
   // Case (d): the renderer's state carries the archived tab in `archived`.
   test("archiving a tab surfaces it in the broadcast state's archived list", async () => {
-    // Create a dedicated non-pinned tab and archive it, then read the state the
-    // renderer holds. Asserting `archived` contains the id verifies the broadcast
-    // payload carries the archived list (the sidebar renders no archived UI).
+    // Create a dedicated non-pinned tab and archive it, then read the state via
+    // list(). Both list() and the pushed state-change broadcast serialize the
+    // same store.snapshot(), so asserting `archived` contains the id verifies the
+    // shared payload carries the archived list (the sidebar renders no archived
+    // UI, so there is no rendered surface to assert against).
     const archivedId = await sidebar.evaluate(async () => {
       const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
       const created = await zeo.tabs.create("https://news.ycombinator.com/");
