@@ -38,7 +38,7 @@ async function sidebarWindow(app: ElectronApplication): Promise<Page> {
 }
 
 test.describe("zeo desktop app", () => {
-  let app: ElectronApplication;
+  let app: ElectronApplication | undefined;
   let window: Page;
 
   test.beforeAll(async () => {
@@ -52,7 +52,9 @@ test.describe("zeo desktop app", () => {
   });
 
   test.afterAll(async () => {
-    await app.close();
+    if (app !== undefined) {
+      await app.close();
+    }
   });
 
   // Both assertions share one app instance. On a CI retry Playwright discards

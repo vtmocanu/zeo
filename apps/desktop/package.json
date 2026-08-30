@@ -7,7 +7,7 @@
   "scripts": {
     "build": "electron-vite build && node scripts/copy-renderer.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "dev": "electron-vite dev"
+    "dev": "ELECTRON_RENDERER_URL=http://localhost:5173 electron-vite dev"
   },
   "dependencies": {
     "@zeo/core": "workspace:*",

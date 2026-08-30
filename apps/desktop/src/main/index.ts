@@ -1,7 +1,7 @@
 import { app, BrowserWindow, WebContentsView, ipcMain } from "electron";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { TabStore, IPC } from "@zeo/core";
+import { TabStore, IPC, titleForUrl, SIDEBAR_WIDTH } from "@zeo/core";
 import type { Tab, TabsState } from "@zeo/core";
 
 // The built main is emitted by electron-vite as ESM (out/main/index.js, the
@@ -10,19 +10,8 @@ import type { Tab, TabsState } from "@zeo/core";
 // file's directory (out/preload/index.cjs, out/renderer/index.html).
 const moduleDir = dirname(fileURLToPath(import.meta.url));
 
-/** Width of the React sidebar; tab web views occupy the region right of it. */
-const SIDEBAR_WIDTH = 240;
 /** Default url/title used by the renderer's URL-less new-tab button. */
 const DEFAULT_URL = "https://example.com";
-
-/** Derives a tab title from a url's hostname, falling back to the raw url. */
-const titleFor = (u: string): string => {
-  try {
-    return new URL(u).hostname || u;
-  } catch {
-    return u;
-  }
-};
 
 const store = new TabStore();
 /** Live WebContentsView per tab id; the active tab's view is the visible one. */
@@ -53,9 +42,9 @@ function createViewFor(tab: Tab): void {
   win.contentView.addChildView(view);
   view.setBounds(viewBounds());
   view.setVisible(false);
-  // Do NOT await: a network-restricted/e2e runner must not stall or crash
-  // startup, so swallow load rejections.
-  view.webContents.loadURL(tab.url).catch(() => {});
+  view.webContents.loadURL(tab.url).catch((err: unknown) => {
+    console.error(`tab ${tab.id} failed to load ${tab.url}:`, err);
+  });
 }
 
 /** Shows the given tab's view, hides all others, and re-lays-out the active. */
@@ -90,7 +79,14 @@ function createWindow(): void {
   // build. electron-vite sets ELECTRON_RENDERER_URL only in dev.
   const rendererUrl = process.env.ELECTRON_RENDERER_URL;
   if (rendererUrl !== undefined && rendererUrl !== "") {
-    void win.loadURL(rendererUrl);
+    const loadDev = (attempt: number): void => {
+      win?.loadURL(rendererUrl).catch(() => {
+        if (attempt < 20) {
+          setTimeout(() => loadDev(attempt + 1), 500);
+        }
+      });
+    };
+    loadDev(0);
   } else {
     void win.loadFile(join(moduleDir, "../renderer/index.html"));
   }
@@ -103,8 +99,11 @@ function createWindow(): void {
   });
 
   win.on("closed", () => {
-    // The views are children of the destroyed window and are torn down with
-    // it; drop our references so a macOS re-activate rebuilds fresh ones.
+    for (const view of views.values()) {
+      if (!view.webContents.isDestroyed()) {
+        view.webContents.close();
+      }
+    }
     views.clear();
     win = null;
   });
@@ -113,7 +112,7 @@ function createWindow(): void {
   // macOS re-activate the store still holds the prior tabs, so we just rebuild
   // their views for the new window.
   if (store.list().length === 0) {
-    store.create({ url: DEFAULT_URL, title: titleFor(DEFAULT_URL) });
+    store.create({ url: DEFAULT_URL, title: titleForUrl(DEFAULT_URL) });
   }
   for (const tab of store.list()) {
     createViewFor(tab);
@@ -124,7 +123,7 @@ function createWindow(): void {
 
 ipcMain.handle(IPC.tabsCreate, (_event, url?: string): Tab => {
   const u = url ?? DEFAULT_URL;
-  const tab = store.create({ url: u, title: titleFor(u) });
+  const tab = store.create({ url: u, title: titleForUrl(u) });
   createViewFor(tab);
   setActive(tab.id);
   broadcast();

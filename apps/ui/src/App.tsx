@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { TabsState } from "@zeo/core";
+import { SIDEBAR_WIDTH } from "@zeo/core";
 import "./App.css";
 
 // Keyboard-first left sidebar listing open tabs. This is the renderer: it
@@ -17,20 +18,35 @@ export function App() {
     if (!window.zeo) {
       return;
     }
-    window.zeo.tabs.list().then(setState);
-    const unsub = window.zeo.onStateChange(setState);
+    let sawBroadcast = false;
+    const unsub = window.zeo.onStateChange((s) => {
+      sawBroadcast = true;
+      setState(s);
+    });
+    window.zeo.tabs
+      .list()
+      .then((s) => {
+        if (!sawBroadcast) {
+          setState(s);
+        }
+      })
+      .catch(() => {});
     return unsub;
   }, []);
 
   return (
-    <aside className="sidebar" data-testid="sidebar">
+    <aside
+      className="sidebar"
+      data-testid="sidebar"
+      style={{ width: SIDEBAR_WIDTH }}
+    >
       <header className="sidebar__header">
         <h1 className="sidebar__title">Tabs</h1>
         <button
           type="button"
           className="sidebar__new-tab"
           data-testid="new-tab-button"
-          onClick={() => window.zeo?.tabs.create()}
+          onClick={() => void window.zeo?.tabs.create().catch(() => {})}
         >
           + New tab
         </button>
@@ -53,7 +69,9 @@ export function App() {
                   type="button"
                   className="tab-item__title"
                   title={tab.url}
-                  onClick={() => window.zeo?.tabs.activate(tab.id)}
+                  onClick={() =>
+                    void window.zeo?.tabs.activate(tab.id).catch(() => {})
+                  }
                 >
                   {tab.title}
                 </button>
@@ -63,7 +81,7 @@ export function App() {
                   aria-label={`Close ${tab.title}`}
                   onClick={(event) => {
                     event.stopPropagation();
-                    window.zeo?.tabs.close(tab.id);
+                    void window.zeo?.tabs.close(tab.id).catch(() => {});
                   }}
                 >
                   ×
