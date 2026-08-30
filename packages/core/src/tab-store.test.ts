@@ -60,6 +60,12 @@ describe("TabStore.create", () => {
     expect(tab.lastActiveAt).toBe(tab.createdAt);
   });
 
+  test("a new tab's faviconUrl is null until an event supplies one", () => {
+    const store = makeStore();
+    const tab = store.create({ url: "https://a.test" });
+    expect(tab.faviconUrl).toBeNull();
+  });
+
   test("each create advances the active pointer to the new tab", () => {
     const store = makeStore();
     store.create({ url: "https://a.test" });
@@ -88,6 +94,7 @@ describe("TabStore.list / snapshot", () => {
       id: "hacked",
       url: "x",
       title: "x",
+      faviconUrl: null,
       createdAt: 0,
       pinned: false,
       lastActiveAt: 0,
@@ -115,6 +122,7 @@ describe("TabStore.list / snapshot", () => {
       [
         "archivedAt",
         "createdAt",
+        "faviconUrl",
         "id",
         "lastActiveAt",
         "pinned",
@@ -531,5 +539,83 @@ describe("TabStore.archive / restore", () => {
     expect(store.snapshot().archived.map((t) => t.id)).toEqual(
       store.archived().map((t) => t.id),
     );
+  });
+});
+
+describe("TabStore.updateMeta", () => {
+  test("title-only update sets title and leaves faviconUrl unchanged", () => {
+    const store = makeStore();
+    store.create({ url: "https://a.test" }); // t1
+
+    store.updateMeta("t1", { title: "X" });
+    const tab = store.list().find((t) => t.id === "t1");
+    expect(tab?.title).toBe("X");
+    expect(tab?.faviconUrl).toBeNull();
+  });
+
+  test("favicon-only update sets favicon and leaves title unchanged", () => {
+    const store = makeStore();
+    store.create({ url: "https://a.test" }); // t1 title = url
+
+    store.updateMeta("t1", { faviconUrl: "https://e.test/f.ico" });
+    const tab = store.list().find((t) => t.id === "t1");
+    expect(tab?.faviconUrl).toBe("https://e.test/f.ico");
+    expect(tab?.title).toBe("https://a.test");
+  });
+
+  test("applying title then favicon ends with both set", () => {
+    const store = makeStore();
+    store.create({ url: "https://a.test" }); // t1
+
+    store.updateMeta("t1", { title: "X" });
+    store.updateMeta("t1", { faviconUrl: "https://e.test/f.ico" });
+
+    const tab = store.list().find((t) => t.id === "t1");
+    expect(tab?.title).toBe("X");
+    expect(tab?.faviconUrl).toBe("https://e.test/f.ico");
+  });
+
+  test("applying favicon then title ends with both set", () => {
+    const store = makeStore();
+    store.create({ url: "https://a.test" }); // t1
+
+    store.updateMeta("t1", { faviconUrl: "https://e.test/f.ico" });
+    store.updateMeta("t1", { title: "X" });
+
+    const tab = store.list().find((t) => t.id === "t1");
+    expect(tab?.title).toBe("X");
+    expect(tab?.faviconUrl).toBe("https://e.test/f.ico");
+  });
+
+  test("faviconUrl can be set back to null (empty-favicon case)", () => {
+    const store = makeStore();
+    store.create({ url: "https://a.test" }); // t1
+    store.updateMeta("t1", { faviconUrl: "https://e.test/f.ico" });
+
+    store.updateMeta("t1", { faviconUrl: null });
+    expect(store.list().find((t) => t.id === "t1")?.faviconUrl).toBeNull();
+  });
+
+  test("updateMeta on an unknown id is a no-op and does not throw", () => {
+    const store = makeStore();
+    store.create({ url: "https://a.test" }); // t1
+
+    expect(() => store.updateMeta("nonexistent", { title: "X" })).not.toThrow();
+    expect(store.list().find((t) => t.id === "t1")?.title).toBe("https://a.test");
+  });
+
+  test("changes are observable via snapshot()", () => {
+    const store = makeStore();
+    store.create({ url: "https://a.test" }); // t1
+
+    store.updateMeta("t1", {
+      title: "X",
+      faviconUrl: "https://e.test/f.ico",
+    });
+
+    const snap = store.snapshot();
+    const tab = snap.tabs.find((t) => t.id === "t1");
+    expect(tab?.title).toBe("X");
+    expect(tab?.faviconUrl).toBe("https://e.test/f.ico");
   });
 });
