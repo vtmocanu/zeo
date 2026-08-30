@@ -8,6 +8,7 @@ TypeScript monorepo (pnpm workspaces). Design doc: `docs/specs/`.
 - `pnpm install --frozen-lockfile`
 - `pnpm lint`
 - `pnpm typecheck`
+- `pnpm build` — build all workspaces
 - `pnpm test` — Vitest unit tests
 - `pnpm e2e` — Playwright Electron suite; needs a display (use `xvfb-run` on
   Linux, or run inside a Playwright container when GUI libraries are missing)

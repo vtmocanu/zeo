@@ -1,5 +1,16 @@
 # PRD 1 — Monorepo scaffold and first window
 
+> **Status: complete** — delivered on branch `agent/issue-2` (2026-08-30). The
+> pnpm monorepo (`packages/core`, `apps/desktop`, `apps/ui`, `e2e`), the Electron
+> window hosting one `WebContentsView` tab on `https://example.com`, the sidebar
+> placeholder wired over typed IPC, and the Vitest + Playwright harnesses with the
+> ESLint/Prettier tooling all landed. `pnpm lint`, `pnpm typecheck`, `pnpm test`
+> (16 core unit tests), and `pnpm build` were run and pass locally. The Playwright
+> e2e is authored and statically validated (`playwright test --list`); its actual
+> Electron run and the `ci` workflow's green check execute in CI under `xvfb` on
+> the merge-request branch — this worker cannot launch Electron. `CLAUDE.md` was
+> updated to list the `build` script.
+
 ## Context
 
 zeo is a keyboard-first, workspace-centric open-source browser for macOS built
