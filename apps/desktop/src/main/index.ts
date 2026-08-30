@@ -1,4 +1,5 @@
-import { app, BrowserWindow, WebContentsView, ipcMain } from "electron";
+import { app, BrowserWindow, WebContentsView, ipcMain, Menu } from "electron";
+import type { MenuItemConstructorOptions } from "electron";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { TabStore, IPC, titleForUrl, SIDEBAR_WIDTH } from "@zeo/core";
@@ -42,9 +43,47 @@ function createViewFor(tab: Tab): void {
   win.contentView.addChildView(view);
   view.setBounds(viewBounds());
   view.setVisible(false);
+
+  // Live title/favicon: the hostname-derived title seeded by store.create stays
+  // as the fallback until the first page-title-updated arrives. updateMeta
+  // no-ops on an unknown/torn-down id, so late events after close are safe.
+  view.webContents.on("page-title-updated", (_event, title) => {
+    store.updateMeta(tab.id, { title });
+    broadcast();
+  });
+  view.webContents.on("page-favicon-updated", (_event, favicons: string[]) => {
+    const faviconUrl = favicons.length > 0 ? favicons[0] : null;
+    store.updateMeta(tab.id, { faviconUrl });
+    broadcast();
+  });
+
   view.webContents.loadURL(tab.url).catch((err: unknown) => {
     console.error(`tab ${tab.id} failed to load ${tab.url}:`, err);
   });
+}
+
+/** Full new-tab lifecycle: store entry, view, activation, broadcast. */
+function createTab(url?: string): Tab {
+  const u = url ?? DEFAULT_URL;
+  const tab = store.create({ url: u, title: titleForUrl(u) });
+  createViewFor(tab);
+  setActive(tab.id);
+  broadcast();
+  return tab;
+}
+
+/** Full close lifecycle: store removal, view teardown, re-activation, broadcast. */
+function closeTab(id: string): void {
+  // A thrown Error (e.g. unknown id) propagates out to the caller.
+  store.close(id);
+  const view = views.get(id);
+  if (view !== undefined) {
+    win?.contentView.removeChildView(view);
+    view.webContents.close();
+    views.delete(id);
+  }
+  setActive(store.activeTabId);
+  broadcast();
 }
 
 /** Shows the given tab's view, hides all others, and re-lays-out the active. */
@@ -121,27 +160,12 @@ function createWindow(): void {
   broadcast();
 }
 
-ipcMain.handle(IPC.tabsCreate, (_event, url?: string): Tab => {
-  const u = url ?? DEFAULT_URL;
-  const tab = store.create({ url: u, title: titleForUrl(u) });
-  createViewFor(tab);
-  setActive(tab.id);
-  broadcast();
-  return tab;
-});
+ipcMain.handle(IPC.tabsCreate, (_event, url?: string): Tab => createTab(url));
 
 ipcMain.handle(IPC.tabsClose, (_event, id: string): void => {
   // A thrown Error (e.g. unknown id) propagates out of the handler and
   // ipcMain.handle rejects the renderer's invoke instead of crashing main.
-  store.close(id);
-  const view = views.get(id);
-  if (view !== undefined) {
-    win?.contentView.removeChildView(view);
-    view.webContents.close();
-    views.delete(id);
-  }
-  setActive(store.activeTabId);
-  broadcast();
+  closeTab(id);
 });
 
 ipcMain.handle(IPC.tabsActivate, (_event, id: string): void => {
@@ -152,7 +176,106 @@ ipcMain.handle(IPC.tabsActivate, (_event, id: string): void => {
 
 ipcMain.handle(IPC.tabsList, (): TabsState => store.snapshot());
 
+// pin/unpin/reorder only change ordering — no view create/destroy and no active
+// change, so broadcast() alone suffices. A thrown Error (unknown id, archived,
+// non-integer index, …) propagates out and rejects the renderer's invoke.
+ipcMain.handle(IPC.tabsPin, (_event, id: string): void => {
+  store.pin(id);
+  broadcast();
+});
+
+ipcMain.handle(IPC.tabsUnpin, (_event, id: string): void => {
+  store.unpin(id);
+  broadcast();
+});
+
+ipcMain.handle(IPC.tabsReorder, (_event, id: string, toIndex: number): void => {
+  store.reorder(id, toIndex);
+  broadcast();
+});
+
+// archive/restore can move the active pointer, so re-run setActive so the
+// visible view follows it. Views are not created/destroyed here (out of PRD 2.2
+// UI scope).
+ipcMain.handle(IPC.tabsArchive, (_event, id: string): void => {
+  store.archive(id);
+  setActive(store.activeTabId);
+  broadcast();
+});
+
+ipcMain.handle(IPC.tabsRestore, (_event, id: string): void => {
+  store.restore(id);
+  setActive(store.activeTabId);
+  broadcast();
+});
+
+/**
+ * Builds and installs the application menu. Accelerators here are
+ * application-level, so they fire whether focus is in the sidebar renderer or
+ * inside a tab's WebContentsView — the reason we use a Menu rather than
+ * globalShortcut / before-input-event (both forbidden by the PRD).
+ */
+function buildMenu(): void {
+  // Nine hidden Activate-Tab-N items. The list is queried live inside each
+  // click at press time (never a build-time snapshot); accelerators still fire
+  // while visible:false. i is 0-based (0..8) mapping to Cmd/Ctrl+1..9.
+  const activateItems: MenuItemConstructorOptions[] = Array.from(
+    { length: 9 },
+    (_unused, i): MenuItemConstructorOptions => ({
+      label: `Activate Tab ${i + 1}`,
+      accelerator: `CmdOrCtrl+${i + 1}`,
+      visible: false,
+      click: () => {
+        const tabs = store.list();
+        const target = tabs[i];
+        if (target !== undefined) {
+          store.activate(target.id);
+          setActive(target.id);
+          broadcast();
+        }
+      },
+    }),
+  );
+
+  const tabsSubmenu: MenuItemConstructorOptions[] = [
+    {
+      label: "New Tab",
+      accelerator: "CmdOrCtrl+T",
+      click: () => {
+        createTab();
+      },
+    },
+    {
+      label: "Close Tab",
+      accelerator: "CmdOrCtrl+W",
+      click: () => {
+        const id = store.activeTabId;
+        if (id !== null) {
+          closeTab(id);
+        }
+      },
+    },
+    { type: "separator" },
+    ...activateItems,
+  ];
+
+  const template: MenuItemConstructorOptions[] = [
+    // macOS app menu (role: appMenu) provides the standard about/quit set;
+    // omitting it on darwin would strip Cmd+Q and friends.
+    ...(process.platform === "darwin"
+      ? [{ role: "appMenu" } as MenuItemConstructorOptions]
+      : []),
+    { label: "Tabs", submenu: tabsSubmenu },
+    // editMenu preserves undo/redo/cut/copy/paste/selectAll accelerators so web
+    // contents keep Cmd/Ctrl+C/V/X/A.
+    { role: "editMenu" },
+  ];
+
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+}
+
 app.whenReady().then(() => {
+  buildMenu();
   createWindow();
 
   app.on("activate", () => {
