@@ -29,7 +29,8 @@ pnpm dev
 
 ## Installation
 
-Planned: Homebrew cask via `vtmocanu/tap` once the first release ships.
+Planned: Homebrew cask via the `vtmocanu/tap` tap (repository
+`vtmocanu/homebrew-tap`) once the first release ships.
 
 ## License
 

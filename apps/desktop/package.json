@@ -1,0 +1,23 @@
+{
+  "name": "@zeo/desktop",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./out/main/index.js",
+  "scripts": {
+    "build": "electron-vite build && node scripts/copy-renderer.mjs",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "dev": "ELECTRON_RENDERER_URL=http://localhost:5173 electron-vite dev"
+  },
+  "dependencies": {
+    "@zeo/core": "workspace:*",
+    "@zeo/ui": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^24.5.2",
+    "electron": "^38.1.2",
+    "electron-vite": "^4.0.0",
+    "typescript": "^5.9.2",
+    "vite": "^7.1.5"
+  }
+}

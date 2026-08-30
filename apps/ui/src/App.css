@@ -1,0 +1,123 @@
+:root {
+  color-scheme: light dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family:
+    system-ui,
+    -apple-system,
+    "Segoe UI",
+    Roboto,
+    sans-serif;
+}
+
+.sidebar {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: #1e1e28;
+  color: #e6e6ee;
+  border-right: 1px solid #2c2c3a;
+  overflow: hidden;
+}
+
+.sidebar__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 12px;
+  border-bottom: 1px solid #2c2c3a;
+}
+
+.sidebar__title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #a0a0b4;
+}
+
+.sidebar__new-tab {
+  appearance: none;
+  border: 1px solid #3a3a4c;
+  background: #2a2a38;
+  color: #e6e6ee;
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.sidebar__new-tab:hover {
+  background: #34344a;
+}
+
+.sidebar__list {
+  list-style: none;
+  margin: 0;
+  padding: 4px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.tab-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.tab-item:hover {
+  background: #2a2a38;
+}
+
+.tab-item--active {
+  background: #34344a;
+}
+
+.tab-item__title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border: none;
+  background: none;
+  color: inherit;
+  font-size: 13px;
+  text-align: left;
+  padding: 0;
+  cursor: pointer;
+}
+
+.tab-item__close {
+  appearance: none;
+  border: none;
+  background: none;
+  color: #9a9ab0;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 4px;
+}
+
+.tab-item__close:hover {
+  background: #45455c;
+  color: #fff;
+}
+
+.sidebar__empty {
+  padding: 12px;
+  font-size: 12px;
+  color: #7a7a90;
+}
