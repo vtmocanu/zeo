@@ -21,8 +21,14 @@ async function sidebarWindow(app: ElectronApplication): Promise<Page> {
   const deadline = Date.now() + 15_000;
   while (Date.now() < deadline) {
     for (const w of app.windows()) {
-      if ((await w.getByTestId("sidebar").count()) > 0) {
-        return w;
+      try {
+        if ((await w.getByTestId("sidebar").count()) > 0) {
+          return w;
+        }
+      } catch {
+        // A tab's WebContentsView can surface as a window and, while it is
+        // navigating (example.com loads in CI), its execution context may be
+        // momentarily destroyed. Skip any window we can't query this pass.
       }
     }
     await new Promise((resolve) => setTimeout(resolve, 200));
@@ -49,9 +55,9 @@ test.describe("zeo desktop app", () => {
     await app.close();
   });
 
-  // A single test keeps the shared-app state deterministic under CI retries:
-  // splitting the click into its own test would, on a retry, add a third tab
-  // (beforeAll — and thus the app — is not re-run per test retry).
+  // Both assertions share one app instance. On a CI retry Playwright discards
+  // the worker and starts a fresh one, so beforeAll re-runs and the app is
+  // relaunched clean (tab count back to 1) — the flow stays deterministic.
   test("shows the seeded tab and adds one via the new-tab button", async () => {
     await expect(window.getByTestId("sidebar")).toBeVisible();
 
