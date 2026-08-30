@@ -5,7 +5,7 @@ settings:
   excludeLinksFromLockfile: false
 
 overrides:
-  electron: 38.1.2
+  electron: 38.8.6
 
 importers:
 
@@ -46,8 +46,8 @@ importers:
         specifier: ^24.5.2
         version: 24.13.3
       electron:
-        specifier: 38.1.2
-        version: 38.1.2
+        specifier: 38.8.6
+        version: 38.8.6
       electron-vite:
         specifier: ^4.0.0
         version: 4.0.1(vite@7.3.6(@types/node@24.13.3))
@@ -95,8 +95,8 @@ importers:
         specifier: ^24.5.2
         version: 24.13.3
       electron:
-        specifier: 38.1.2
-        version: 38.1.2
+        specifier: 38.8.6
+        version: 38.8.6
       playwright:
         specifier: ^1.55.0
         version: 1.62.1
@@ -1049,8 +1049,8 @@ packages:
       '@swc/core':
         optional: true
 
-  electron@38.1.2:
-    resolution: {integrity: sha512-WXUcN3W8h8NTTZViA3KNX0rV2YBU0X0mEUM3ubupXTDY4QtIN7tmiqYVOKSKpR2LckTmBWGuEeY4D6xVoffwKQ==}
+  electron@38.8.6:
+    resolution: {integrity: sha512-lyBhcVi9QYAZL6FO6r5twAWAjWnYomo3iVDvrb5SJZlq928BGemHOKG0tPIq41NOLaCu9f3XdEEjMkjQPjprRg==}
     engines: {node: '>= 12.20.55'}
     hasBin: true
 
@@ -2555,7 +2555,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  electron@38.1.2:
+  electron@38.8.6:
     dependencies:
       '@electron/get': 2.0.3
       '@types/node': 22.20.1
