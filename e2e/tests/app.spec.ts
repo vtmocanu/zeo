@@ -104,8 +104,13 @@ async function tabViewWindow(app: ElectronApplication, sidebar: Page): Promise<P
 // key never reaches the menu (verified: under xvfb the press is a no-op). We
 // therefore drive the SAME menu item the accelerator is bound to, through the
 // main process — this proves the command wiring (menu item -> createTab/close
-// active) end to end. The literal keychord firing is covered by the running-app
-// acceptance criterion, which is not automatable headlessly.
+// active) end to end. It does NOT, however, observe the accelerator string on the
+// menu item, so removing/altering an accelerator binding while leaving the handler
+// intact would keep these tests green. The separate "binds the expected
+// accelerators" test below closes that gap by asserting the `.accelerator` values.
+// The literal keychord FIRING (a real OS keystroke reaching the browser-process
+// menu matcher) remains the running-app acceptance criterion, not automatable
+// headlessly.
 async function clickTabsMenuItem(
   app: ElectronApplication,
   label: string,
@@ -249,6 +254,42 @@ test.describe("zeo desktop app", () => {
     await expect(items).toHaveCount(n2 + 1);
     await pressCloseTab(app);
     await expect(items).toHaveCount(n2);
+  });
+
+  // Guards the application-menu ACCELERATOR bindings. The command tests above
+  // drive `MenuItem.click` directly, so they exercise the handlers but never read
+  // the `.accelerator` strings — deleting or changing a binding (e.g. dropping
+  // "CmdOrCtrl+T" from New Tab) would leave them green. This test reads the
+  // accelerator of every "Tabs" submenu item from the main process and asserts the
+  // exact keychords, so a removed/altered binding fails here. (It does not prove
+  // the keychord FIRES — that stays the non-headless running-app criterion.)
+  test("the Tabs menu binds the expected accelerators", async () => {
+    // Collect a plain, serializable { label -> accelerator } map from the "Tabs"
+    // submenu in the main process. Skip separators / items without a label.
+    const accelerators = await app.evaluate(({ Menu }) => {
+      const menu = Menu.getApplicationMenu();
+      if (menu === null) {
+        throw new Error("no application menu installed");
+      }
+      const tabsMenu = menu.items.find((item) => item.label === "Tabs");
+      if (tabsMenu?.submenu == null) {
+        throw new Error('no "Tabs" submenu');
+      }
+      const map: Record<string, string | null | undefined> = {};
+      for (const item of tabsMenu.submenu.items) {
+        if (!item.label) {
+          continue;
+        }
+        map[item.label] = item.accelerator;
+      }
+      return map;
+    });
+
+    expect(accelerators["New Tab"]).toBe("CmdOrCtrl+T");
+    expect(accelerators["Close Tab"]).toBe("CmdOrCtrl+W");
+    for (let n = 1; n <= 9; n += 1) {
+      expect(accelerators[`Activate Tab ${n}`]).toBe(`CmdOrCtrl+${n}`);
+    }
   });
 
   // Case (c): pinning a tab via the bridge renders the pinned section.
