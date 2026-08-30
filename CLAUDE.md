@@ -34,3 +34,7 @@ TypeScript monorepo (pnpm workspaces). Design doc: `docs/specs/`.
 - Conventional Commits.
 - Do not create or modify files under `.github/workflows/` — pushes touching
   them are rejected for the automation token.
+- Versioning: root `package.json` version + `CHANGELOG.md` (Keep a Changelog).
+  1.0.0 = a daily-driver browser at least as good as Arc; until then keep
+  numbers low — bump patch when a milestone (PRD) merges, minor only for very
+  large breakthroughs. Each bump gets a dated changelog section.
