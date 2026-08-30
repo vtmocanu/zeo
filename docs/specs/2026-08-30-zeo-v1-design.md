@@ -73,7 +73,13 @@ history, downloads metadata, settings.
 ## Distribution
 
 - Ad-hoc signed build, dmg/zip artifacts from CI on tagged releases
-- Homebrew cask in `vtmocanu/homebrew-tap`
+- Homebrew cask in the `vtmocanu/homebrew-tap` repository (the tap users add
+  as `vtmocanu/tap`), published the way the sibling
+  repos publish their formulae: a cask template in this repo is the source of
+  truth; a `v*` tag triggers a release workflow that builds the artifacts,
+  creates the GitHub Release, renders the template (version, url, sha256), and
+  pushes the rendered cask to the tap using a `HOMEBREW_TAP_TOKEN` secret
+  scoped to the tap repo
 - In-app update check against GitHub Releases: Homebrew-managed installs are
   prompted to run `brew upgrade`; direct dmg/zip installs are linked to the
   release page
