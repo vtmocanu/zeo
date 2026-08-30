@@ -11,6 +11,11 @@ const api = {
     close: (id: string): Promise<void> => ipcRenderer.invoke(IPC.tabsClose, id),
     activate: (id: string): Promise<void> => ipcRenderer.invoke(IPC.tabsActivate, id),
     list: (): Promise<TabsState> => ipcRenderer.invoke(IPC.tabsList),
+    pin: (id: string): Promise<void> => ipcRenderer.invoke(IPC.tabsPin, id),
+    unpin: (id: string): Promise<void> => ipcRenderer.invoke(IPC.tabsUnpin, id),
+    reorder: (id: string, toIndex: number): Promise<void> => ipcRenderer.invoke(IPC.tabsReorder, id, toIndex),
+    archive: (id: string): Promise<void> => ipcRenderer.invoke(IPC.tabsArchive, id),
+    restore: (id: string): Promise<void> => ipcRenderer.invoke(IPC.tabsRestore, id),
   },
   onStateChange: (listener: (state: TabsState) => void): (() => void) => {
     const handler = (_event: Electron.IpcRendererEvent, state: TabsState): void => listener(state);
