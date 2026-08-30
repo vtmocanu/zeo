@@ -10,6 +10,7 @@ export function App() {
   const [state, setState] = useState<TabsState>({
     tabs: [],
     activeTabId: null,
+    archived: [],
   });
 
   useEffect(() => {

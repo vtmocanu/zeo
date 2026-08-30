@@ -8,6 +8,7 @@ import type { Tab } from "./tab.js";
 export interface TabsState {
   tabs: Tab[];
   activeTabId: string | null;
+  archived: Tab[];
 }
 
 /**
@@ -20,6 +21,11 @@ export interface TabsApi {
   close(id: string): Promise<void>;
   activate(id: string): Promise<void>;
   list(): Promise<TabsState>;
+  pin(id: string): Promise<void>;
+  unpin(id: string): Promise<void>;
+  reorder(id: string, toIndex: number): Promise<void>;
+  archive(id: string): Promise<void>;
+  restore(id: string): Promise<void>;
 }
 
 /**
@@ -43,5 +49,10 @@ export const IPC = {
   tabsClose: "zeo:tabs:close",
   tabsActivate: "zeo:tabs:activate",
   tabsList: "zeo:tabs:list",
+  tabsPin: "zeo:tabs:pin",
+  tabsUnpin: "zeo:tabs:unpin",
+  tabsReorder: "zeo:tabs:reorder",
+  tabsArchive: "zeo:tabs:archive",
+  tabsRestore: "zeo:tabs:restore",
   stateChange: "zeo:state-change",
 } as const;

@@ -9,4 +9,7 @@ export interface Tab {
   url: string;
   title: string;
   createdAt: number;
+  pinned: boolean;
+  lastActiveAt: number;
+  archivedAt: number | null;
 }
