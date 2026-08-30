@@ -9,6 +9,25 @@ milestone, a minor bump only for very large breakthroughs.
 
 ## [Unreleased]
 
+## [0.0.2] - 2026-08-30
+
+### Added
+
+- Live tab titles and favicons: main-process `page-title-updated`/
+  `page-favicon-updated` listeners synced into the tab model via
+  `TabStore.updateMeta`; the hostname-derived title remains the fallback
+  until the first real title arrives.
+- `Tab.faviconUrl` in `packages/core`.
+- Sidebar redesigned into pinned (compact, top) and unpinned sections, each
+  row showing a favicon (fallback glyph when none) with the close button
+  revealed on hover.
+- Keyboard shortcuts via application-menu accelerators: Cmd/Ctrl+T new tab,
+  Cmd/Ctrl+W close active tab, Cmd/Ctrl+1..9 activate the Nth visible tab,
+  working from both the sidebar and inside a tab's web contents.
+- Main-process IPC handlers completing the pin/unpin/reorder/archive/restore
+  bridge (the preload surface existed since PRD 2.1).
+- Extended Playwright e2e suite covering the above.
+
 ## [0.0.1] - 2026-08-30
 
 ### Added
