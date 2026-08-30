@@ -10,8 +10,11 @@ TypeScript monorepo (pnpm workspaces). Design doc: `docs/specs/`.
 - `pnpm typecheck`
 - `pnpm build` — build all workspaces
 - `pnpm test` — Vitest unit tests
-- `pnpm e2e` — Playwright Electron suite; needs a display (use `xvfb-run` on
-  Linux, or run inside a Playwright container when GUI libraries are missing)
+- `pnpm e2e` — Playwright Electron suite; needs a display. On Linux use
+  `xvfb-run --auto-servernum pnpm e2e`. When GUI libraries are missing locally
+  (e.g. a worker base image), run the suite in a Playwright container matching
+  the locked Playwright version via the docker sidecar:
+  `docker run --rm -v "$PWD":/work -w /work mcr.microsoft.com/playwright:v1.62.1-noble bash -lc "corepack enable && pnpm install --frozen-lockfile && xvfb-run --auto-servernum pnpm e2e"`
 - `pnpm dev` — launch the app with HMR
 
 ## Structure
