@@ -1,3 +1,5 @@
-// Placeholder domain surface for @zeo/core.
-// The real Tab type and TabStore land in a later milestone (m2).
-export const CORE_PLACEHOLDER = true;
+export type { Tab } from "./tab.js";
+export { TabStore } from "./tab-store.js";
+export type { TabStoreOptions } from "./tab-store.js";
+export type { TabsState, TabsApi, ZeoApi } from "./ipc.js";
+export { IPC } from "./ipc.js";
