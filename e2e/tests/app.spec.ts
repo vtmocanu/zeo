@@ -23,6 +23,18 @@ interface BridgeState {
   activeTabId: string | null;
   archived: BridgeTab[];
 }
+// The serializable context-menu descriptor main returns from showContextMenu.
+// Structurally the @zeo/core TabContextMenuResult, redeclared here so e2e stays
+// import-free of @zeo/core. `id` is the stable action key we key assertions off.
+interface BridgeMenuItem {
+  id: string;
+  label: string;
+  enabled: boolean;
+}
+interface BridgeMenuResult {
+  tabId: string;
+  items: BridgeMenuItem[];
+}
 interface ZeoBridge {
   tabs: {
     create(url?: string): Promise<BridgeTab>;
@@ -30,6 +42,7 @@ interface ZeoBridge {
     pin(id: string): Promise<void>;
     archive(id: string): Promise<void>;
     list(): Promise<BridgeState>;
+    showContextMenu(id: string, x: number, y: number): Promise<BridgeMenuResult>;
   };
 }
 // Inside `page.evaluate` the callback runs in the renderer, where the real global
@@ -161,7 +174,10 @@ test.describe("zeo desktop app", () => {
       args: launchArgs,
       // Empty string forces main's production `loadFile` path instead of a
       // dev renderer URL — this is exactly the packaged/CI code path.
-      env: { ...process.env, ELECTRON_RENDERER_URL: "" },
+      // ZEO_E2E=1 puts main in headless test mode: showContextMenu still returns
+      // its serializable descriptor but skips popping the native menu (which
+      // cannot be driven headlessly), so the context-menu IPC is assertable.
+      env: { ...process.env, ELECTRON_RENDERER_URL: "", ZEO_E2E: "1" },
     });
     sidebar = await sidebarWindow(app);
   });
@@ -328,5 +344,272 @@ test.describe("zeo desktop app", () => {
       return zeo.tabs.list();
     });
     expect(state.archived.map((tab) => tab.id)).toContain(archivedId);
+  });
+
+  // Case (e): PRD 2.3 pointer-drag reorder. Drives a REAL pointer gesture (not
+  // HTML5 DnD, not Locator.dragTo) so the renderer's pointerdown -> 5px-threshold
+  // -> pointermove -> pointerup path runs end to end and round-trips through the
+  // bridge's reorder + the main->renderer state broadcast + a re-render. We assert
+  // only on the stable `data-tab-id` ORDER and the row count — never on rendered
+  // titles, which a real page load in CI could change.
+  test("dragging a tab past the one below it reorders the rendered list", async () => {
+    // Reads the current data-tab-id order from the rendered tab-item rows. This
+    // deliberately keys off tab-item only, so the transient drop-indicator /
+    // dropzone rows (distinct testids) never enter the order or the count.
+    const tabIdOrder = (): Promise<(string | null)[]> =>
+      sidebar
+        .getByTestId("tab-item")
+        .evaluateAll((els) => els.map((el) => el.getAttribute("data-tab-id")));
+
+    // Fresh launch seeds one unpinned tab; add a second so there are two rows to
+    // reorder. create() returns the created Tab, giving us its id directly.
+    const seededId = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      const s = await zeo.tabs.list();
+      return s.activeTabId ?? s.tabs[0].id;
+    });
+    const createdId = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      const created = await zeo.tabs.create("https://news.ycombinator.com/");
+      return created.id;
+    });
+
+    const items = sidebar.getByTestId("tab-item");
+    await expect(items).toHaveCount(2);
+    // Initial order: seeded first, created appended after it.
+    expect(await tabIdOrder()).toEqual([seededId, createdId]);
+
+    // Grab both rows' geometry. boundingBox() is in the page's CSS pixels, which
+    // is the coordinate space Playwright's mouse API drives.
+    const box1 = await items.nth(0).boundingBox();
+    const box2 = await items.nth(1).boundingBox();
+    if (box1 === null || box2 === null) {
+      throw new Error("tab-item rows had no bounding box");
+    }
+
+    // Press near the LEFT of the first row (x + 20), clear of the × close button
+    // on the far right, at its vertical midpoint.
+    const startX = box1.x + 20;
+    const startY = box1.y + box1.height / 2;
+
+    await sidebar.mouse.move(startX, startY);
+    await sidebar.mouse.down();
+    // Cross the 5px threshold first: this flips the renderer into drag mode,
+    // which reveals the (empty) opposite-section drop zone and thus SHIFTS the
+    // rows' on-screen positions. So we must re-read the target row's geometry
+    // AFTER the drag has started rather than trusting the pre-drag boundingBox
+    // (a human likewise aims at the live, shifted target).
+    await sidebar.mouse.move(startX, startY + box1.height, { steps: 6 });
+    const boxTargetDuringDrag = await items.nth(1).boundingBox();
+    if (boxTargetDuringDrag === null) {
+      throw new Error("target row had no bounding box mid-drag");
+    }
+    // Release just below the second row's midpoint so the computed insertion
+    // slot is the end of the unpinned section -> the dragged row moves last.
+    await sidebar.mouse.move(
+      boxTargetDuringDrag.x + 20,
+      boxTargetDuringDrag.y + boxTargetDuringDrag.height * 0.75,
+      { steps: 12 },
+    );
+    await sidebar.mouse.up();
+
+    // The reorder round-trips through the bridge + a main->renderer broadcast +
+    // a re-render, so poll rather than assert once.
+    await expect
+      .poll(async () => tabIdOrder(), {
+        message: "expected the pointer drag to reorder the rows to [created, seeded]",
+      })
+      .toEqual([createdId, seededId]);
+
+    // The drag moved a row; it neither added nor removed one, and the count is of
+    // tab-item rows only (any indicator/dropzone is a different testid).
+    await expect(items).toHaveCount(2);
+  });
+
+  test("right-clicking a tab row returns the expected context-menu descriptor", async () => {
+    const id = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      const s = await zeo.tabs.list();
+      return s.activeTabId ?? s.tabs[0].id;
+    });
+
+    const lastMenu = (): Promise<BridgeMenuResult | null> =>
+      sidebar.evaluate(
+        () =>
+          (globalThis as unknown as { __zeoLastContextMenu?: BridgeMenuResult })
+            .__zeoLastContextMenu ?? null,
+      );
+
+    const row = sidebar.getByTestId("tab-item").first();
+    await row.click({ button: "right" });
+    await expect.poll(lastMenu).not.toBeNull();
+    const res = (await lastMenu()) as BridgeMenuResult;
+
+    expect(res.tabId).toBe(id);
+    expect(res.items.map((item) => item.id)).toEqual([
+      "pin",
+      "archive",
+      "close",
+      "copyUrl",
+    ]);
+    const byId = new Map(res.items.map((item) => [item.id, item]));
+    expect(byId.get("pin")).toMatchObject({ id: "pin", label: "Pin" });
+    expect(byId.get("archive")?.enabled).toBe(true);
+    expect(byId.get("close")?.enabled).toBe(true);
+    expect(byId.get("copyUrl")?.enabled).toBe(true);
+
+    await sidebar.evaluate(async (tabId) => {
+      delete (globalThis as unknown as { __zeoLastContextMenu?: BridgeMenuResult })
+        .__zeoLastContextMenu;
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.tabs.pin(tabId);
+    }, id);
+    await row.click({ button: "right" });
+    await expect
+      .poll(async () => (await lastMenu())?.items.map((item) => item.id) ?? null)
+      .toEqual(["unpin", "archive", "close", "copyUrl"]);
+
+    const pinnedRes = (await lastMenu()) as BridgeMenuResult;
+    expect(pinnedRes.tabId).toBe(id);
+    const pinnedById = new Map(pinnedRes.items.map((item) => [item.id, item]));
+    expect(pinnedById.get("unpin")).toMatchObject({ id: "unpin", label: "Unpin" });
+    expect(pinnedById.has("pin")).toBe(false);
+    expect(pinnedById.get("archive")?.enabled).toBe(false);
+  });
+
+  test("pointer drag reorders pinned rows and moves tabs across the pin boundary", async () => {
+    const sectionOrder = (sectionTestId: string): Promise<(string | null)[]> =>
+      sidebar
+        .getByTestId(sectionTestId)
+        .getByTestId("tab-item")
+        .evaluateAll((els) => els.map((el) => el.getAttribute("data-tab-id")));
+
+    const pinnedOf = (tabId: string): Promise<boolean | null> =>
+      sidebar.evaluate(async (target) => {
+        const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+        const s = await zeo.tabs.list();
+        return s.tabs.find((t) => t.id === target)?.pinned ?? null;
+      }, tabId);
+
+    const rowBox = async (tabId: string) => {
+      const box = await sidebar.locator(`[data-tab-id="${tabId}"]`).boundingBox();
+      if (box === null) {
+        throw new Error(`row ${tabId} had no bounding box`);
+      }
+      return box;
+    };
+
+    const edgeOf = async (
+      tabId: string,
+      place: "above" | "below",
+    ): Promise<{ x: number; y: number }> => {
+      const box = await rowBox(tabId);
+      return {
+        x: box.x + 20,
+        y: box.y + box.height * (place === "above" ? 0.25 : 0.75),
+      };
+    };
+
+    const tickFrame = () =>
+      sidebar.evaluate(
+        () =>
+          new Promise<void>((resolve) => {
+            requestAnimationFrame(() => resolve());
+          }),
+      );
+    const seenY = () =>
+      sidebar.evaluate(
+        () =>
+          (globalThis as { __zeoDrag?: { y: number } }).__zeoDrag?.y ?? null,
+      );
+
+    const dragRowOnce = async (
+      tabId: string,
+      destination: () => Promise<{ x: number; y: number }>,
+    ): Promise<boolean> => {
+      const box = await rowBox(tabId);
+      const startX = box.x + 20;
+      const startY = box.y + box.height / 2;
+      await sidebar.mouse.move(startX, startY);
+      await sidebar.mouse.down();
+      await sidebar.mouse.move(startX, startY + box.height, { steps: 6 });
+      const dest = await destination();
+      await sidebar.mouse.move(dest.x, dest.y, { steps: 12 });
+      await tickFrame();
+      const settled = await destination();
+      let acknowledged = false;
+      for (let attempt = 0; attempt < 20 && !acknowledged; attempt += 1) {
+        await sidebar.mouse.move(settled.x, settled.y);
+        await tickFrame();
+        acknowledged = (await seenY()) === settled.y;
+      }
+      await sidebar.mouse.up();
+      return acknowledged;
+    };
+
+    const dragRow = async (
+      tabId: string,
+      destination: () => Promise<{ x: number; y: number }>,
+    ): Promise<void> => {
+      for (let gesture = 0; gesture < 5; gesture += 1) {
+        if (await dragRowOnce(tabId, destination)) {
+          return;
+        }
+        await tickFrame();
+      }
+      throw new Error(
+        `drag gesture for ${tabId} was never acknowledged; renderer saw y=${await seenY()}`,
+      );
+    };
+
+    const seededId = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      const s = await zeo.tabs.list();
+      return s.activeTabId ?? s.tabs[0].id;
+    });
+    const [bId, cId] = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      const b = await zeo.tabs.create("about:blank");
+      const c = await zeo.tabs.create("about:blank");
+      return [b.id, c.id];
+    });
+    await sidebar.evaluate(
+      async (ids) => {
+        const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+        for (const tabId of ids) {
+          await zeo.tabs.pin(tabId);
+        }
+      },
+      [seededId, bId],
+    );
+    await expect
+      .poll(() => sectionOrder("pinned-section"))
+      .toEqual([seededId, bId]);
+    await expect.poll(() => sectionOrder("unpinned-section")).toEqual([cId]);
+
+    await dragRow(seededId, () => edgeOf(bId, "below"));
+    await expect
+      .poll(() => sectionOrder("pinned-section"), {
+        message: "expected the drag to reorder the pinned rows to [b, seeded]",
+      })
+      .toEqual([bId, seededId]);
+
+    await dragRow(bId, () => edgeOf(cId, "below"));
+    await expect
+      .poll(() => sectionOrder("unpinned-section"), {
+        message: "expected the drag to unpin b and append it after c",
+      })
+      .toEqual([cId, bId]);
+    await expect.poll(() => sectionOrder("pinned-section")).toEqual([seededId]);
+    expect(await pinnedOf(bId)).toBe(false);
+
+    await dragRow(cId, () => edgeOf(seededId, "above"));
+    await expect
+      .poll(() => sectionOrder("pinned-section"), {
+        message: "expected the drag to pin c and place it before seeded",
+      })
+      .toEqual([cId, seededId]);
+    await expect.poll(() => sectionOrder("unpinned-section")).toEqual([bId]);
+    expect(await pinnedOf(cId)).toBe(true);
   });
 });

@@ -184,3 +184,54 @@ body {
   font-size: 12px;
   color: #7a7a90;
 }
+
+/* Drag reorder ------------------------------------------------------------ */
+
+/* While a drag is active the whole sidebar shows a grabbing cursor and the
+   dragged row is dimmed so its landing slot (the indicator) reads clearly. */
+.sidebar--dragging,
+.sidebar--dragging .tab-item,
+.sidebar--dragging .tab-item__title {
+  cursor: grabbing;
+}
+
+/* Suppress native text selection while dragging (pointerdown is not
+   preventDefault-ed, to keep button focus/clicks working). */
+.sidebar--dragging {
+  user-select: none;
+}
+
+.tab-item--dragging {
+  opacity: 0.5;
+}
+
+/* Thin accent line marking the insertion point between two rows. Rendered as
+   its own list item so it never overlaps a row's hit target. */
+.drop-indicator {
+  list-style: none;
+  height: 2px;
+  margin: 1px 4px;
+  border-radius: 1px;
+  background: #6b6bff;
+}
+
+/* Empty section turned into a real drop target only during an active drag. */
+.sidebar__dropzone {
+  list-style: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 32px;
+  margin: 4px;
+  border: 1px dashed #45455c;
+  border-radius: 6px;
+  color: #7a7a90;
+}
+
+.sidebar__dropzone--active {
+  border-color: #6b6bff;
+}
+
+.sidebar__dropzone .drop-indicator {
+  width: 100%;
+}

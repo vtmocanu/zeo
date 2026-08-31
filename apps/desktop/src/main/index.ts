@@ -1,9 +1,9 @@
-import { app, BrowserWindow, WebContentsView, ipcMain, Menu } from "electron";
+import { app, BrowserWindow, WebContentsView, clipboard, ipcMain, Menu } from "electron";
 import type { MenuItemConstructorOptions } from "electron";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { TabStore, IPC, titleForUrl, SIDEBAR_WIDTH } from "@zeo/core";
-import type { Tab, TabsState } from "@zeo/core";
+import type { Tab, TabContextMenuResult, TabsState } from "@zeo/core";
 
 // The built main is emitted by electron-vite as ESM (out/main/index.js, the
 // package is "type": "module"), so `__dirname` is not defined — derive it from
@@ -86,6 +86,22 @@ function closeTab(id: string): void {
   broadcast();
 }
 
+function pinTab(id: string): void {
+  store.pin(id);
+  broadcast();
+}
+
+function unpinTab(id: string): void {
+  store.unpin(id);
+  broadcast();
+}
+
+function archiveTab(id: string): void {
+  store.archive(id);
+  setActive(store.activeTabId);
+  broadcast();
+}
+
 /** Shows the given tab's view, hides all others, and re-lays-out the active. */
 function setActive(id: string | null): void {
   for (const [tabId, view] of views) {
@@ -100,6 +116,68 @@ function setActive(id: string | null): void {
 /** Pushes the current store snapshot to the renderer. */
 function broadcast(): void {
   win?.webContents.send(IPC.stateChange, store.snapshot());
+}
+
+function showTabContextMenu(id: string, x: number, y: number): TabContextMenuResult {
+  const tab = store.list().find((t) => t.id === id);
+  if (tab === undefined) {
+    return { tabId: id, items: [] };
+  }
+
+  const actions: { id: string; label: string; enabled: boolean; click: () => void }[] = [
+    {
+      id: tab.pinned ? "unpin" : "pin",
+      label: tab.pinned ? "Unpin" : "Pin",
+      enabled: true,
+      click: () => (tab.pinned ? unpinTab(id) : pinTab(id)),
+    },
+    {
+      id: "archive",
+      label: "Archive",
+      enabled: !tab.pinned,
+      click: () => archiveTab(id),
+    },
+    {
+      id: "close",
+      label: "Close",
+      enabled: true,
+      click: () => closeTab(id),
+    },
+    {
+      id: "copyUrl",
+      label: "Copy URL",
+      enabled: true,
+      click: () => clipboard.writeText(tab.url),
+    },
+  ];
+
+  const items: TabContextMenuResult["items"] = actions.map(({ id: actionId, label, enabled }) => ({
+    id: actionId,
+    label,
+    enabled,
+  }));
+
+  // Gate the native popup so headless e2e never blocks on it.
+  if (process.env.ZEO_E2E !== "1" && win !== null) {
+    const menu = Menu.buildFromTemplate(
+      actions.map((a): MenuItemConstructorOptions => ({
+        label: a.label,
+        enabled: a.enabled,
+        click: () => {
+          try {
+            a.click();
+          } catch (err: unknown) {
+            console.error(`context-menu action "${a.id}" failed:`, err);
+          }
+        },
+      })),
+    );
+    // x/y are window-relative (the renderer passes clientX/clientY); popup's
+    // x/y are window-relative too, so no screen conversion is needed.
+    menu.popup({ window: win, x, y });
+  }
+
+  return { tabId: id, items };
 }
 
 function createWindow(): void {
@@ -180,13 +258,11 @@ ipcMain.handle(IPC.tabsList, (): TabsState => store.snapshot());
 // change, so broadcast() alone suffices. A thrown Error (unknown id, archived,
 // non-integer index, …) propagates out and rejects the renderer's invoke.
 ipcMain.handle(IPC.tabsPin, (_event, id: string): void => {
-  store.pin(id);
-  broadcast();
+  pinTab(id);
 });
 
 ipcMain.handle(IPC.tabsUnpin, (_event, id: string): void => {
-  store.unpin(id);
-  broadcast();
+  unpinTab(id);
 });
 
 ipcMain.handle(IPC.tabsReorder, (_event, id: string, toIndex: number): void => {
@@ -198,9 +274,9 @@ ipcMain.handle(IPC.tabsReorder, (_event, id: string, toIndex: number): void => {
 // visible view follows it. Views are not created/destroyed here (out of PRD 2.2
 // UI scope).
 ipcMain.handle(IPC.tabsArchive, (_event, id: string): void => {
-  store.archive(id);
-  setActive(store.activeTabId);
-  broadcast();
+  // A thrown Error (e.g. archiving a pinned tab) propagates out and rejects the
+  // renderer's invoke, consistent with the other handlers.
+  archiveTab(id);
 });
 
 ipcMain.handle(IPC.tabsRestore, (_event, id: string): void => {
@@ -208,6 +284,12 @@ ipcMain.handle(IPC.tabsRestore, (_event, id: string): void => {
   setActive(store.activeTabId);
   broadcast();
 });
+
+ipcMain.handle(
+  IPC.tabsContextMenu,
+  (_event, id: string, x: number, y: number): TabContextMenuResult =>
+    showTabContextMenu(id, x, y),
+);
 
 /**
  * Builds and installs the application menu. Accelerators here are

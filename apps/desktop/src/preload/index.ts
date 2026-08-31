@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from "electron";
 import { IPC } from "@zeo/core";
-import type { Tab, TabsState, ZeoApi } from "@zeo/core";
+import type { Tab, TabContextMenuResult, TabsState, ZeoApi } from "@zeo/core";
 
 // The typed bridge exposed on window.zeo. It implements ZeoApi exactly and
 // never leaks ipcRenderer across the contextIsolation boundary. Typed with
@@ -16,6 +16,8 @@ const api = {
     reorder: (id: string, toIndex: number): Promise<void> => ipcRenderer.invoke(IPC.tabsReorder, id, toIndex),
     archive: (id: string): Promise<void> => ipcRenderer.invoke(IPC.tabsArchive, id),
     restore: (id: string): Promise<void> => ipcRenderer.invoke(IPC.tabsRestore, id),
+    showContextMenu: (id: string, x: number, y: number): Promise<TabContextMenuResult> =>
+      ipcRenderer.invoke(IPC.tabsContextMenu, id, x, y),
   },
   onStateChange: (listener: (state: TabsState) => void): (() => void) => {
     const handler = (_event: Electron.IpcRendererEvent, state: TabsState): void => listener(state);
