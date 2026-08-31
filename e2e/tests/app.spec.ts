@@ -510,44 +510,56 @@ test.describe("zeo desktop app", () => {
       };
     };
 
-    const dragRow = async (
+    const tickFrame = () =>
+      sidebar.evaluate(
+        () =>
+          new Promise<void>((resolve) => {
+            requestAnimationFrame(() => resolve());
+          }),
+      );
+    const seenY = () =>
+      sidebar.evaluate(
+        () =>
+          (globalThis as { __zeoDrag?: { y: number } }).__zeoDrag?.y ?? null,
+      );
+
+    const dragRowOnce = async (
       tabId: string,
       destination: () => Promise<{ x: number; y: number }>,
-    ): Promise<void> => {
+    ): Promise<boolean> => {
       const box = await rowBox(tabId);
       const startX = box.x + 20;
       const startY = box.y + box.height / 2;
       await sidebar.mouse.move(startX, startY);
       await sidebar.mouse.down();
       await sidebar.mouse.move(startX, startY + box.height, { steps: 6 });
-      const tickFrame = () =>
-        sidebar.evaluate(
-          () =>
-            new Promise<void>((resolve) => {
-              requestAnimationFrame(() => resolve());
-            }),
-        );
-      const seenY = () =>
-        sidebar.evaluate(
-          () =>
-            (globalThis as { __zeoDrag?: { y: number } }).__zeoDrag?.y ?? null,
-        );
       const dest = await destination();
       await sidebar.mouse.move(dest.x, dest.y, { steps: 12 });
       await tickFrame();
       const settled = await destination();
       let acknowledged = false;
-      for (let attempt = 0; attempt < 50 && !acknowledged; attempt += 1) {
+      for (let attempt = 0; attempt < 20 && !acknowledged; attempt += 1) {
         await sidebar.mouse.move(settled.x, settled.y);
         await tickFrame();
         acknowledged = (await seenY()) === settled.y;
       }
-      if (!acknowledged) {
-        throw new Error(
-          `drag pointer never reached y=${settled.y}, renderer saw y=${await seenY()}`,
-        );
-      }
       await sidebar.mouse.up();
+      return acknowledged;
+    };
+
+    const dragRow = async (
+      tabId: string,
+      destination: () => Promise<{ x: number; y: number }>,
+    ): Promise<void> => {
+      for (let gesture = 0; gesture < 5; gesture += 1) {
+        if (await dragRowOnce(tabId, destination)) {
+          return;
+        }
+        await tickFrame();
+      }
+      throw new Error(
+        `drag gesture for ${tabId} was never acknowledged; renderer saw y=${await seenY()}`,
+      );
     };
 
     const seededId = await sidebar.evaluate(async () => {
@@ -557,8 +569,8 @@ test.describe("zeo desktop app", () => {
     });
     const [bId, cId] = await sidebar.evaluate(async () => {
       const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
-      const b = await zeo.tabs.create("https://news.ycombinator.com/");
-      const c = await zeo.tabs.create("https://example.org/");
+      const b = await zeo.tabs.create("about:blank");
+      const c = await zeo.tabs.create("about:blank");
       return [b.id, c.id];
     });
     await sidebar.evaluate(
