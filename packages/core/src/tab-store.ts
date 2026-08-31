@@ -54,6 +54,7 @@ export class TabStore {
       id: record.id,
       url: record.url,
       title: record.title,
+      faviconUrl: record.faviconUrl,
       createdAt: record.createdAt,
       pinned: record.pinned,
       lastActiveAt: record.lastActiveAt,
@@ -102,6 +103,7 @@ export class TabStore {
       id: this.idFactory(),
       url: input.url,
       title: input.title ?? input.url,
+      faviconUrl: null,
       createdAt,
       pinned: false,
       lastActiveAt: createdAt,
@@ -168,6 +170,32 @@ export class TabStore {
     record.lastActiveAt = this.now();
     record.activationSeq = ++this.seq;
     this.activeId = id;
+  }
+
+  /**
+   * Applies a PARTIAL metadata sync to `id`, preserving any omitted field:
+   * `title` and/or `faviconUrl` are updated only when present. A title-only
+   * update leaves `faviconUrl` untouched and vice versa. Because `faviconUrl`
+   * may legitimately be set to `null`, presence is tested with `!== undefined`
+   * rather than a truthiness check.
+   *
+   * Unlike `close`/`activate`/`pin`, an UNKNOWN id is a silent no-op instead of
+   * a throw. This method is driven by `webContents` `page-title-updated`/
+   * `page-favicon-updated` events, which can fire AFTER a tab is closed or torn
+   * down; throwing there would crash the main-process event listener, so a late
+   * event on a gone tab must be ignored.
+   */
+  updateMeta(id: string, meta: { title?: string; faviconUrl?: string | null }): void {
+    const record = this.tabs.find((tab) => tab.id === id);
+    if (!record) {
+      return;
+    }
+    if (meta.title !== undefined) {
+      record.title = meta.title;
+    }
+    if (meta.faviconUrl !== undefined) {
+      record.faviconUrl = meta.faviconUrl;
+    }
   }
 
   /**

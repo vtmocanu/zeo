@@ -8,6 +8,11 @@ export interface Tab {
   id: string;
   url: string;
   title: string;
+  /**
+   * URL of the tab's favicon, or `null` until a `page-favicon-updated` event
+   * supplies one.
+   */
+  faviconUrl: string | null;
   createdAt: number;
   pinned: boolean;
   lastActiveAt: number;
