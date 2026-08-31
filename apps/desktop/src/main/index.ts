@@ -179,7 +179,16 @@ function showTabContextMenu(id: string, x: number, y: number): TabContextMenuRes
       actions.map((a): MenuItemConstructorOptions => ({
         label: a.label,
         enabled: a.enabled,
-        click: a.click,
+        // A menu click runs in the main process with no invoke to reject, so a
+        // store throw here (e.g. the tab was closed while its menu was open)
+        // would be an uncaught exception. Swallow it — the click is best-effort.
+        click: () => {
+          try {
+            a.click();
+          } catch (err: unknown) {
+            console.error(`context-menu action "${a.id}" failed:`, err);
+          }
+        },
       })),
     );
     // x/y are window-relative (the renderer passes clientX/clientY); popup's

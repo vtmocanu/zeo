@@ -195,6 +195,12 @@ body {
   cursor: grabbing;
 }
 
+/* Suppress native text selection while dragging (pointerdown is not
+   preventDefault-ed, to keep button focus/clicks working). */
+.sidebar--dragging {
+  user-select: none;
+}
+
 .tab-item--dragging {
   opacity: 0.5;
 }

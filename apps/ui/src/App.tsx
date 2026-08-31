@@ -192,13 +192,20 @@ function useTabDrag(pinned: Tab[], unpinned: Tab[]) {
       ? pinnedRef.current.length
       : unpinnedRef.current.length;
     void (async () => {
-      if (targetPinned) {
-        await window.zeo?.tabs.pin(id).catch(() => {});
-      } else {
-        await window.zeo?.tabs.unpin(id).catch(() => {});
-      }
-      if (target.insertBefore < targetLen) {
-        await window.zeo?.tabs.reorder(id, target.insertBefore).catch(() => {});
+      // One try/catch so a failed pin/unpin skips the follow-up reorder: were
+      // they caught independently, a rejected pin would leave the tab in its
+      // source group and the reorder would then move it to a wrong index there.
+      try {
+        if (targetPinned) {
+          await window.zeo?.tabs.pin(id);
+        } else {
+          await window.zeo?.tabs.unpin(id);
+        }
+        if (target.insertBefore < targetLen) {
+          await window.zeo?.tabs.reorder(id, target.insertBefore);
+        }
+      } catch {
+        // Best-effort: the drag is a UI convenience, the store stays consistent.
       }
     })();
   }, []);
