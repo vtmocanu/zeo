@@ -154,19 +154,19 @@ function archiveTab(id: string): void {
  * then broadcasts. No orphaned views survive a delete.
  */
 function deleteSpace(id: string): void {
-  // Validate before any teardown so a delete that will reject has no side effect.
-  // (SpaceStore.deleteSpace enforces the same rules; this ordering just keeps the
-  // view teardown from running ahead of a throw.)
-  if (!store.spaces().some((space) => space.id === id)) {
-    throw new Error(`Cannot delete unknown space: ${id}`);
-  }
-  if (store.spaces().length <= 1) {
-    throw new Error(`Cannot delete the last remaining space: ${id}`);
+  // Gate teardown on the store's OWN deletability predicate, so the rule is not
+  // duplicated here. When the delete would reject (unknown id or the last
+  // remaining space), defer to store.deleteSpace to throw the specific error
+  // BEFORE any view is torn down — a rejected delete has no side effect.
+  if (!store.canDeleteSpace(id)) {
+    store.deleteSpace(id);
+    return; // unreachable: canDeleteSpace() === false means deleteSpace() throws.
   }
 
   const wasActive = store.activeSpaceId === id;
 
-  // Snapshot the entries first: destroyView mutates `views` as it goes.
+  // Destroy every view owned by the space (open and archived). Snapshot the
+  // entries first: destroyView mutates `views` as it goes.
   for (const [tabId, tracked] of [...views]) {
     if (tracked.spaceId === id) {
       destroyView(tabId);

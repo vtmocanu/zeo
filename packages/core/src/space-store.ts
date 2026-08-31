@@ -109,10 +109,22 @@ export class SpaceStore {
   }
 
   /**
+   * Whether {@link deleteSpace} would succeed for `id`: it names a known space
+   * AND is not the last remaining space. This is the single source of truth for
+   * deletability — the desktop main queries it to decide whether to tear down a
+   * space's views before calling {@link deleteSpace}, so the rule is never
+   * duplicated across the process boundary.
+   */
+  canDeleteSpace(id: string): boolean {
+    return this.spacesById.has(id) && this.order.length > 1;
+  }
+
+  /**
    * Deletes a space and drops its entire tab set. Throws on an unknown id, and
-   * throws when it is the last remaining space (there is always at least one).
-   * When the deleted space was active, the first remaining space (in creation
-   * order) becomes active.
+   * throws when it is the last remaining space (there is always at least one) —
+   * exactly the two conditions {@link canDeleteSpace} rules out. When the deleted
+   * space was active, the first remaining space (in creation order) becomes
+   * active.
    */
   deleteSpace(id: string): void {
     this.require(id);

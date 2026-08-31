@@ -189,6 +189,27 @@ describe("SpaceStore.deleteSpace", () => {
     expect(() => store.deleteSpace("nope")).toThrow(/Unknown space/);
   });
 
+  test("canDeleteSpace mirrors the deleteSpace throw conditions", () => {
+    const store = makeStore();
+    const personalId = store.activeSpaceId;
+    // Last remaining space: not deletable.
+    expect(store.canDeleteSpace(personalId)).toBe(false);
+    // Unknown id: not deletable.
+    expect(store.canDeleteSpace("nope")).toBe(false);
+
+    const work = store.createSpace("Work");
+    // With two spaces, both known ids are deletable; an unknown id still is not.
+    expect(store.canDeleteSpace(personalId)).toBe(true);
+    expect(store.canDeleteSpace(work.id)).toBe(true);
+    expect(store.canDeleteSpace("nope")).toBe(false);
+
+    // After deleting down to one, the survivor is no longer deletable — exactly
+    // when deleteSpace would throw.
+    store.deleteSpace(work.id);
+    expect(store.canDeleteSpace(personalId)).toBe(false);
+    expect(() => store.deleteSpace(personalId)).toThrow(/last remaining space/);
+  });
+
   test("drops the deleted space and its tabs", () => {
     const store = makeStore();
     const work = store.createSpace("Work");
