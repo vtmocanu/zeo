@@ -14,6 +14,15 @@ const moduleDir = dirname(fileURLToPath(import.meta.url));
 /** Default url/title used by the renderer's URL-less new-tab button. */
 const DEFAULT_URL = "https://example.com";
 
+/**
+ * Auto-archive schedule. The *policy* (which tabs are idle) lives in core
+ * (`TabStore.archiveIdle`); the main process only owns these scheduling
+ * constants and the timer. A tab untouched for `IDLE_THRESHOLD_MS` is swept, and
+ * the sweep runs every `SWEEP_INTERVAL_MS` (plus once on launch).
+ */
+const IDLE_THRESHOLD_MS = 12 * 60 * 60 * 1000;
+const SWEEP_INTERVAL_MS = 60 * 60 * 1000;
+
 const store = new TabStore();
 /** Live WebContentsView per tab id; the active tab's view is the visible one. */
 const views = new Map<string, WebContentsView>();
@@ -86,6 +95,25 @@ function closeTab(id: string): void {
   broadcast();
 }
 
+/**
+ * Full permanent-delete lifecycle: store removal, view teardown, re-activation,
+ * broadcast. Unlike {@link closeTab}, this works on an archived tab too (whose
+ * hidden view is still parented in `views`), so the archived-tabs view can
+ * delete a tab for good.
+ */
+function removeTab(id: string): void {
+  // A thrown Error (e.g. unknown id) propagates out to the caller.
+  store.remove(id);
+  const view = views.get(id);
+  if (view !== undefined) {
+    win?.contentView.removeChildView(view);
+    view.webContents.close();
+    views.delete(id);
+  }
+  setActive(store.activeTabId);
+  broadcast();
+}
+
 function pinTab(id: string): void {
   store.pin(id);
   broadcast();
@@ -116,6 +144,20 @@ function setActive(id: string | null): void {
 /** Pushes the current store snapshot to the renderer. */
 function broadcast(): void {
   win?.webContents.send(IPC.stateChange, store.snapshot());
+}
+
+/**
+ * Runs the idle auto-archive policy and, only if it archived something,
+ * re-points the visible view (the active tab is exempt, so this is normally a
+ * no-op) and broadcasts. Skipping the broadcast on an empty sweep keeps the
+ * hourly timer from churning the renderer when nothing changed.
+ */
+function sweepIdle(): void {
+  const archived = store.archiveIdle(IDLE_THRESHOLD_MS);
+  if (archived.length > 0) {
+    setActive(store.activeTabId);
+    broadcast();
+  }
 }
 
 function showTabContextMenu(id: string, x: number, y: number): TabContextMenuResult {
@@ -215,6 +257,16 @@ function createWindow(): void {
     }
   });
 
+  // Re-stamp the active tab's lastActiveAt on window focus so a tab left focused
+  // (e.g. overnight) is never swept by the idle policy. This changes no visible
+  // state, so it does not broadcast.
+  win.on("focus", () => {
+    const active = store.activeTabId;
+    if (active !== null) {
+      store.activate(active);
+    }
+  });
+
   win.on("closed", () => {
     for (const view of views.values()) {
       if (!view.webContents.isDestroyed()) {
@@ -270,9 +322,6 @@ ipcMain.handle(IPC.tabsReorder, (_event, id: string, toIndex: number): void => {
   broadcast();
 });
 
-// archive/restore can move the active pointer, so re-run setActive so the
-// visible view follows it. Views are not created/destroyed here (out of PRD 2.2
-// UI scope).
 ipcMain.handle(IPC.tabsArchive, (_event, id: string): void => {
   // A thrown Error (e.g. archiving a pinned tab) propagates out and rejects the
   // renderer's invoke, consistent with the other handlers.
@@ -281,8 +330,20 @@ ipcMain.handle(IPC.tabsArchive, (_event, id: string): void => {
 
 ipcMain.handle(IPC.tabsRestore, (_event, id: string): void => {
   store.restore(id);
+  if (!views.has(id)) {
+    const tab = store.list().find((t) => t.id === id);
+    if (tab !== undefined) {
+      createViewFor(tab);
+    }
+  }
   setActive(store.activeTabId);
   broadcast();
+});
+
+// Permanent delete: drop the tab from the store and tear down its view. A thrown
+// Error (e.g. unknown id) propagates out and rejects the renderer's invoke.
+ipcMain.handle(IPC.tabsRemove, (_event, id: string): void => {
+  removeTab(id);
 });
 
 ipcMain.handle(
@@ -359,6 +420,8 @@ function buildMenu(): void {
 app.whenReady().then(() => {
   buildMenu();
   createWindow();
+  sweepIdle();
+  setInterval(sweepIdle, SWEEP_INTERVAL_MS);
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {

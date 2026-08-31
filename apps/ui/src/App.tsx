@@ -8,7 +8,7 @@ import {
   type RefObject,
 } from "react";
 import type { Tab, TabsState } from "@zeo/core";
-import { SIDEBAR_WIDTH } from "@zeo/core";
+import { SIDEBAR_WIDTH, formatRelativeArchived } from "@zeo/core";
 import "./App.css";
 
 // Pointer travel (px) required before a press turns into a drag. Below this a
@@ -333,15 +333,80 @@ function TabRow({
   );
 }
 
-// Keyboard-first left sidebar listing open tabs. This is the renderer: it
-// reaches the main process ONLY through the injected global `window.zeo`
-// (which implements ZeoApi). No Node or Electron imports.
+/**
+ * A single archived-tab row. Thin sibling of `TabRow`: reuses the exact favicon
+ * markup, restores on title click, permanently deletes on the delete button,
+ * and shows when the tab was archived. All side effects go through the bridge.
+ */
+function ArchivedRow({ tab, now }: { tab: Tab; now: number }) {
+  const hasFavicon =
+    typeof tab.faviconUrl === "string" && tab.faviconUrl.length > 0;
+
+  return (
+    <li
+      className="archived-item"
+      data-testid="archived-item"
+      data-archived-id={tab.id}
+    >
+      {hasFavicon ? (
+        <img className="tab-item__favicon" src={tab.faviconUrl ?? ""} alt="" />
+      ) : (
+        <span
+          className="tab-item__favicon tab-item__favicon--fallback"
+          aria-hidden="true"
+        >
+          ◦
+        </span>
+      )}
+      <button
+        type="button"
+        className="archived-item__title"
+        title={tab.url}
+        onClick={() => void window.zeo?.tabs.restore(tab.id).catch(() => {})}
+      >
+        {tab.title}
+      </button>
+      <span className="archived-item__time" data-testid="archived-time">
+        {formatRelativeArchived(tab.archivedAt ?? now, now)}
+      </span>
+      <button
+        type="button"
+        className="archived-item__delete"
+        data-testid="archived-delete"
+        aria-label={`Delete ${tab.title}`}
+        onClick={(event) => {
+          event.stopPropagation();
+          void window.zeo?.tabs.remove(tab.id).catch(() => {});
+        }}
+      >
+        ×
+      </button>
+    </li>
+  );
+}
+
+/**
+ * Keyboard-first left sidebar listing open tabs. This is the renderer: it
+ * reaches the main process ONLY through the injected global `window.zeo`
+ * (which implements ZeoApi). No Node or Electron imports.
+ */
 export function App() {
   const [state, setState] = useState<TabsState>({
     tabs: [],
     activeTabId: null,
     archived: [],
   });
+  const [showArchived, setShowArchived] = useState(false);
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (!showArchived) {
+      return;
+    }
+    setNow(Date.now());
+    const timer = setInterval(() => setNow(Date.now()), 60_000);
+    return () => clearInterval(timer);
+  }, [showArchived]);
 
   useEffect(() => {
     // Guard so a bare browser dev-open (no bridge) doesn't throw. In Electron
@@ -480,6 +545,33 @@ export function App() {
           )}
         </div>
       )}
+
+      <footer className="sidebar__footer">
+        <button
+          type="button"
+          className="sidebar__footer-button"
+          data-testid="archived-toggle"
+          aria-expanded={showArchived}
+          onClick={() => setShowArchived((open) => !open)}
+        >
+          Archived ({state.archived.length})
+        </button>
+        {showArchived && (
+          <div className="archived-view" data-testid="archived-view">
+            {state.archived.length === 0 ? (
+              <p className="archived-empty" data-testid="archived-empty">
+                No archived tabs
+              </p>
+            ) : (
+              <ul className="archived-list">
+                {state.archived.map((tab) => (
+                  <ArchivedRow key={tab.id} tab={tab} now={now} />
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+      </footer>
     </aside>
   );
 }

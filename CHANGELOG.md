@@ -9,6 +9,21 @@ milestone, a minor bump only for very large breakthroughs.
 
 ## [Unreleased]
 
+## [0.0.4] - 2026-08-31
+
+### Added
+
+- Automatic archiving of idle tabs: an unpinned, non-active tab untouched for
+  12 hours is archived by an hourly background sweep (also run once on
+  launch); the focused tab's activity is refreshed on window focus, so a tab
+  left focused (e.g. overnight) is never swept.
+- Archived-tabs view in the sidebar footer: an "Archived (N)" toggle reveals
+  the list, each row showing favicon, title, and how long ago it was
+  archived; clicking a row restores it to the open tabs, and a per-row delete
+  button permanently removes it.
+- `formatRelativeArchived` helper in `packages/core` for the archived-age
+  labels ("just now", "5m ago", "3h ago", "2d ago").
+
 ## [0.0.3] - 2026-08-31
 
 ### Added

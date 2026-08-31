@@ -235,3 +235,128 @@ body {
 .sidebar__dropzone .drop-indicator {
   width: 100%;
 }
+
+/* Archived tabs ----------------------------------------------------------- */
+
+/* Pinned to the bottom of the flex-column sidebar. `margin-top: auto` pushes it
+   down whether or not a `flex: 1` sibling is present — when every tab is
+   archived (idle sweep), the empty-state `.sidebar__empty` replaces the
+   `flex: 1` `.sidebar__sections`, so the auto margin is what keeps the footer at
+   the bottom in that case. */
+.sidebar__footer {
+  flex: 0 0 auto;
+  margin-top: auto;
+  border-top: 1px solid #2c2c3a;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.sidebar__footer-button {
+  appearance: none;
+  border: none;
+  background: none;
+  color: #a0a0b4;
+  text-align: left;
+  padding: 10px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.sidebar__footer-button:hover {
+  background: #2a2a38;
+  color: #e6e6ee;
+}
+
+.sidebar__footer-button:focus-visible {
+  outline: 2px solid #6b6bff;
+  outline-offset: -2px;
+}
+
+/* Its own scroll so a long archive never pushes the toggle off-screen. */
+.archived-view {
+  max-height: 40vh;
+  overflow-y: auto;
+  border-top: 1px solid #2c2c3a;
+}
+
+.archived-empty {
+  margin: 0;
+  padding: 12px;
+  font-size: 12px;
+  color: #7a7a90;
+}
+
+.archived-list {
+  list-style: none;
+  margin: 0;
+  padding: 4px;
+}
+
+.archived-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: 6px;
+}
+
+.archived-item:hover {
+  background: #2a2a38;
+}
+
+.archived-item__title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border: none;
+  background: none;
+  color: inherit;
+  font-size: 13px;
+  text-align: left;
+  padding: 0;
+  cursor: pointer;
+}
+
+.archived-item__time {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: #7a7a90;
+  white-space: nowrap;
+}
+
+.archived-item__delete {
+  appearance: none;
+  border: none;
+  background: none;
+  color: #9a9ab0;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 4px;
+  flex: 0 0 auto;
+  opacity: 0;
+  transition: opacity 0.1s ease-in-out;
+}
+
+/* Match the tab-row convention: reveal on hover / focus, keep keyboard-reachable. */
+.archived-item:hover .archived-item__delete,
+.archived-item:focus-within .archived-item__delete {
+  opacity: 1;
+}
+
+.archived-item__delete:focus,
+.archived-item__delete:focus-visible {
+  opacity: 1;
+}
+
+.archived-item__delete:hover {
+  background: #45455c;
+  color: #fff;
+}

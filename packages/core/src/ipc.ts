@@ -50,6 +50,7 @@ export interface TabsApi {
   reorder(id: string, toIndex: number): Promise<void>;
   archive(id: string): Promise<void>;
   restore(id: string): Promise<void>;
+  remove(id: string): Promise<void>;
   /**
    * Builds (and, outside test mode, pops) the native tab context menu for `id`
    * at window coordinates `x`/`y`, returning a descriptor of the items it
@@ -85,6 +86,7 @@ export const IPC = {
   tabsReorder: "zeo:tabs:reorder",
   tabsArchive: "zeo:tabs:archive",
   tabsRestore: "zeo:tabs:restore",
+  tabsRemove: "zeo:tabs:remove",
   tabsContextMenu: "zeo:tabs:context-menu",
   stateChange: "zeo:state-change",
 } as const;

@@ -112,8 +112,19 @@ export class TabStore {
       archivalSeq: 0,
     };
     this.tabs.push(record);
+    this.stampOutgoing(record.id);
     this.activeId = record.id;
     return this.toTab(record);
+  }
+
+  private stampOutgoing(nextId: string): void {
+    if (this.activeId === null || this.activeId === nextId) {
+      return;
+    }
+    const previous = this.tabs.find((tab) => tab.id === this.activeId);
+    if (previous !== undefined) {
+      previous.lastActiveAt = this.now();
+    }
   }
 
   /**
@@ -131,6 +142,33 @@ export class TabStore {
     }
     if (this.tabs[index].archivedAt !== null) {
       throw new Error(`Cannot close an archived tab: ${id}`);
+    }
+
+    const wasActive = this.activeId === id;
+    this.tabs.splice(index, 1);
+
+    if (!wasActive) {
+      return;
+    }
+
+    this.activateMru();
+  }
+
+  /**
+   * Removes the tab with the given id from the store entirely, whether it is
+   * OPEN or ARCHIVED. Unlike `close`, which throws on an archived tab to keep it
+   * restorable, `remove` drops the record outright — it is the hard-delete path
+   * for evicting an archived tab from the archive.
+   *
+   * Active-tab invariant: if the removed tab was active, the most-recently-used
+   * remaining OPEN tab becomes active (via `activateMru`); if none remain, the
+   * active pointer becomes null. Removing a non-active tab leaves the active
+   * pointer unchanged. Throws on an unknown id.
+   */
+  remove(id: string): void {
+    const index = this.tabs.findIndex((tab) => tab.id === id);
+    if (index === -1) {
+      throw new Error(`Cannot remove unknown tab: ${id}`);
     }
 
     const wasActive = this.activeId === id;
@@ -167,6 +205,7 @@ export class TabStore {
     if (record.archivedAt !== null) {
       throw new Error(`Cannot activate an archived tab: ${id}`);
     }
+    this.stampOutgoing(id);
     record.lastActiveAt = this.now();
     record.activationSeq = ++this.seq;
     this.activeId = id;
@@ -316,10 +355,39 @@ export class TabStore {
   }
 
   /**
+   * Auto-archives every OPEN tab that has gone idle: not pinned, not the active
+   * tab, and whose age (`this.now() - lastActiveAt`) is STRICTLY GREATER THAN
+   * `maxIdleMs`. A tab whose age exactly equals `maxIdleMs` is kept (the PRD
+   * archives tabs "older than" the threshold, not at it). Each archived tab is
+   * stamped exactly as `archive` stamps it: `archivedAt` from the clock plus a
+   * fresh `archivalSeq`.
+   *
+   * Because the active tab is exempt, `this.activeId` never changes here, so no
+   * MRU re-point is needed. Returns the ids of the tabs it archived (empty when
+   * nothing qualifies).
+   */
+  archiveIdle(maxIdleMs: number): string[] {
+    const now = this.now();
+    const archivedIds: string[] = [];
+    for (const record of this.tabs) {
+      if (
+        record.archivedAt !== null ||
+        record.pinned ||
+        record.id === this.activeId ||
+        now - record.lastActiveAt <= maxIdleMs
+      ) {
+        continue;
+      }
+      record.archivedAt = now;
+      record.archivalSeq = ++this.seq;
+      archivedIds.push(record.id);
+    }
+    return archivedIds;
+  }
+
+  /**
    * Restores an archived tab: clears `archivedAt`, clears `pinned`, and moves
    * the record to the end of the array (= the end of the unpinned group).
-   * Throws on an unknown id, or if the tab is not archived. When the active
-   * pointer is currently null, the restored tab becomes active.
    */
   restore(id: string): void {
     const index = this.tabs.findIndex((tab) => tab.id === id);
@@ -336,11 +404,10 @@ export class TabStore {
     this.tabs.splice(index, 1);
     this.tabs.push(record);
 
-    if (this.activeId === null) {
-      record.lastActiveAt = this.now();
-      record.activationSeq = ++this.seq;
-      this.activeId = record.id;
-    }
+    this.stampOutgoing(record.id);
+    record.lastActiveAt = this.now();
+    record.activationSeq = ++this.seq;
+    this.activeId = record.id;
   }
 
   /**

@@ -41,6 +41,8 @@ interface ZeoBridge {
     close(id: string): Promise<void>;
     pin(id: string): Promise<void>;
     archive(id: string): Promise<void>;
+    restore(id: string): Promise<void>;
+    remove(id: string): Promise<void>;
     list(): Promise<BridgeState>;
     showContextMenu(id: string, x: number, y: number): Promise<BridgeMenuResult>;
   };
@@ -344,6 +346,58 @@ test.describe("zeo desktop app", () => {
       return zeo.tabs.list();
     });
     expect(state.archived.map((tab) => tab.id)).toContain(archivedId);
+  });
+
+  // Case (d'): PRD 2.4 deliverable #4 — the archived-tabs VIEW. Renders an
+  // archived tab as a row under the footer toggle and restores it to the open
+  // list on title click. Unlike case (d), which asserts on the broadcast payload,
+  // this exercises the rendered surface end to end: bridge archive/restore ->
+  // main->renderer broadcast -> re-render. All assertions key off stable testids
+  // and the archived id (never live page titles), so CI's real navigation of
+  // news.ycombinator.com cannot flake them; the web-first expect(...) matchers
+  // auto-retry through the broadcast + re-render.
+  test("the archived view lists an archived tab and restoring it returns it to the open list", async () => {
+    // Fresh launch: exactly one seeded open tab, no archives.
+    const openItems = sidebar.getByTestId("tab-item");
+    await expect(openItems).toHaveCount(1);
+
+    // Create a dedicated tab and archive it. create() returns the Tab, giving us
+    // its stable id directly; the seeded tab stays open.
+    const archivedId = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      const created = await zeo.tabs.create("https://news.ycombinator.com/");
+      await zeo.tabs.archive(created.id);
+      return created.id;
+    });
+
+    // Open the archived panel from the footer toggle.
+    await sidebar.getByTestId("archived-toggle").click();
+
+    // The toggle reflects the single archived tab, the panel is visible, and it
+    // holds exactly one row — the one for the archived id.
+    await expect(sidebar.getByTestId("archived-toggle")).toContainText("Archived (1)");
+    await expect(sidebar.getByTestId("archived-view")).toBeVisible();
+    await expect(sidebar.getByTestId("archived-item")).toHaveCount(1);
+    const archivedRow = sidebar.locator(`[data-archived-id="${archivedId}"]`);
+    await expect(archivedRow).toHaveCount(1);
+
+    // Restore via the row's title button. This round-trips through the bridge and
+    // the state broadcast; the web-first matchers below poll until it lands.
+    await archivedRow.locator(".archived-item__title").click();
+
+    // It left the archived view: the toggle now reads zero and no row remains.
+    await expect(sidebar.getByTestId("archived-toggle")).toContainText("Archived (0)");
+    await expect(sidebar.locator(`[data-archived-id="${archivedId}"]`)).toHaveCount(0);
+
+    // The panel stays open (restore does not toggle it), so its empty state shows.
+    await expect(sidebar.getByTestId("archived-empty")).toBeVisible();
+
+    // And it returned to the open list: seeded + restored = two rows.
+    await expect(openItems).toHaveCount(2);
+
+    await expect(
+      sidebar.locator(`[data-tab-id="${archivedId}"]`),
+    ).toHaveAttribute("aria-current", "true");
   });
 
   // Case (e): PRD 2.3 pointer-drag reorder. Drives a REAL pointer gesture (not

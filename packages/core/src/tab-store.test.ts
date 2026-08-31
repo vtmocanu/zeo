@@ -28,6 +28,31 @@ function makeFrozenStore(constant = 500): TabStore {
   });
 }
 
+/**
+ * Builds a store whose clock is a single mutable value the test drives via
+ * `setClock`. Ids are `t1`, `t2`, ... . Unlike `makeStore` (which advances on
+ * every read), this lets a test hold time still while creating tabs and then
+ * jump the clock to a precise idle age — the control `archiveIdle` needs to
+ * exercise its strict "older than" threshold.
+ */
+function makeClockStore(start = 1000): {
+  store: TabStore;
+  setClock: (value: number) => void;
+} {
+  let idCounter = 0;
+  let clock = start;
+  const store = new TabStore({
+    idFactory: () => `t${++idCounter}`,
+    now: () => clock,
+  });
+  return {
+    store,
+    setClock: (value: number) => {
+      clock = value;
+    },
+  };
+}
+
 describe("TabStore.create", () => {
   test("assigns injected id and clock, and becomes active", () => {
     const store = makeStore();
@@ -161,7 +186,28 @@ describe("TabStore.activate", () => {
     store.create({ url: "https://b.test" });
 
     store.activate("t1");
-    expect(store.activeTab?.lastActiveAt).toBe(1002);
+    expect(store.activeTab?.lastActiveAt).toBe(1004);
+  });
+
+  test("re-stamps the outgoing tab's lastActiveAt on switch", () => {
+    const store = makeStore();
+    store.create({ url: "https://a.test" });
+    store.create({ url: "https://b.test" });
+
+    const before = store.list().find((t) => t.id === "t2")?.lastActiveAt ?? 0;
+    store.activate("t1");
+    const after = store.list().find((t) => t.id === "t2")?.lastActiveAt ?? 0;
+    expect(after).toBeGreaterThan(before);
+  });
+
+  test("re-stamps the outgoing tab's lastActiveAt on create", () => {
+    const store = makeStore();
+    store.create({ url: "https://a.test" });
+    const before = store.list().find((t) => t.id === "t1")?.lastActiveAt ?? 0;
+
+    store.create({ url: "https://b.test" });
+    const after = store.list().find((t) => t.id === "t1")?.lastActiveAt ?? 0;
+    expect(after).toBeGreaterThan(before);
   });
 
   test("throws on an unknown id", () => {
@@ -427,7 +473,7 @@ describe("TabStore.close (MRU activation)", () => {
     store.activate("t1");
 
     store.close("t1");
-    expect(store.activeTabId).toBe("t2");
+    expect(store.activeTabId).toBe("t3");
   });
 });
 
@@ -480,6 +526,29 @@ describe("TabStore.archive / restore", () => {
     expect(restored?.pinned).toBe(false);
     // Appended to the end of the unpinned group -> after t2.
     expect(store.list().map((t) => t.id)).toEqual(["t2", "t1"]);
+  });
+
+  test("restore makes the restored tab active even when another tab is active", () => {
+    const store = makeStore();
+    store.create({ url: "https://a.test" }); // t1
+    store.create({ url: "https://b.test" }); // t2 (active)
+    store.archive("t1");
+
+    store.restore("t1");
+    expect(store.activeTabId).toBe("t1");
+  });
+
+  test("restore re-stamps lastActiveAt so the idle sweep does not re-archive", () => {
+    const store = makeStore();
+    store.create({ url: "https://a.test" }); // t1
+    store.create({ url: "https://b.test" }); // t2 (active)
+    store.archiveIdle(0);
+    expect(store.archived().map((t) => t.id)).toEqual(["t1"]);
+
+    store.restore("t1");
+    store.activate("t2");
+    expect(store.archiveIdle(10)).toEqual([]);
+    expect(store.archived()).toEqual([]);
   });
 
   test("archive of a pinned tab throws", () => {
@@ -539,6 +608,133 @@ describe("TabStore.archive / restore", () => {
     expect(store.snapshot().archived.map((t) => t.id)).toEqual(
       store.archived().map((t) => t.id),
     );
+  });
+});
+
+describe("TabStore.archiveIdle", () => {
+  test("a tab whose age exactly equals maxIdleMs is NOT archived", () => {
+    const { store, setClock } = makeClockStore(1000);
+    store.create({ url: "https://a.test" }); // t1 lastActiveAt = 1000
+    store.create({ url: "https://b.test" }); // t2 (active)
+
+    setClock(6000); // t1 age = 5000, exactly the threshold
+    expect(store.archiveIdle(5000)).toEqual([]);
+    expect(store.list().map((t) => t.id)).toEqual(["t1", "t2"]);
+    expect(store.archived()).toEqual([]);
+  });
+
+  test("a tab one ms past the threshold IS archived", () => {
+    const { store, setClock } = makeClockStore(1000);
+    store.create({ url: "https://a.test" }); // t1 lastActiveAt = 1000
+    store.create({ url: "https://b.test" }); // t2 (active)
+
+    setClock(6001); // t1 age = 5001 > 5000
+    expect(store.archiveIdle(5000)).toEqual(["t1"]);
+    expect(store.list().map((t) => t.id)).toEqual(["t2"]);
+    expect(store.archived().map((t) => t.id)).toEqual(["t1"]);
+  });
+
+  test("the active tab is exempt even when far past the threshold", () => {
+    const { store, setClock } = makeClockStore(1000);
+    store.create({ url: "https://a.test" }); // t1 (active)
+
+    setClock(1_000_000); // t1 age enormous, but it is active
+    expect(store.archiveIdle(5000)).toEqual([]);
+    expect(store.activeTabId).toBe("t1");
+    expect(store.list().map((t) => t.id)).toEqual(["t1"]);
+  });
+
+  test("a pinned tab is exempt even when far past the threshold", () => {
+    const { store, setClock } = makeClockStore(1000);
+    store.create({ url: "https://a.test" }); // t1
+    store.pin("t1");
+    store.create({ url: "https://b.test" }); // t2 (active)
+
+    setClock(1_000_000); // both far past, but t1 pinned and t2 active
+    expect(store.archiveIdle(5000)).toEqual([]);
+    expect(store.list().map((t) => t.id)).toEqual(["t1", "t2"]);
+  });
+
+  test("an empty store returns []", () => {
+    const { store } = makeClockStore(1000);
+    expect(store.archiveIdle(5000)).toEqual([]);
+  });
+
+  test("the returned ids equal the set that left list()", () => {
+    const { store, setClock } = makeClockStore(1000);
+    store.create({ url: "https://a.test" }); // t1
+    store.create({ url: "https://b.test" }); // t2
+    store.create({ url: "https://c.test" }); // t3
+    store.create({ url: "https://d.test" }); // t4 (active)
+
+    const before = new Set(store.list().map((t) => t.id));
+    setClock(1_000_000);
+    const archivedIds = store.archiveIdle(5000);
+    const after = new Set(store.list().map((t) => t.id));
+
+    const left = [...before].filter((id) => !after.has(id));
+    expect([...archivedIds].sort()).toEqual(left.sort());
+    // t4 is active, so it stays; t1/t2/t3 leave.
+    expect([...archivedIds].sort()).toEqual(["t1", "t2", "t3"]);
+    expect([...after]).toEqual(["t4"]);
+  });
+
+  test("archived tabs appear in archived()", () => {
+    const { store, setClock } = makeClockStore(1000);
+    store.create({ url: "https://a.test" }); // t1
+    store.create({ url: "https://b.test" }); // t2
+    store.create({ url: "https://c.test" }); // t3 (active)
+
+    setClock(1_000_000);
+    const archivedIds = store.archiveIdle(5000);
+
+    expect(archivedIds.sort()).toEqual(["t1", "t2"]);
+    expect(store.archived().map((t) => t.id).sort()).toEqual(["t1", "t2"]);
+    for (const tab of store.archived()) {
+      expect(tab.archivedAt).not.toBeNull();
+    }
+  });
+});
+
+describe("TabStore.remove", () => {
+  test("removing an archived tab drops it from archived()", () => {
+    const store = makeStore();
+    store.create({ url: "https://a.test" }); // t1
+    store.create({ url: "https://b.test" }); // t2 (active)
+    store.archive("t1");
+    expect(store.archived().map((t) => t.id)).toEqual(["t1"]);
+
+    store.remove("t1");
+    expect(store.archived()).toEqual([]);
+    expect(store.list().map((t) => t.id)).toEqual(["t2"]);
+  });
+
+  test("removing an open non-active tab leaves it gone from list()", () => {
+    const store = makeStore();
+    store.create({ url: "https://a.test" }); // t1
+    store.create({ url: "https://b.test" }); // t2 (active)
+
+    store.remove("t1");
+    expect(store.list().map((t) => t.id)).toEqual(["t2"]);
+    expect(store.activeTabId).toBe("t2");
+  });
+
+  test("removing the active tab re-points active to the MRU remaining open tab", () => {
+    const store = makeStore();
+    store.create({ url: "https://a.test" }); // t1
+    store.create({ url: "https://b.test" }); // t2
+    store.create({ url: "https://c.test" }); // t3 (active)
+
+    store.remove("t3");
+    // MRU of remaining open {t1, t2} is t2 (created after t1).
+    expect(store.activeTabId).toBe("t2");
+    expect(store.list().map((t) => t.id)).toEqual(["t1", "t2"]);
+  });
+
+  test("throws on an unknown id", () => {
+    const store = makeStore();
+    store.create({ url: "https://a.test" });
+    expect(() => store.remove("nope")).toThrow(/Cannot remove unknown tab/);
   });
 });
 
