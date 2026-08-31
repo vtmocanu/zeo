@@ -16,11 +16,6 @@
     "dev": "pnpm -r --parallel run dev",
     "format": "prettier --write ."
   },
-  "pnpm": {
-    "overrides": {
-      "electron": "44.0.0"
-    }
-  },
   "devDependencies": {
     "@eslint/js": "^10.0.0",
     "@types/node": "^24.5.2",
