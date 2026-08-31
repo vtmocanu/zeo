@@ -520,19 +520,33 @@ test.describe("zeo desktop app", () => {
       await sidebar.mouse.move(startX, startY);
       await sidebar.mouse.down();
       await sidebar.mouse.move(startX, startY + box.height, { steps: 6 });
+      const tickFrame = () =>
+        sidebar.evaluate(
+          () =>
+            new Promise<void>((resolve) => {
+              requestAnimationFrame(() => resolve());
+            }),
+        );
+      const seenY = () =>
+        sidebar.evaluate(
+          () =>
+            (globalThis as { __zeoDrag?: { y: number } }).__zeoDrag?.y ?? null,
+        );
       const dest = await destination();
       await sidebar.mouse.move(dest.x, dest.y, { steps: 12 });
+      await tickFrame();
       const settled = await destination();
-      await sidebar.mouse.move(settled.x, settled.y, { steps: 4 });
-      await expect
-        .poll(() =>
-          sidebar.evaluate(
-            () =>
-              (globalThis as { __zeoDrag?: { y: number } }).__zeoDrag?.y ??
-              null,
-          ),
-        )
-        .toBe(settled.y);
+      let acknowledged = false;
+      for (let attempt = 0; attempt < 50 && !acknowledged; attempt += 1) {
+        await sidebar.mouse.move(settled.x, settled.y);
+        await tickFrame();
+        acknowledged = (await seenY()) === settled.y;
+      }
+      if (!acknowledged) {
+        throw new Error(
+          `drag pointer never reached y=${settled.y}, renderer saw y=${await seenY()}`,
+        );
+      }
       await sidebar.mouse.up();
     };
 
