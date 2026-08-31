@@ -57,8 +57,9 @@ export interface TabContextMenuResult {
 
 /**
  * Commands the renderer invokes over IPC. The main process handles each of
- * these, backed by a `TabStore`. `list()` returns the full {@link TabsState}
- * so the renderer gets both the tabs and the active pointer in one round trip.
+ * these against the active space of its `SpaceStore`. `list()` returns the full
+ * {@link TabsState} (spaces plus the active space's tab payload), so the renderer
+ * gets the whole broadcast shape in one round trip.
  */
 export interface TabsApi {
   create(url?: string): Promise<Tab>;
