@@ -333,9 +333,11 @@ function TabRow({
   );
 }
 
-// A single archived-tab row. Thin sibling of `TabRow`: reuses the exact favicon
-// markup, restores on title click, permanently deletes on the delete button,
-// and shows when the tab was archived. All side effects go through the bridge.
+/**
+ * A single archived-tab row. Thin sibling of `TabRow`: reuses the exact favicon
+ * markup, restores on title click, permanently deletes on the delete button,
+ * and shows when the tab was archived. All side effects go through the bridge.
+ */
 function ArchivedRow({ tab }: { tab: Tab }) {
   const hasFavicon =
     typeof tab.faviconUrl === "string" && tab.faviconUrl.length > 0;
@@ -383,9 +385,11 @@ function ArchivedRow({ tab }: { tab: Tab }) {
   );
 }
 
-// Keyboard-first left sidebar listing open tabs. This is the renderer: it
-// reaches the main process ONLY through the injected global `window.zeo`
-// (which implements ZeoApi). No Node or Electron imports.
+/**
+ * Keyboard-first left sidebar listing open tabs. This is the renderer: it
+ * reaches the main process ONLY through the injected global `window.zeo`
+ * (which implements ZeoApi). No Node or Electron imports.
+ */
 export function App() {
   const [state, setState] = useState<TabsState>({
     tabs: [],
