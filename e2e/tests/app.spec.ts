@@ -953,4 +953,90 @@ test.describe("zeo desktop app", () => {
     // session (PRD 3.2 #4: cookie present in a second space that shares A).
     expect(result.isoInA2).toBe(true);
   });
+
+  // PRD 3.2 — LIVE-VIEW profile migration path (remapSpaceProfile in the desktop
+  // main process). The isolation test above only ever calls setProfile on EMPTY
+  // spaces, so remapSpaceProfile always takes its empty-tabIds branch: no view is
+  // ever captured, destroyed, or recreated. That leaves the highest-risk
+  // migration logic untested — capturing the live tab ids on the OLD partition,
+  // destroying their WebContentsViews, moving the store's profile reference, and
+  // recreating the views on the NEW partition's Session.
+  //
+  // This test exercises exactly that path: it reassigns the profile of a space
+  // that ALREADY has a loaded tab, then asserts the tab's recreated view moved to
+  // the destination partition's Session. Before the remap the view must run on the
+  // source partition (persist:<from>); after it, on the destination partition
+  // (persist:<to>) — the same in-URL token identifies the view across the
+  // destroy/recreate because recreation resumes the snapshotted data: URL.
+  //
+  // Network-independent by construction: the tab loads a `data:` URL (no fetch)
+  // and the assertion is by Session IDENTITY only (`wc.session ===
+  // session.fromPartition("persist:"+id)`), never a cookie or a live page title.
+  // The token ZEOISO_DELTA is not a substring of any other test's token, so a URL
+  // `includes(token)` match identifies exactly this space's tab view.
+  test("reassigning a profile on a space with a loaded tab migrates the live view to the new partition", async () => {
+    const token = "ZEOISO_DELTA";
+
+    // Over the bridge: two profiles (source + destination), a space initially on
+    // the SOURCE profile, activate it, then create a tab loading the data: URL.
+    // Activation must precede tab creation so the view is created on the active
+    // space's (source) partition.
+    const setup = await sidebar.evaluate(async (tok) => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      const profFrom = await zeo.profiles.create("MigrateFrom");
+      const profTo = await zeo.profiles.create("MigrateTo");
+      const space = await zeo.spaces.create("Migrate");
+      await zeo.spaces.setProfile(space.id, profFrom.id);
+      await zeo.spaces.activate(space.id);
+      const tab = await zeo.tabs.create("data:text/html," + tok);
+      return {
+        fromId: profFrom.id,
+        toId: profTo.id,
+        spaceId: space.id,
+        tabId: tab.id,
+        token: tok,
+      };
+    }, token);
+    expect(setup.fromId).not.toBe(setup.toId);
+
+    // Poll (web-first, no fixed sleep) until the tab's view exists AND runs on the
+    // SOURCE partition's Session by identity — proving it STARTED on the old
+    // partition, so the upcoming remap has a live view to migrate.
+    await expect
+      .poll(
+        async () =>
+          app.evaluate(({ session, webContents }, data) => {
+            const wc = webContents
+              .getAllWebContents()
+              .find((w) => w.getURL().includes(data.token));
+            return wc !== undefined && wc.session === session.fromPartition("persist:" + data.fromId);
+          }, setup),
+        { message: "expected the tab view to start on the source profile's partition" },
+      )
+      .toBe(true);
+
+    // Over the bridge: reassign the space to the DESTINATION profile. This triggers
+    // remapSpaceProfile's live path — capture tab ids, destroy views, move the
+    // store profile reference, recreate views on the destination partition.
+    await sidebar.evaluate(async (data) => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.spaces.setProfile(data.spaceId, data.toId);
+    }, setup);
+
+    // Poll until the view matched by the SAME token exists AND now runs on the
+    // DESTINATION partition's Session by identity — proving the recreated view
+    // landed on the new partition, not the old one.
+    await expect
+      .poll(
+        async () =>
+          app.evaluate(({ session, webContents }, data) => {
+            const wc = webContents
+              .getAllWebContents()
+              .find((w) => w.getURL().includes(data.token));
+            return wc !== undefined && wc.session === session.fromPartition("persist:" + data.toId);
+          }, setup),
+        { message: "expected the recreated tab view to run on the destination profile's partition" },
+      )
+      .toBe(true);
+  });
 });
