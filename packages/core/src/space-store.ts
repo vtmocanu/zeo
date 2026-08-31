@@ -1,6 +1,7 @@
 import { TabStore } from "./tab-store.js";
 import type { Tab } from "./tab.js";
 import type { Space } from "./space.js";
+import type { Profile } from "./profile.js";
 import type { TabsState, SpacesState } from "./ipc.js";
 
 export interface SpaceStoreOptions {
@@ -43,6 +44,9 @@ export class SpaceStore {
   /** Space ids in creation order — the order `spaces()` reports. */
   private readonly order: string[] = [];
   private readonly spacesById = new Map<string, SpaceRecord>();
+  /** Profile ids in creation order — the order `profiles()` reports. */
+  private readonly profileOrder: string[] = [];
+  private readonly profilesById = new Map<string, Profile>();
   private activeId: string;
   private readonly idFactory: () => string;
   private readonly now: () => number;
@@ -50,6 +54,10 @@ export class SpaceStore {
   constructor(options: SpaceStoreOptions = {}) {
     this.idFactory = options.idFactory ?? (() => crypto.randomUUID());
     this.now = options.now ?? (() => Date.now());
+    // Seed the default profile BEFORE the seed space so the space's
+    // `profileId: "default"` resolves through the same validation `createSpace`
+    // will apply.
+    this.insertProfile(DEFAULT_PROFILE_ID, "Default");
     const seed = this.insertSpace("Personal", DEFAULT_PROFILE_ID);
     this.activeId = seed.id;
   }
@@ -83,6 +91,27 @@ export class SpaceStore {
     return record;
   }
 
+  /**
+   * Builds a {@link Profile} with the given id and name, registers it in the
+   * profile map and order, and returns a defensive copy. Used both to seed the
+   * `"default"` profile and to create fresh ones.
+   */
+  private insertProfile(id: string, name: string): Profile {
+    const profile: Profile = { id, name, createdAt: this.now() };
+    this.profilesById.set(id, profile);
+    this.profileOrder.push(id);
+    return { ...profile };
+  }
+
+  /** Looks up a profile, throwing on an unknown id. */
+  private requireProfile(id: string): Profile {
+    const profile = this.profilesById.get(id);
+    if (profile === undefined) {
+      throw new Error(`Unknown profile: ${id}`);
+    }
+    return profile;
+  }
+
   /** The active space's tab store — the target of all delegated tab ops. */
   private active(): TabStore {
     // activeId always names a live record (constructor seeds it; delete
@@ -90,19 +119,69 @@ export class SpaceStore {
     return this.spacesById.get(this.activeId)!.tabs;
   }
 
+  // --- Profile lifecycle ---------------------------------------------------
+
+  /**
+   * Creates a new profile with the given name and returns it. The id is a fresh
+   * value from the id factory — never reused, so orphaned session-partition data
+   * from a deleted profile can never be reached by a later one. Throws on a blank
+   * name.
+   */
+  createProfile(name: string): Profile {
+    if (name.trim() === "") {
+      throw new Error("Profile name must not be blank");
+    }
+    return this.insertProfile(this.idFactory(), name);
+  }
+
+  /** Renames a profile. Throws on a blank name or an unknown id. */
+  renameProfile(id: string, name: string): void {
+    if (name.trim() === "") {
+      throw new Error("Profile name must not be blank");
+    }
+    const profile = this.requireProfile(id);
+    this.profilesById.set(id, { ...profile, name });
+  }
+
+  /**
+   * Deletes a profile. Throws when it is the `"default"` profile, when the id is
+   * unknown, or when any space still references it (a space must always resolve
+   * to a live profile).
+   */
+  deleteProfile(id: string): void {
+    if (id === DEFAULT_PROFILE_ID) {
+      throw new Error("Cannot delete the default profile");
+    }
+    this.requireProfile(id);
+    if ([...this.spacesById.values()].some((r) => r.space.profileId === id)) {
+      throw new Error(`Cannot delete a profile referenced by a space: ${id}`);
+    }
+    this.profilesById.delete(id);
+    this.profileOrder.splice(this.profileOrder.indexOf(id), 1);
+  }
+
+  // --- Profile read access -------------------------------------------------
+
+  /** The profiles in creation order, as defensive copies. */
+  profiles(): Profile[] {
+    return this.profileOrder.map((id) => ({ ...this.profilesById.get(id)! }));
+  }
+
   // --- Space lifecycle -----------------------------------------------------
 
   /**
-   * Creates a new space with the given name (referencing the `"default"`
-   * profile) and returns it. Does NOT switch the active space — the caller
-   * activates it explicitly via {@link setActiveSpace}. The new space starts
-   * with an empty tab set.
+   * Creates a new space with the given name and returns it. The `profileId`
+   * defaults to `"default"` and must resolve to an existing profile — an unknown
+   * profile throws with no side effect. Does NOT switch the active space — the
+   * caller activates it explicitly via {@link setActiveSpace}. The new space
+   * starts with an empty tab set.
    */
-  createSpace(name: string): Space {
+  createSpace(name: string, profileId: string = DEFAULT_PROFILE_ID): Space {
     if (name.trim() === "") {
       throw new Error("Space name must not be blank");
     }
-    return this.insertSpace(name, DEFAULT_PROFILE_ID);
+    this.requireProfile(profileId);
+    return this.insertSpace(name, profileId);
   }
 
   /** Renames a space. Throws on an unknown id. */
@@ -224,6 +303,41 @@ export class SpaceStore {
   // --- Cross-space operations ----------------------------------------------
 
   /**
+   * Re-points a space at a different profile. Throws on an unknown space id and
+   * on a `profileId` that does not resolve to an existing profile; the desktop
+   * main destroys and recreates the space's views on the new partition.
+   */
+  setSpaceProfile(id: string, profileId: string): void {
+    const record = this.require(id);
+    this.requireProfile(profileId);
+    record.space = { ...record.space, profileId };
+  }
+
+  /**
+   * Whether {@link setSpaceProfile} would succeed: both the space id and the
+   * profile id name known entities. A side-effect-free predicate the desktop
+   * main queries before tearing down and rebuilding a space's views.
+   */
+  canSetSpaceProfile(spaceId: string, profileId: string): boolean {
+    return this.spacesById.has(spaceId) && this.profilesById.has(profileId);
+  }
+
+  /** The profile id a space references. Throws on an unknown space id. */
+  spaceProfileId(id: string): string {
+    return this.require(id).space.profileId;
+  }
+
+  /**
+   * Every tab of a space — open (non-archived) followed by archived. The desktop
+   * main uses this to remap a space's views onto a new partition when its profile
+   * changes. Throws on an unknown space id.
+   */
+  tabsOfSpace(id: string): Tab[] {
+    const record = this.require(id);
+    return [...record.tabs.list(), ...record.tabs.archived()];
+  }
+
+  /**
    * Applies a partial metadata sync to whichever space owns `id`. Metadata
    * events (`page-title-updated`/`page-favicon-updated`) fire for tab views in
    * INACTIVE spaces too (their views stay alive but hidden), so this cannot be
@@ -278,11 +392,12 @@ export class SpaceStore {
     };
   }
 
-  /** The space-only slice (space list + active space id). */
+  /** The space-only slice (space list + active space id + profile list). */
   spacesSnapshot(): SpacesState {
     return {
       spaces: this.spaces(),
       activeSpaceId: this.activeId,
+      profiles: this.profiles(),
     };
   }
 }

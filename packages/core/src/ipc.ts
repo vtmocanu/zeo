@@ -1,5 +1,6 @@
 import type { Tab } from "./tab.js";
 import type { Space } from "./space.js";
+import type { Profile } from "./profile.js";
 
 /**
  * A single space's tab payload, in the pre-space shape. This is what
@@ -19,6 +20,7 @@ export interface TabsSlice {
 export interface SpacesState {
   spaces: Space[];
   activeSpaceId: string;
+  profiles: Profile[];
 }
 
 /**
@@ -92,7 +94,21 @@ export interface SpacesApi {
   rename(id: string, name: string): Promise<void>;
   delete(id: string): Promise<void>;
   activate(id: string): Promise<void>;
+  setProfile(spaceId: string, profileId: string): Promise<void>;
   list(): Promise<SpacesState>;
+}
+
+/**
+ * Profile commands the renderer invokes over IPC. The main process handles each
+ * of these, backed by the single {@link SpaceStore}. `create` returns the created
+ * {@link Profile} so a caller learns its new id; mutating a profile rebroadcasts
+ * the full {@link TabsState}. Rejections propagate the store's throws (blank name,
+ * unknown id, or the delete guards for `"default"` and referenced profiles).
+ */
+export interface ProfilesApi {
+  create(name: string): Promise<Profile>;
+  rename(id: string, name: string): Promise<void>;
+  delete(id: string): Promise<void>;
 }
 
 /**
@@ -105,6 +121,7 @@ export interface SpacesApi {
 export interface ZeoApi {
   tabs: TabsApi;
   spaces: SpacesApi;
+  profiles: ProfilesApi;
   onStateChange(listener: (state: TabsState) => void): () => void;
 }
 
@@ -129,5 +146,9 @@ export const IPC = {
   spacesDelete: "zeo:spaces:delete",
   spacesActivate: "zeo:spaces:activate",
   spacesList: "zeo:spaces:list",
+  spacesSetProfile: "zeo:spaces:set-profile",
+  profilesCreate: "zeo:profiles:create",
+  profilesRename: "zeo:profiles:rename",
+  profilesDelete: "zeo:profiles:delete",
   stateChange: "zeo:state-change",
 } as const;
