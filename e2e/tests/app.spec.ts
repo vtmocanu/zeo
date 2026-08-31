@@ -24,16 +24,14 @@ interface BridgeSpace {
   profileId: string;
   createdAt: number;
 }
-interface BridgeState {
-  spaces: BridgeSpace[];
-  activeSpaceId: string;
-  tabs: BridgeTab[];
-  activeTabId: string | null;
-  archived: BridgeTab[];
-}
 interface BridgeSpacesState {
   spaces: BridgeSpace[];
   activeSpaceId: string;
+}
+interface BridgeState extends BridgeSpacesState {
+  tabs: BridgeTab[];
+  activeTabId: string | null;
+  archived: BridgeTab[];
 }
 // The serializable context-menu descriptor main returns from showContextMenu.
 // Structurally the @zeo/core TabContextMenuResult, redeclared here so e2e stays

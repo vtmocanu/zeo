@@ -99,6 +99,13 @@ describe("SpaceStore.createSpace", () => {
     expect(tab.id).toBe("t2");
     expect(work.id).toBe("t3");
   });
+
+  test("throws on a blank name", () => {
+    const store = makeStore();
+    expect(() => store.createSpace("")).toThrow(/blank/);
+    expect(() => store.createSpace("   ")).toThrow(/blank/);
+    expect(store.spaces()).toHaveLength(1);
+  });
 });
 
 describe("SpaceStore.renameSpace", () => {
@@ -125,6 +132,14 @@ describe("SpaceStore.renameSpace", () => {
   test("throws on an unknown space id", () => {
     const store = makeStore();
     expect(() => store.renameSpace("nope", "X")).toThrow(/Unknown space/);
+  });
+
+  test("throws on a blank name and keeps the current name", () => {
+    const store = makeStore();
+    const id = store.activeSpaceId;
+    expect(() => store.renameSpace(id, "")).toThrow(/blank/);
+    expect(() => store.renameSpace(id, "  ")).toThrow(/blank/);
+    expect(store.activeSpace.name).toBe("Personal");
   });
 });
 

@@ -124,7 +124,9 @@ function destroyView(id: string): void {
   const tracked = views.get(id);
   if (tracked !== undefined) {
     win?.contentView.removeChildView(tracked.view);
-    tracked.view.webContents.close();
+    if (!tracked.view.webContents.isDestroyed()) {
+      tracked.view.webContents.close();
+    }
     views.delete(id);
   }
 }
@@ -341,7 +343,7 @@ function createWindow(): void {
   // empty (a fresh launch) — identical single-seeded-space launch behavior. On a
   // macOS re-activate the store still holds the prior spaces and tabs, so we
   // rebuild EVERY space's open-tab views for the new window.
-  if (store.list().length === 0) {
+  if (store.allOpenTabs().length === 0) {
     store.create({ url: DEFAULT_URL, title: titleForUrl(DEFAULT_URL) });
   }
   for (const { spaceId, tab } of store.allOpenTabs()) {

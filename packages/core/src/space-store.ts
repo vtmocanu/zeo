@@ -99,11 +99,17 @@ export class SpaceStore {
    * with an empty tab set.
    */
   createSpace(name: string): Space {
+    if (name.trim() === "") {
+      throw new Error("Space name must not be blank");
+    }
     return this.insertSpace(name, DEFAULT_PROFILE_ID);
   }
 
   /** Renames a space. Throws on an unknown id. */
   renameSpace(id: string, name: string): void {
+    if (name.trim() === "") {
+      throw new Error("Space name must not be blank");
+    }
     const record = this.require(id);
     record.space = { ...record.space, name };
   }
@@ -267,8 +273,7 @@ export class SpaceStore {
    */
   snapshot(): TabsState {
     return {
-      spaces: this.spaces(),
-      activeSpaceId: this.activeId,
+      ...this.spacesSnapshot(),
       ...this.active().snapshot(),
     };
   }
