@@ -522,6 +522,8 @@ test.describe("zeo desktop app", () => {
       await sidebar.mouse.move(startX, startY + box.height, { steps: 6 });
       const dest = await destination();
       await sidebar.mouse.move(dest.x, dest.y, { steps: 12 });
+      const settled = await destination();
+      await sidebar.mouse.move(settled.x, settled.y, { steps: 4 });
       await sidebar.mouse.up();
     };
 
