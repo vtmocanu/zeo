@@ -2,3 +2,10 @@ packages:
   - packages/*
   - apps/*
   - e2e
+
+overrides:
+  electron: 44.0.0
+
+allowBuilds:
+  electron: true
+  esbuild: true

@@ -3,7 +3,7 @@
   "version": "0.0.4",
   "private": true,
   "type": "module",
-  "packageManager": "pnpm@9.15.9",
+  "packageManager": "pnpm@11.24.0",
   "engines": {
     "node": ">=24"
   },
@@ -15,11 +15,6 @@
     "e2e": "pnpm --filter @zeo/e2e run e2e",
     "dev": "pnpm -r --parallel run dev",
     "format": "prettier --write ."
-  },
-  "pnpm": {
-    "overrides": {
-      "electron": "44.0.0"
-    }
   },
   "devDependencies": {
     "@eslint/js": "^10.0.0",
