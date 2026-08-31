@@ -16,6 +16,7 @@ const api = {
     reorder: (id: string, toIndex: number): Promise<void> => ipcRenderer.invoke(IPC.tabsReorder, id, toIndex),
     archive: (id: string): Promise<void> => ipcRenderer.invoke(IPC.tabsArchive, id),
     restore: (id: string): Promise<void> => ipcRenderer.invoke(IPC.tabsRestore, id),
+    remove: (id: string): Promise<void> => ipcRenderer.invoke(IPC.tabsRemove, id),
     showContextMenu: (id: string, x: number, y: number): Promise<TabContextMenuResult> =>
       ipcRenderer.invoke(IPC.tabsContextMenu, id, x, y),
   },

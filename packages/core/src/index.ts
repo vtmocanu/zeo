@@ -10,4 +10,5 @@ export type {
 } from "./ipc.js";
 export { IPC } from "./ipc.js";
 export { titleForUrl } from "./tab-title.js";
+export { formatRelativeArchived } from "./relative-time.js";
 export { SIDEBAR_WIDTH } from "./layout.js";
