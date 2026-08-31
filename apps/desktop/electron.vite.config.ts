@@ -7,6 +7,9 @@ import { defineConfig, externalizeDepsPlugin } from "electron-vite";
 export default defineConfig({
   main: {
     plugins: [externalizeDepsPlugin({ exclude: ["@zeo/core"] })],
+    ssr: {
+      external: ["electron"],
+    },
     build: {
       lib: {
         entry: "src/main/index.ts",
@@ -15,6 +18,9 @@ export default defineConfig({
   },
   preload: {
     plugins: [externalizeDepsPlugin({ exclude: ["@zeo/core"] })],
+    ssr: {
+      external: ["electron"],
+    },
     build: {
       lib: {
         entry: "src/preload/index.ts",
