@@ -1,4 +1,4 @@
-import { app, BrowserWindow, WebContentsView, clipboard, ipcMain, Menu } from "electron";
+import { app, BrowserWindow, WebContentsView, clipboard, ipcMain, Menu, session } from "electron";
 import type { MenuItemConstructorOptions } from "electron";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -37,6 +37,12 @@ interface TrackedView {
   spaceId: string;
 }
 const views = new Map<string, TrackedView>();
+/**
+ * Tab ids whose most recent view load rejected. A failed load is retried on the
+ * next activation of that tab (see the tabsActivate handler); a successful load
+ * or a view teardown clears the id.
+ */
+const failedLoads = new Set<string>();
 let win: BrowserWindow | null = null;
 
 /** Bounds of the tab web-view region: everything right of the sidebar. */
@@ -56,9 +62,10 @@ function viewBounds(): Electron.Rectangle {
 /**
  * Creates a hidden web view for a tab owned by `spaceId` and starts loading its
  * url. The view is tracked with its owning space so a space switch or delete can
- * find it.
+ * find it. `urlOverride`, when given, is loaded instead of the tab's stored url
+ * (used by profile remap to preserve each live view's current url).
  */
-function createViewFor(tab: Tab, spaceId: string): void {
+function createViewFor(tab: Tab, spaceId: string, urlOverride?: string): void {
   if (win === null) {
     return;
   }
@@ -83,9 +90,16 @@ function createViewFor(tab: Tab, spaceId: string): void {
     broadcast();
   });
 
-  view.webContents.loadURL(tab.url).catch((err: unknown) => {
-    console.error(`tab ${tab.id} failed to load ${tab.url}:`, err);
-  });
+  // Track load failure so activation can retry it; a later success clears it.
+  view.webContents
+    .loadURL(urlOverride ?? tab.url)
+    .then(() => {
+      failedLoads.delete(tab.id);
+    })
+    .catch((err: unknown) => {
+      failedLoads.add(tab.id);
+      console.error(`tab ${tab.id} failed to load ${urlOverride ?? tab.url}:`, err);
+    });
 }
 
 /** Full new-tab lifecycle: store entry, view, activation, broadcast. */
@@ -130,6 +144,8 @@ function destroyView(id: string): void {
       tracked.view.webContents.close();
     }
     views.delete(id);
+    // Drop any retry marker so a stale id never lingers past its view.
+    failedLoads.delete(id);
   }
 }
 
@@ -226,6 +242,12 @@ function remapSpaceProfile(spaceId: string, profileId: string): void {
     .map(([tabId]) => tabId);
   // tabsOfSpace supplies only the id→url lookup for the captured ids.
   const tabsById = new Map(store.tabsOfSpace(spaceId).map((t) => [t.id, t]));
+  // Snapshot each live view's current url BEFORE teardown so recreation resumes
+  // where the user was, not the tab's original creation url. getURL() returns ""
+  // for a view that never finished loading.
+  const liveUrls = new Map(
+    tabIds.map((tabId) => [tabId, views.get(tabId)?.view.webContents.getURL() ?? ""]),
+  );
 
   for (const tabId of tabIds) {
     destroyView(tabId);
@@ -236,7 +258,9 @@ function remapSpaceProfile(spaceId: string, profileId: string): void {
   for (const tabId of tabIds) {
     const tab = tabsById.get(tabId);
     if (tab !== undefined) {
-      createViewFor(tab, spaceId);
+      // Pass the captured url only when non-empty; otherwise fall back to tab.url.
+      const liveUrl = liveUrls.get(tabId);
+      createViewFor(tab, spaceId, liveUrl && liveUrl.length > 0 ? liveUrl : undefined);
     }
   }
 
@@ -425,6 +449,28 @@ ipcMain.handle(IPC.tabsClose, (_event, id: string): void => {
 
 ipcMain.handle(IPC.tabsActivate, (_event, id: string): void => {
   store.activate(id);
+  // Honor the remap contract: a tab whose view failed to be created or failed
+  // to load is retried when the user next activates it. Recreate a missing
+  // view; otherwise re-issue the load for a view whose last load failed.
+  if (!views.has(id)) {
+    const tab = store.list().find((t) => t.id === id);
+    if (tab !== undefined) {
+      createViewFor(tab, store.activeSpaceId);
+    }
+  } else if (failedLoads.has(id)) {
+    const tracked = views.get(id);
+    const tab = store.list().find((t) => t.id === id);
+    if (tracked !== undefined && tab !== undefined && !tracked.view.webContents.isDestroyed()) {
+      tracked.view.webContents
+        .loadURL(tab.url)
+        .then(() => {
+          failedLoads.delete(id);
+        })
+        .catch((err: unknown) => {
+          console.error(`tab ${id} retry failed to load ${tab.url}:`, err);
+        });
+    }
+  }
   setActive(id);
   broadcast();
 });
@@ -520,8 +566,14 @@ ipcMain.handle(IPC.profilesRename, (_event, id: string, name: string): void => {
   broadcast();
 });
 
-ipcMain.handle(IPC.profilesDelete, (_event, id: string): void => {
+ipcMain.handle(IPC.profilesDelete, async (_event, id: string): Promise<void> => {
+  // Throws before any mutation on a rejected delete (default profile, unknown
+  // id, or still referenced by a space), so a rejected delete never wipes a
+  // live partition.
   store.deleteProfile(id);
+  // The profile record is gone, so nothing can reach persist:<id> again — drop
+  // its on-disk cookies/storage/cache instead of orphaning them forever.
+  await session.fromPartition("persist:" + id).clearStorageData();
   broadcast();
 });
 
