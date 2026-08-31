@@ -9,6 +9,20 @@ milestone, a minor bump only for very large breakthroughs.
 
 ## [Unreleased]
 
+## [0.0.3] - 2026-08-31
+
+### Added
+
+- Drag to reorder sidebar tabs within a section, using pointer events (no
+  drag-and-drop library); a drop indicator shows the insertion point.
+- Dragging a tab across the pinned/unpinned boundary pins/unpins it and drops
+  it at the target slot; both sections stay droppable during a drag.
+- Native tab context menu (right-click) built in the main process — Pin/Unpin,
+  Archive (disabled on pinned tabs), Close, Copy URL — reached over a new
+  `showContextMenu` IPC channel and dispatching through the same store ops.
+- Playwright e2e coverage for the pointer-drag reorder and the context-menu
+  descriptor.
+
 ## [0.0.2] - 2026-08-30
 
 ### Added
