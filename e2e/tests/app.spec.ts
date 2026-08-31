@@ -18,10 +18,22 @@ interface BridgeTab {
   faviconUrl: string | null;
   pinned: boolean;
 }
+interface BridgeSpace {
+  id: string;
+  name: string;
+  profileId: string;
+  createdAt: number;
+}
 interface BridgeState {
+  spaces: BridgeSpace[];
+  activeSpaceId: string;
   tabs: BridgeTab[];
   activeTabId: string | null;
   archived: BridgeTab[];
+}
+interface BridgeSpacesState {
+  spaces: BridgeSpace[];
+  activeSpaceId: string;
 }
 // The serializable context-menu descriptor main returns from showContextMenu.
 // Structurally the @zeo/core TabContextMenuResult, redeclared here so e2e stays
@@ -45,6 +57,13 @@ interface ZeoBridge {
     remove(id: string): Promise<void>;
     list(): Promise<BridgeState>;
     showContextMenu(id: string, x: number, y: number): Promise<BridgeMenuResult>;
+  };
+  spaces: {
+    create(name: string): Promise<BridgeSpace>;
+    rename(id: string, name: string): Promise<void>;
+    delete(id: string): Promise<void>;
+    activate(id: string): Promise<void>;
+    list(): Promise<BridgeSpacesState>;
   };
 }
 // Inside `page.evaluate` the callback runs in the renderer, where the real global
@@ -665,5 +684,112 @@ test.describe("zeo desktop app", () => {
       .toEqual([cId, seededId]);
     await expect.poll(() => sectionOrder("unpinned-section")).toEqual([bId]);
     expect(await pinnedOf(cId)).toBe(true);
+  });
+
+  // PRD 3.1 deliverable #4 — the space model end to end, driven entirely over the
+  // bridge (there is no space UI yet). Creates a second space, switches into it,
+  // creates a tab there, switches back and forth asserting each space shows only
+  // its own tabs and restores its own active tab, then deletes the second space
+  // and asserts its tabs are gone and the first space is active. All assertions
+  // key off ids/counts (never live page titles), and the tab created in the
+  // second space loads about:blank, so CI's real navigation cannot flake it. The
+  // rendered tab-item count is asserted alongside the bridge state to prove the
+  // existing sidebar still renders the active space against the new snapshot shape.
+  test("spaces isolate their tabs and switching restores each space's own tabs", async () => {
+    const items = sidebar.getByTestId("tab-item");
+
+    // Fresh launch: exactly one space ("Personal") holding the one seeded tab,
+    // which is active.
+    const initial = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      return zeo.tabs.list();
+    });
+    expect(initial.spaces).toHaveLength(1);
+    expect(initial.spaces[0].name).toBe("Personal");
+    expect(initial.activeSpaceId).toBe(initial.spaces[0].id);
+    expect(initial.tabs).toHaveLength(1);
+    const personalId = initial.activeSpaceId;
+    const seededTabId = initial.activeTabId;
+    expect(seededTabId).not.toBeNull();
+    await expect(items).toHaveCount(1);
+
+    // Create a second space. It does NOT steal focus: Personal stays active.
+    const work = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      return zeo.spaces.create("Work");
+    });
+    expect(work.name).toBe("Work");
+    const afterCreate = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      return zeo.spaces.list();
+    });
+    expect(afterCreate.spaces.map((s) => s.name)).toEqual(["Personal", "Work"]);
+    expect(afterCreate.activeSpaceId).toBe(personalId);
+    // Renderer still shows Personal's single tab.
+    await expect(items).toHaveCount(1);
+
+    // Switch into Work: it is empty, so no tabs and no active tab.
+    const inWork = await sidebar.evaluate(async (id) => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.spaces.activate(id);
+      return zeo.tabs.list();
+    }, work.id);
+    expect(inWork.activeSpaceId).toBe(work.id);
+    expect(inWork.tabs).toHaveLength(0);
+    expect(inWork.activeTabId).toBeNull();
+    // The sidebar re-rendered to the empty space via the broadcast.
+    await expect(items).toHaveCount(0);
+    await expect(sidebar.getByTestId("sidebar")).toContainText("No open tabs");
+
+    // Create a tab in Work (about:blank — no network). It becomes Work's active.
+    const workTab = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      return zeo.tabs.create("about:blank");
+    });
+    await expect(items).toHaveCount(1);
+    const workState = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      return zeo.tabs.list();
+    });
+    expect(workState.tabs.map((t) => t.id)).toEqual([workTab.id]);
+    expect(workState.activeTabId).toBe(workTab.id);
+
+    // Switch back to Personal: it shows ONLY its own seeded tab (Work's tab is
+    // absent) and restores its own active tab.
+    const backToPersonal = await sidebar.evaluate(async (id) => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.spaces.activate(id);
+      return zeo.tabs.list();
+    }, personalId);
+    expect(backToPersonal.activeSpaceId).toBe(personalId);
+    expect(backToPersonal.tabs.map((t) => t.id)).toEqual([seededTabId]);
+    expect(backToPersonal.tabs.map((t) => t.id)).not.toContain(workTab.id);
+    expect(backToPersonal.activeTabId).toBe(seededTabId);
+    await expect(items).toHaveCount(1);
+    await expect(
+      sidebar.locator(`[data-tab-id="${seededTabId}"]`),
+    ).toHaveAttribute("aria-current", "true");
+
+    // Switch to Work again: its own active tab (workTab) is restored.
+    const backToWork = await sidebar.evaluate(async (id) => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.spaces.activate(id);
+      return zeo.tabs.list();
+    }, work.id);
+    expect(backToWork.tabs.map((t) => t.id)).toEqual([workTab.id]);
+    expect(backToWork.activeTabId).toBe(workTab.id);
+
+    // Delete Work while it is active: its tabs vanish and Personal becomes active.
+    const afterDelete = await sidebar.evaluate(async (id) => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.spaces.delete(id);
+      return zeo.tabs.list();
+    }, work.id);
+    expect(afterDelete.spaces.map((s) => s.name)).toEqual(["Personal"]);
+    expect(afterDelete.spaces.some((s) => s.id === work.id)).toBe(false);
+    expect(afterDelete.activeSpaceId).toBe(personalId);
+    expect(afterDelete.tabs.map((t) => t.id)).toEqual([seededTabId]);
+    expect(afterDelete.tabs.map((t) => t.id)).not.toContain(workTab.id);
+    await expect(items).toHaveCount(1);
   });
 });
