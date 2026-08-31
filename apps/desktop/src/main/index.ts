@@ -2,8 +2,8 @@ import { app, BrowserWindow, WebContentsView, clipboard, ipcMain, Menu } from "e
 import type { MenuItemConstructorOptions } from "electron";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { TabStore, IPC, titleForUrl, SIDEBAR_WIDTH } from "@zeo/core";
-import type { Tab, TabContextMenuResult, TabsState } from "@zeo/core";
+import { SpaceStore, IPC, titleForUrl, SIDEBAR_WIDTH } from "@zeo/core";
+import type { Space, SpacesState, Tab, TabContextMenuResult, TabsState } from "@zeo/core";
 
 // The built main is emitted by electron-vite as ESM (out/main/index.js, the
 // package is "type": "module"), so `__dirname` is not defined — derive it from
@@ -16,16 +16,27 @@ const DEFAULT_URL = "https://example.com";
 
 /**
  * Auto-archive schedule. The *policy* (which tabs are idle) lives in core
- * (`TabStore.archiveIdle`); the main process only owns these scheduling
- * constants and the timer. A tab untouched for `IDLE_THRESHOLD_MS` is swept, and
- * the sweep runs every `SWEEP_INTERVAL_MS` (plus once on launch).
+ * (`SpaceStore.archiveIdleAll`, which sweeps every space's `TabStore`); the main
+ * process only owns these scheduling constants and the timer. A tab untouched for
+ * `IDLE_THRESHOLD_MS` is swept, and the sweep runs every `SWEEP_INTERVAL_MS` (plus
+ * once on launch).
  */
 const IDLE_THRESHOLD_MS = 12 * 60 * 60 * 1000;
 const SWEEP_INTERVAL_MS = 60 * 60 * 1000;
 
-const store = new TabStore();
-/** Live WebContentsView per tab id; the active tab's view is the visible one. */
-const views = new Map<string, WebContentsView>();
+const store = new SpaceStore();
+/**
+ * Live WebContentsView per tab id, tagged with the id of its OWNING space. The
+ * active space's active tab is the single visible view; every other view (other
+ * tabs in the active space, and all tabs in inactive spaces) stays alive but
+ * hidden. The owning-space tag lets a space delete destroy exactly that space's
+ * views.
+ */
+interface TrackedView {
+  view: WebContentsView;
+  spaceId: string;
+}
+const views = new Map<string, TrackedView>();
 let win: BrowserWindow | null = null;
 
 /** Bounds of the tab web-view region: everything right of the sidebar. */
@@ -42,13 +53,17 @@ function viewBounds(): Electron.Rectangle {
   };
 }
 
-/** Creates a hidden web view for a tab and starts loading its url. */
-function createViewFor(tab: Tab): void {
+/**
+ * Creates a hidden web view for a tab owned by `spaceId` and starts loading its
+ * url. The view is tracked with its owning space so a space switch or delete can
+ * find it.
+ */
+function createViewFor(tab: Tab, spaceId: string): void {
   if (win === null) {
     return;
   }
   const view = new WebContentsView();
-  views.set(tab.id, view);
+  views.set(tab.id, { view, spaceId });
   win.contentView.addChildView(view);
   view.setBounds(viewBounds());
   view.setVisible(false);
@@ -75,7 +90,7 @@ function createViewFor(tab: Tab): void {
 function createTab(url?: string): Tab {
   const u = url ?? DEFAULT_URL;
   const tab = store.create({ url: u, title: titleForUrl(u) });
-  createViewFor(tab);
+  createViewFor(tab, store.activeSpaceId);
   setActive(tab.id);
   broadcast();
   return tab;
@@ -85,12 +100,7 @@ function createTab(url?: string): Tab {
 function closeTab(id: string): void {
   // A thrown Error (e.g. unknown id) propagates out to the caller.
   store.close(id);
-  const view = views.get(id);
-  if (view !== undefined) {
-    win?.contentView.removeChildView(view);
-    view.webContents.close();
-    views.delete(id);
-  }
+  destroyView(id);
   setActive(store.activeTabId);
   broadcast();
 }
@@ -104,14 +114,21 @@ function closeTab(id: string): void {
 function removeTab(id: string): void {
   // A thrown Error (e.g. unknown id) propagates out to the caller.
   store.remove(id);
-  const view = views.get(id);
-  if (view !== undefined) {
-    win?.contentView.removeChildView(view);
-    view.webContents.close();
-    views.delete(id);
-  }
+  destroyView(id);
   setActive(store.activeTabId);
   broadcast();
+}
+
+/** Tears down and unparents the tracked view for `id`, if one exists. */
+function destroyView(id: string): void {
+  const tracked = views.get(id);
+  if (tracked !== undefined) {
+    win?.contentView.removeChildView(tracked.view);
+    if (!tracked.view.webContents.isDestroyed()) {
+      tracked.view.webContents.close();
+    }
+    views.delete(id);
+  }
 }
 
 function pinTab(id: string): void {
@@ -130,13 +147,55 @@ function archiveTab(id: string): void {
   broadcast();
 }
 
-/** Shows the given tab's view, hides all others, and re-lays-out the active. */
+/**
+ * Full space-delete lifecycle. Validates deletability FIRST (unknown id or the
+ * last remaining space → throw, so a rejected delete tears down no views), then
+ * destroys EVERY view owned by the space (open and archived alike), then removes
+ * the space from the store, then — only when the deleted space was active — runs
+ * the same hide/show transition as a space activate for the newly active space,
+ * then broadcasts. No orphaned views survive a delete.
+ */
+function deleteSpace(id: string): void {
+  // Gate teardown on the store's OWN deletability predicate, so the rule is not
+  // duplicated here. When the delete would reject (unknown id or the last
+  // remaining space), defer to store.deleteSpace to throw the specific error
+  // BEFORE any view is torn down — a rejected delete has no side effect.
+  if (!store.canDeleteSpace(id)) {
+    store.deleteSpace(id);
+    return; // unreachable: canDeleteSpace() === false means deleteSpace() throws.
+  }
+
+  const wasActive = store.activeSpaceId === id;
+
+  // Destroy every view owned by the space (open and archived). Snapshot the
+  // entries first: destroyView mutates `views` as it goes.
+  for (const [tabId, tracked] of [...views]) {
+    if (tracked.spaceId === id) {
+      destroyView(tabId);
+    }
+  }
+
+  store.deleteSpace(id);
+
+  if (wasActive) {
+    // The store activated a surviving space; show its active tab, hide the rest.
+    setActive(store.activeTabId);
+  }
+  broadcast();
+}
+
+/**
+ * Shows the given tab's view, hides ALL others, and re-lays-out the active one.
+ * Because it iterates every tracked view across all spaces, calling it after a
+ * space switch with the incoming space's active tab id also hides the outgoing
+ * space's views — the whole space-switch view transition.
+ */
 function setActive(id: string | null): void {
-  for (const [tabId, view] of views) {
+  for (const [tabId, tracked] of views) {
     const active = tabId === id;
-    view.setVisible(active);
+    tracked.view.setVisible(active);
     if (active) {
-      view.setBounds(viewBounds());
+      tracked.view.setBounds(viewBounds());
     }
   }
 }
@@ -153,8 +212,11 @@ function broadcast(): void {
  * hourly timer from churning the renderer when nothing changed.
  */
 function sweepIdle(): void {
-  const archived = store.archiveIdle(IDLE_THRESHOLD_MS);
+  const archived = store.archiveIdleAll(IDLE_THRESHOLD_MS);
   if (archived.length > 0) {
+    // Only the active space's active tab is ever visible; archived tabs in
+    // inactive spaces are already hidden, so re-pointing the active view covers
+    // the visible side of the sweep.
     setActive(store.activeTabId);
     broadcast();
   }
@@ -253,7 +315,7 @@ function createWindow(): void {
   win.on("resize", () => {
     const active = store.activeTabId;
     if (active !== null) {
-      views.get(active)?.setBounds(viewBounds());
+      views.get(active)?.view.setBounds(viewBounds());
     }
   });
 
@@ -268,7 +330,7 @@ function createWindow(): void {
   });
 
   win.on("closed", () => {
-    for (const view of views.values()) {
+    for (const { view } of views.values()) {
       if (!view.webContents.isDestroyed()) {
         view.webContents.close();
       }
@@ -277,14 +339,15 @@ function createWindow(): void {
     win = null;
   });
 
-  // Seed the first tab only when the store is empty (a fresh launch). On a
-  // macOS re-activate the store still holds the prior tabs, so we just rebuild
-  // their views for the new window.
-  if (store.list().length === 0) {
+  // Seed the first tab into the active (seeded "Personal") space only when it is
+  // empty (a fresh launch) — identical single-seeded-space launch behavior. On a
+  // macOS re-activate the store still holds the prior spaces and tabs, so we
+  // rebuild EVERY space's open-tab views for the new window.
+  if (store.allOpenTabs().length === 0) {
     store.create({ url: DEFAULT_URL, title: titleForUrl(DEFAULT_URL) });
   }
-  for (const tab of store.list()) {
-    createViewFor(tab);
+  for (const { spaceId, tab } of store.allOpenTabs()) {
+    createViewFor(tab, spaceId);
   }
   setActive(store.activeTabId);
   broadcast();
@@ -333,7 +396,7 @@ ipcMain.handle(IPC.tabsRestore, (_event, id: string): void => {
   if (!views.has(id)) {
     const tab = store.list().find((t) => t.id === id);
     if (tab !== undefined) {
-      createViewFor(tab);
+      createViewFor(tab, store.activeSpaceId);
     }
   }
   setActive(store.activeTabId);
@@ -351,6 +414,36 @@ ipcMain.handle(
   (_event, id: string, x: number, y: number): TabContextMenuResult =>
     showTabContextMenu(id, x, y),
 );
+
+// --- Space commands -----------------------------------------------------------
+// The renderer's single UI bridge drives these; tab WebContentsViews have no
+// bridge and cannot dispatch. A thrown Error (unknown/last space) propagates out
+// and rejects the renderer's invoke, exactly like the tab handlers.
+
+ipcMain.handle(IPC.spacesCreate, (_event, name: string): Space => {
+  const space = store.createSpace(name);
+  // Active space (and thus the visible view) is unchanged by a create.
+  broadcast();
+  return space;
+});
+
+ipcMain.handle(IPC.spacesRename, (_event, id: string, name: string): void => {
+  store.renameSpace(id, name);
+  broadcast();
+});
+
+ipcMain.handle(IPC.spacesActivate, (_event, id: string): void => {
+  store.setActiveSpace(id);
+  // Hide the outgoing space's views and show the incoming space's active tab.
+  setActive(store.activeTabId);
+  broadcast();
+});
+
+ipcMain.handle(IPC.spacesDelete, (_event, id: string): void => {
+  deleteSpace(id);
+});
+
+ipcMain.handle(IPC.spacesList, (): SpacesState => store.spacesSnapshot());
 
 /**
  * Builds and installs the application menu. Accelerators here are

@@ -9,6 +9,24 @@ milestone, a minor bump only for very large breakthroughs.
 
 ## [Unreleased]
 
+## [0.0.5] - 2026-08-31
+
+### Added
+
+- Spaces: named workspaces that each own their own tab set and active tab. A
+  fresh launch seeds one space, "Personal", holding the seeded tab. The space
+  domain model lives in `packages/core` (`SpaceStore`, composing one `TabStore`
+  per space), with create/rename/delete/activate rules — always at least one
+  space, deleting the last one is refused, and deleting the active space
+  activates another.
+- Space switching over the IPC bridge (`spaces.create`/`rename`/`delete`/
+  `activate`/`list`): the broadcast state now carries the space list and active
+  space id alongside the active space's tabs, the main process shows the
+  incoming space's active tab and hides the others on a switch, and the idle
+  sweep runs across every space. There is no space UI yet — the sidebar keeps
+  rendering the active space's tabs unchanged; the space switcher lands in a
+  later milestone.
+
 ## [0.0.4] - 2026-08-31
 
 ### Added

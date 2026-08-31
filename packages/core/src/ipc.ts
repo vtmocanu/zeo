@@ -1,15 +1,35 @@
 import type { Tab } from "./tab.js";
+import type { Space } from "./space.js";
 
 /**
- * The full tabs state broadcast from main to renderers. This is the shape
- * produced by {@link TabStore.snapshot} and pushed over the state-change
- * channel.
+ * A single space's tab payload, in the pre-space shape. This is what
+ * {@link TabStore.snapshot} produces for one tab set (the pinned-first tab
+ * list, the active-tab pointer, and the archived tabs).
  */
-export interface TabsState {
+export interface TabsSlice {
   tabs: Tab[];
   activeTabId: string | null;
   archived: Tab[];
 }
+
+/**
+ * The space-only slice returned by {@link SpacesApi.list}: the space list and
+ * the active space id, without the active space's tab payload.
+ */
+export interface SpacesState {
+  spaces: Space[];
+  activeSpaceId: string;
+}
+
+/**
+ * The full application state broadcast from main to renderers. Produced by
+ * {@link SpaceStore.snapshot} and pushed over the state-change channel.
+ *
+ * The space dimension (`spaces`, `activeSpaceId`) sits alongside the active
+ * space's `tabs`/`activeTabId`/`archived` in the existing shape, so renderer
+ * code written against the pre-space snapshot keeps working unchanged.
+ */
+export interface TabsState extends SpacesState, TabsSlice {}
 
 /**
  * A single item in the tab context menu, as reported back to the renderer by
@@ -37,8 +57,9 @@ export interface TabContextMenuResult {
 
 /**
  * Commands the renderer invokes over IPC. The main process handles each of
- * these, backed by a `TabStore`. `list()` returns the full {@link TabsState}
- * so the renderer gets both the tabs and the active pointer in one round trip.
+ * these against the active space of its `SpaceStore`. `list()` returns the full
+ * {@link TabsState} (spaces plus the active space's tab payload), so the renderer
+ * gets the whole broadcast shape in one round trip.
  */
 export interface TabsApi {
   create(url?: string): Promise<Tab>;
@@ -61,6 +82,20 @@ export interface TabsApi {
 }
 
 /**
+ * Space commands the renderer invokes over IPC. The main process handles each
+ * of these, backed by the single {@link SpaceStore}. Mutating a space rebroadcasts
+ * the full {@link TabsState}; `list()` returns just the {@link SpacesState} slice.
+ * `create` returns the created {@link Space} so a caller learns its new id.
+ */
+export interface SpacesApi {
+  create(name: string): Promise<Space>;
+  rename(id: string, name: string): Promise<void>;
+  delete(id: string): Promise<void>;
+  activate(id: string): Promise<void>;
+  list(): Promise<SpacesState>;
+}
+
+/**
  * The full bridge surface exposed on `window.zeo` by the preload script.
  *
  * `onStateChange` registers a listener for main-pushed state updates and
@@ -69,6 +104,7 @@ export interface TabsApi {
  */
 export interface ZeoApi {
   tabs: TabsApi;
+  spaces: SpacesApi;
   onStateChange(listener: (state: TabsState) => void): () => void;
 }
 
@@ -88,5 +124,10 @@ export const IPC = {
   tabsRestore: "zeo:tabs:restore",
   tabsRemove: "zeo:tabs:remove",
   tabsContextMenu: "zeo:tabs:context-menu",
+  spacesCreate: "zeo:spaces:create",
+  spacesRename: "zeo:spaces:rename",
+  spacesDelete: "zeo:spaces:delete",
+  spacesActivate: "zeo:spaces:activate",
+  spacesList: "zeo:spaces:list",
   stateChange: "zeo:state-change",
 } as const;

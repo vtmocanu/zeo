@@ -392,6 +392,8 @@ function ArchivedRow({ tab, now }: { tab: Tab; now: number }) {
  */
 export function App() {
   const [state, setState] = useState<TabsState>({
+    spaces: [],
+    activeSpaceId: "",
     tabs: [],
     activeTabId: null,
     archived: [],
