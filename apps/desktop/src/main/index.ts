@@ -86,10 +86,6 @@ function closeTab(id: string): void {
   broadcast();
 }
 
-// Shared store ops, used by BOTH the direct IPC handlers and the context-menu
-// clicks so the two paths cannot diverge. pin/unpin only change ordering, so
-// broadcast() alone suffices; archive can move the active pointer, so it re-runs
-// setActive so the visible view follows it.
 function pinTab(id: string): void {
   store.pin(id);
   broadcast();
@@ -122,22 +118,12 @@ function broadcast(): void {
   win?.webContents.send(IPC.stateChange, store.snapshot());
 }
 
-/**
- * Builds the tab context-menu descriptor for `id` and, outside headless test
- * mode, pops the native menu at window-relative `x`/`y`. The returned descriptor
- * and the native menu are derived from one source-of-truth action list so they
- * stay in sync. On an unknown/archived/closed id the tab is not among the open
- * tabs, so we return an empty descriptor and pop nothing.
- */
 function showTabContextMenu(id: string, x: number, y: number): TabContextMenuResult {
   const tab = store.list().find((t) => t.id === id);
   if (tab === undefined) {
     return { tabId: id, items: [] };
   }
 
-  // Single source of truth: the descriptor items and the native MenuItems are
-  // both projected from this list, so a returned item and its clickable menu
-  // entry can never disagree.
   const actions: { id: string; label: string; enabled: boolean; click: () => void }[] = [
     {
       id: tab.pinned ? "unpin" : "pin",
@@ -146,8 +132,6 @@ function showTabContextMenu(id: string, x: number, y: number): TabContextMenuRes
       click: () => (tab.pinned ? unpinTab(id) : pinTab(id)),
     },
     {
-      // A pinned tab cannot be archived — the store throws on it — so the item
-      // is disabled; Electron won't fire click for a disabled item anyway.
       id: "archive",
       label: "Archive",
       enabled: !tab.pinned,
@@ -179,9 +163,6 @@ function showTabContextMenu(id: string, x: number, y: number): TabContextMenuRes
       actions.map((a): MenuItemConstructorOptions => ({
         label: a.label,
         enabled: a.enabled,
-        // A menu click runs in the main process with no invoke to reject, so a
-        // store throw here (e.g. the tab was closed while its menu was open)
-        // would be an uncaught exception. Swallow it — the click is best-effort.
         click: () => {
           try {
             a.click();

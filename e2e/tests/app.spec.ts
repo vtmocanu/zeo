@@ -426,26 +426,26 @@ test.describe("zeo desktop app", () => {
     await expect(items).toHaveCount(2);
   });
 
-  // Case (f): PRD 2.3 §4 — the tab context menu. Rather than drive a native popup
-  // (skipped in test mode and not automatable headlessly), we assert the
-  // menu-open IPC fires and returns the correct serializable descriptor. The
-  // toggle item flips Pin<->Unpin and Archive disables on a pinned tab.
-  test("the context-menu IPC returns the expected descriptor and toggles on pin", async () => {
+  test("right-clicking a tab row returns the expected context-menu descriptor", async () => {
     const id = await sidebar.evaluate(async () => {
       const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
       const s = await zeo.tabs.list();
       return s.activeTabId ?? s.tabs[0].id;
     });
 
-    // Open the menu for the (unpinned) seeded tab. showContextMenu returns the
-    // descriptor even in test mode, where the native popup is skipped.
-    const res = await sidebar.evaluate(async (tabId) => {
-      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
-      return zeo.tabs.showContextMenu(tabId, 10, 10);
-    }, id);
+    const lastMenu = (): Promise<BridgeMenuResult | null> =>
+      sidebar.evaluate(
+        () =>
+          (globalThis as unknown as { __zeoLastContextMenu?: BridgeMenuResult })
+            .__zeoLastContextMenu ?? null,
+      );
+
+    const row = sidebar.getByTestId("tab-item").first();
+    await row.click({ button: "right" });
+    await expect.poll(lastMenu).not.toBeNull();
+    const res = (await lastMenu()) as BridgeMenuResult;
 
     expect(res.tabId).toBe(id);
-    // Exact id set, in build order: toggle, archive, close, copyUrl.
     expect(res.items.map((item) => item.id)).toEqual([
       "pin",
       "archive",
@@ -453,29 +453,126 @@ test.describe("zeo desktop app", () => {
       "copyUrl",
     ]);
     const byId = new Map(res.items.map((item) => [item.id, item]));
-    // Unpinned tab -> toggle offers "Pin".
     expect(byId.get("pin")).toMatchObject({ id: "pin", label: "Pin" });
-    // Archive is enabled while the tab is unpinned.
     expect(byId.get("archive")?.enabled).toBe(true);
-    // Close and Copy URL are always present and enabled.
     expect(byId.get("close")?.enabled).toBe(true);
     expect(byId.get("copyUrl")?.enabled).toBe(true);
 
-    // Pin the tab, then reopen the menu: the toggle flips to Unpin and Archive
-    // disables (a pinned tab cannot be archived — the store throws on it).
     await sidebar.evaluate(async (tabId) => {
+      delete (globalThis as unknown as { __zeoLastContextMenu?: BridgeMenuResult })
+        .__zeoLastContextMenu;
       const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
       await zeo.tabs.pin(tabId);
     }, id);
-    const pinnedRes = await sidebar.evaluate(async (tabId) => {
-      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
-      return zeo.tabs.showContextMenu(tabId, 10, 10);
-    }, id);
+    await row.click({ button: "right" });
+    await expect
+      .poll(async () => (await lastMenu())?.items.map((item) => item.id) ?? null)
+      .toEqual(["unpin", "archive", "close", "copyUrl"]);
 
+    const pinnedRes = (await lastMenu()) as BridgeMenuResult;
+    expect(pinnedRes.tabId).toBe(id);
     const pinnedById = new Map(pinnedRes.items.map((item) => [item.id, item]));
     expect(pinnedById.get("unpin")).toMatchObject({ id: "unpin", label: "Unpin" });
-    // The old "pin" id is gone now that the toggle reads "Unpin".
     expect(pinnedById.has("pin")).toBe(false);
     expect(pinnedById.get("archive")?.enabled).toBe(false);
+  });
+
+  test("pointer drag reorders pinned rows and moves tabs across the pin boundary", async () => {
+    const sectionOrder = (sectionTestId: string): Promise<(string | null)[]> =>
+      sidebar
+        .getByTestId(sectionTestId)
+        .getByTestId("tab-item")
+        .evaluateAll((els) => els.map((el) => el.getAttribute("data-tab-id")));
+
+    const pinnedOf = (tabId: string): Promise<boolean | null> =>
+      sidebar.evaluate(async (target) => {
+        const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+        const s = await zeo.tabs.list();
+        return s.tabs.find((t) => t.id === target)?.pinned ?? null;
+      }, tabId);
+
+    const rowBox = async (tabId: string) => {
+      const box = await sidebar.locator(`[data-tab-id="${tabId}"]`).boundingBox();
+      if (box === null) {
+        throw new Error(`row ${tabId} had no bounding box`);
+      }
+      return box;
+    };
+
+    const edgeOf = async (
+      tabId: string,
+      place: "above" | "below",
+    ): Promise<{ x: number; y: number }> => {
+      const box = await rowBox(tabId);
+      return {
+        x: box.x + 20,
+        y: box.y + box.height * (place === "above" ? 0.25 : 0.75),
+      };
+    };
+
+    const dragRow = async (
+      tabId: string,
+      destination: () => Promise<{ x: number; y: number }>,
+    ): Promise<void> => {
+      const box = await rowBox(tabId);
+      const startX = box.x + 20;
+      const startY = box.y + box.height / 2;
+      await sidebar.mouse.move(startX, startY);
+      await sidebar.mouse.down();
+      await sidebar.mouse.move(startX, startY + box.height, { steps: 6 });
+      const dest = await destination();
+      await sidebar.mouse.move(dest.x, dest.y, { steps: 12 });
+      await sidebar.mouse.up();
+    };
+
+    const seededId = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      const s = await zeo.tabs.list();
+      return s.activeTabId ?? s.tabs[0].id;
+    });
+    const [bId, cId] = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      const b = await zeo.tabs.create("https://news.ycombinator.com/");
+      const c = await zeo.tabs.create("https://example.org/");
+      return [b.id, c.id];
+    });
+    await sidebar.evaluate(
+      async (ids) => {
+        const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+        for (const tabId of ids) {
+          await zeo.tabs.pin(tabId);
+        }
+      },
+      [seededId, bId],
+    );
+    await expect
+      .poll(() => sectionOrder("pinned-section"))
+      .toEqual([seededId, bId]);
+    await expect.poll(() => sectionOrder("unpinned-section")).toEqual([cId]);
+
+    await dragRow(seededId, () => edgeOf(bId, "below"));
+    await expect
+      .poll(() => sectionOrder("pinned-section"), {
+        message: "expected the drag to reorder the pinned rows to [b, seeded]",
+      })
+      .toEqual([bId, seededId]);
+
+    await dragRow(bId, () => edgeOf(cId, "below"));
+    await expect
+      .poll(() => sectionOrder("unpinned-section"), {
+        message: "expected the drag to unpin b and append it after c",
+      })
+      .toEqual([cId, bId]);
+    await expect.poll(() => sectionOrder("pinned-section")).toEqual([seededId]);
+    expect(await pinnedOf(bId)).toBe(false);
+
+    await dragRow(cId, () => edgeOf(seededId, "above"));
+    await expect
+      .poll(() => sectionOrder("pinned-section"), {
+        message: "expected the drag to pin c and place it before seeded",
+      })
+      .toEqual([cId, seededId]);
+    await expect.poll(() => sectionOrder("unpinned-section")).toEqual([bId]);
+    expect(await pinnedOf(cId)).toBe(true);
   });
 });

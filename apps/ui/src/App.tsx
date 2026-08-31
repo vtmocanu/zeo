@@ -17,8 +17,6 @@ const DRAG_THRESHOLD = 5;
 
 type DragSection = "pinned" | "unpinned";
 
-// Mutable per-drag bookkeeping. Held in a ref (never state) so the document
-// pointer listeners always read the live session without stale closures.
 interface DragSession {
   id: string;
   sourcePinned: boolean;
@@ -70,8 +68,6 @@ function useTabDrag(pinned: Tab[], unpinned: Tab[]) {
   const [dropTarget, setDropTarget] = useState<DropTarget | null>(null);
   const [draggingId, setDraggingId] = useState<string | null>(null);
 
-  // Latest section arrays, mirrored into refs so the pointerup closure reads the
-  // pre-move ordering/lengths without being recreated on every render.
   const pinnedRef = useRef(pinned);
   const unpinnedRef = useRef(unpinned);
   pinnedRef.current = pinned;
@@ -192,9 +188,6 @@ function useTabDrag(pinned: Tab[], unpinned: Tab[]) {
       ? pinnedRef.current.length
       : unpinnedRef.current.length;
     void (async () => {
-      // One try/catch so a failed pin/unpin skips the follow-up reorder: were
-      // they caught independently, a rejected pin would leave the tab in its
-      // source group and the reorder would then move it to a wrong index there.
       try {
         if (targetPinned) {
           await window.zeo?.tabs.pin(id);
@@ -205,7 +198,7 @@ function useTabDrag(pinned: Tab[], unpinned: Tab[]) {
           await window.zeo?.tabs.reorder(id, target.insertBefore);
         }
       } catch {
-        // Best-effort: the drag is a UI convenience, the store stays consistent.
+        return;
       }
     })();
   }, []);
@@ -295,6 +288,11 @@ function TabRow({
         event.preventDefault();
         void window.zeo?.tabs
           .showContextMenu(tab.id, event.clientX, event.clientY)
+          .then((result) => {
+            (
+              globalThis as { __zeoLastContextMenu?: unknown }
+            ).__zeoLastContextMenu = result;
+          })
           .catch(() => {});
       }}
     >
