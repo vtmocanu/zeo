@@ -14,10 +14,21 @@ const moduleDir = dirname(fileURLToPath(import.meta.url));
 /** Default url/title used by the renderer's URL-less new-tab button. */
 const DEFAULT_URL = "https://example.com";
 
+/**
+ * Auto-archive schedule. The *policy* (which tabs are idle) lives in core
+ * (`TabStore.archiveIdle`); the main process only owns these scheduling
+ * constants and the timer. A tab untouched for `IDLE_THRESHOLD_MS` is swept, and
+ * the sweep runs every `SWEEP_INTERVAL_MS` (plus once on launch).
+ */
+const IDLE_THRESHOLD_MS = 12 * 60 * 60 * 1000;
+const SWEEP_INTERVAL_MS = 60 * 60 * 1000;
+
 const store = new TabStore();
 /** Live WebContentsView per tab id; the active tab's view is the visible one. */
 const views = new Map<string, WebContentsView>();
 let win: BrowserWindow | null = null;
+/** Handle for the hourly idle sweep, cleared when the window closes. */
+let sweepTimer: ReturnType<typeof setInterval> | null = null;
 
 /** Bounds of the tab web-view region: everything right of the sidebar. */
 function viewBounds(): Electron.Rectangle {
@@ -137,6 +148,20 @@ function broadcast(): void {
   win?.webContents.send(IPC.stateChange, store.snapshot());
 }
 
+/**
+ * Runs the idle auto-archive policy and, only if it archived something,
+ * re-points the visible view (the active tab is exempt, so this is normally a
+ * no-op) and broadcasts. Skipping the broadcast on an empty sweep keeps the
+ * hourly timer from churning the renderer when nothing changed.
+ */
+function sweepIdle(): void {
+  const archived = store.archiveIdle(IDLE_THRESHOLD_MS);
+  if (archived.length > 0) {
+    setActive(store.activeTabId);
+    broadcast();
+  }
+}
+
 function showTabContextMenu(id: string, x: number, y: number): TabContextMenuResult {
   const tab = store.list().find((t) => t.id === id);
   if (tab === undefined) {
@@ -234,7 +259,21 @@ function createWindow(): void {
     }
   });
 
+  // Re-stamp the active tab's lastActiveAt on window focus so a tab left focused
+  // (e.g. overnight) is never swept by the idle policy. This changes no visible
+  // state, so it does not broadcast.
+  win.on("focus", () => {
+    const active = store.activeTabId;
+    if (active !== null) {
+      store.activate(active);
+    }
+  });
+
   win.on("closed", () => {
+    if (sweepTimer !== null) {
+      clearInterval(sweepTimer);
+      sweepTimer = null;
+    }
     for (const view of views.values()) {
       if (!view.webContents.isDestroyed()) {
         view.webContents.close();
@@ -255,6 +294,14 @@ function createWindow(): void {
   }
   setActive(store.activeTabId);
   broadcast();
+
+  // Sweep once on launch, then hourly. Clear any prior timer first so a macOS
+  // re-activate (which re-runs createWindow) never stacks intervals.
+  sweepIdle();
+  if (sweepTimer !== null) {
+    clearInterval(sweepTimer);
+  }
+  sweepTimer = setInterval(sweepIdle, SWEEP_INTERVAL_MS);
 }
 
 ipcMain.handle(IPC.tabsCreate, (_event, url?: string): Tab => createTab(url));
