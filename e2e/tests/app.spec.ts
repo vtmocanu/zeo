@@ -179,12 +179,7 @@ test.describe("zeo desktop app", () => {
     const items = sidebar.getByTestId("tab-item");
     await expect(items).toHaveCount(1);
 
-    // NOTE: we intentionally do NOT assert the seeded tab's rendered title. The
-    // seed loads https://example.com, which has network in CI/container, so
-    // page-title-updated fires and flips the title from the "example.com"
-    // hostname fallback to "Example Domain" — a network-timing-dependent value.
-    // Asserting either is flaky; the hostname fallback is covered deterministically
-    // by the create()-return test below.
+    await expect(items.first()).toContainText(/example/i);
 
     await sidebar.getByTestId("new-tab-button").click();
     await expect(items).toHaveCount(2);
