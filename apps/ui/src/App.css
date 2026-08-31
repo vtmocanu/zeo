@@ -238,10 +238,14 @@ body {
 
 /* Archived tabs ----------------------------------------------------------- */
 
-/* Pinned to the bottom of the flex-column sidebar: `.sidebar__sections` takes
-   `flex: 1`, so this footer sits below it regardless of open-tab count. */
+/* Pinned to the bottom of the flex-column sidebar. `margin-top: auto` pushes it
+   down whether or not a `flex: 1` sibling is present — when every tab is
+   archived (idle sweep), the empty-state `.sidebar__empty` replaces the
+   `flex: 1` `.sidebar__sections`, so the auto margin is what keeps the footer at
+   the bottom in that case. */
 .sidebar__footer {
   flex: 0 0 auto;
+  margin-top: auto;
   border-top: 1px solid #2c2c3a;
   display: flex;
   flex-direction: column;
