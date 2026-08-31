@@ -27,8 +27,6 @@ const store = new TabStore();
 /** Live WebContentsView per tab id; the active tab's view is the visible one. */
 const views = new Map<string, WebContentsView>();
 let win: BrowserWindow | null = null;
-/** Handle for the hourly idle sweep, cleared when the window closes. */
-let sweepTimer: ReturnType<typeof setInterval> | null = null;
 
 /** Bounds of the tab web-view region: everything right of the sidebar. */
 function viewBounds(): Electron.Rectangle {
@@ -270,10 +268,6 @@ function createWindow(): void {
   });
 
   win.on("closed", () => {
-    if (sweepTimer !== null) {
-      clearInterval(sweepTimer);
-      sweepTimer = null;
-    }
     for (const view of views.values()) {
       if (!view.webContents.isDestroyed()) {
         view.webContents.close();
@@ -294,14 +288,6 @@ function createWindow(): void {
   }
   setActive(store.activeTabId);
   broadcast();
-
-  // Sweep once on launch, then hourly. Clear any prior timer first so a macOS
-  // re-activate (which re-runs createWindow) never stacks intervals.
-  sweepIdle();
-  if (sweepTimer !== null) {
-    clearInterval(sweepTimer);
-  }
-  sweepTimer = setInterval(sweepIdle, SWEEP_INTERVAL_MS);
 }
 
 ipcMain.handle(IPC.tabsCreate, (_event, url?: string): Tab => createTab(url));
@@ -336,9 +322,6 @@ ipcMain.handle(IPC.tabsReorder, (_event, id: string, toIndex: number): void => {
   broadcast();
 });
 
-// archive/restore can move the active pointer, so re-run setActive so the
-// visible view follows it. Views are not created/destroyed here (out of PRD 2.2
-// UI scope).
 ipcMain.handle(IPC.tabsArchive, (_event, id: string): void => {
   // A thrown Error (e.g. archiving a pinned tab) propagates out and rejects the
   // renderer's invoke, consistent with the other handlers.
@@ -347,6 +330,12 @@ ipcMain.handle(IPC.tabsArchive, (_event, id: string): void => {
 
 ipcMain.handle(IPC.tabsRestore, (_event, id: string): void => {
   store.restore(id);
+  if (!views.has(id)) {
+    const tab = store.list().find((t) => t.id === id);
+    if (tab !== undefined) {
+      createViewFor(tab);
+    }
+  }
   setActive(store.activeTabId);
   broadcast();
 });
@@ -431,6 +420,8 @@ function buildMenu(): void {
 app.whenReady().then(() => {
   buildMenu();
   createWindow();
+  sweepIdle();
+  setInterval(sweepIdle, SWEEP_INTERVAL_MS);
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {

@@ -338,7 +338,7 @@ function TabRow({
  * markup, restores on title click, permanently deletes on the delete button,
  * and shows when the tab was archived. All side effects go through the bridge.
  */
-function ArchivedRow({ tab }: { tab: Tab }) {
+function ArchivedRow({ tab, now }: { tab: Tab; now: number }) {
   const hasFavicon =
     typeof tab.faviconUrl === "string" && tab.faviconUrl.length > 0;
 
@@ -367,7 +367,7 @@ function ArchivedRow({ tab }: { tab: Tab }) {
         {tab.title}
       </button>
       <span className="archived-item__time" data-testid="archived-time">
-        {formatRelativeArchived(tab.archivedAt ?? 0, Date.now())}
+        {formatRelativeArchived(tab.archivedAt ?? now, now)}
       </span>
       <button
         type="button"
@@ -397,6 +397,16 @@ export function App() {
     archived: [],
   });
   const [showArchived, setShowArchived] = useState(false);
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (!showArchived) {
+      return;
+    }
+    setNow(Date.now());
+    const timer = setInterval(() => setNow(Date.now()), 60_000);
+    return () => clearInterval(timer);
+  }, [showArchived]);
 
   useEffect(() => {
     // Guard so a bare browser dev-open (no bridge) doesn't throw. In Electron
@@ -555,7 +565,7 @@ export function App() {
             ) : (
               <ul className="archived-list">
                 {state.archived.map((tab) => (
-                  <ArchivedRow key={tab.id} tab={tab} />
+                  <ArchivedRow key={tab.id} tab={tab} now={now} />
                 ))}
               </ul>
             )}

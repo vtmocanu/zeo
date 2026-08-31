@@ -186,7 +186,28 @@ describe("TabStore.activate", () => {
     store.create({ url: "https://b.test" });
 
     store.activate("t1");
-    expect(store.activeTab?.lastActiveAt).toBe(1002);
+    expect(store.activeTab?.lastActiveAt).toBe(1004);
+  });
+
+  test("re-stamps the outgoing tab's lastActiveAt on switch", () => {
+    const store = makeStore();
+    store.create({ url: "https://a.test" });
+    store.create({ url: "https://b.test" });
+
+    const before = store.list().find((t) => t.id === "t2")?.lastActiveAt ?? 0;
+    store.activate("t1");
+    const after = store.list().find((t) => t.id === "t2")?.lastActiveAt ?? 0;
+    expect(after).toBeGreaterThan(before);
+  });
+
+  test("re-stamps the outgoing tab's lastActiveAt on create", () => {
+    const store = makeStore();
+    store.create({ url: "https://a.test" });
+    const before = store.list().find((t) => t.id === "t1")?.lastActiveAt ?? 0;
+
+    store.create({ url: "https://b.test" });
+    const after = store.list().find((t) => t.id === "t1")?.lastActiveAt ?? 0;
+    expect(after).toBeGreaterThan(before);
   });
 
   test("throws on an unknown id", () => {
@@ -452,7 +473,7 @@ describe("TabStore.close (MRU activation)", () => {
     store.activate("t1");
 
     store.close("t1");
-    expect(store.activeTabId).toBe("t2");
+    expect(store.activeTabId).toBe("t3");
   });
 });
 
@@ -505,6 +526,29 @@ describe("TabStore.archive / restore", () => {
     expect(restored?.pinned).toBe(false);
     // Appended to the end of the unpinned group -> after t2.
     expect(store.list().map((t) => t.id)).toEqual(["t2", "t1"]);
+  });
+
+  test("restore makes the restored tab active even when another tab is active", () => {
+    const store = makeStore();
+    store.create({ url: "https://a.test" }); // t1
+    store.create({ url: "https://b.test" }); // t2 (active)
+    store.archive("t1");
+
+    store.restore("t1");
+    expect(store.activeTabId).toBe("t1");
+  });
+
+  test("restore re-stamps lastActiveAt so the idle sweep does not re-archive", () => {
+    const store = makeStore();
+    store.create({ url: "https://a.test" }); // t1
+    store.create({ url: "https://b.test" }); // t2 (active)
+    store.archiveIdle(0);
+    expect(store.archived().map((t) => t.id)).toEqual(["t1"]);
+
+    store.restore("t1");
+    store.activate("t2");
+    expect(store.archiveIdle(10)).toEqual([]);
+    expect(store.archived()).toEqual([]);
   });
 
   test("archive of a pinned tab throws", () => {

@@ -112,8 +112,19 @@ export class TabStore {
       archivalSeq: 0,
     };
     this.tabs.push(record);
+    this.stampOutgoing(record.id);
     this.activeId = record.id;
     return this.toTab(record);
+  }
+
+  private stampOutgoing(nextId: string): void {
+    if (this.activeId === null || this.activeId === nextId) {
+      return;
+    }
+    const previous = this.tabs.find((tab) => tab.id === this.activeId);
+    if (previous !== undefined) {
+      previous.lastActiveAt = this.now();
+    }
   }
 
   /**
@@ -194,6 +205,7 @@ export class TabStore {
     if (record.archivedAt !== null) {
       throw new Error(`Cannot activate an archived tab: ${id}`);
     }
+    this.stampOutgoing(id);
     record.lastActiveAt = this.now();
     record.activationSeq = ++this.seq;
     this.activeId = id;
@@ -376,8 +388,6 @@ export class TabStore {
   /**
    * Restores an archived tab: clears `archivedAt`, clears `pinned`, and moves
    * the record to the end of the array (= the end of the unpinned group).
-   * Throws on an unknown id, or if the tab is not archived. When the active
-   * pointer is currently null, the restored tab becomes active.
    */
   restore(id: string): void {
     const index = this.tabs.findIndex((tab) => tab.id === id);
@@ -394,11 +404,10 @@ export class TabStore {
     this.tabs.splice(index, 1);
     this.tabs.push(record);
 
-    if (this.activeId === null) {
-      record.lastActiveAt = this.now();
-      record.activationSeq = ++this.seq;
-      this.activeId = record.id;
-    }
+    this.stampOutgoing(record.id);
+    record.lastActiveAt = this.now();
+    record.activationSeq = ++this.seq;
+    this.activeId = record.id;
   }
 
   /**

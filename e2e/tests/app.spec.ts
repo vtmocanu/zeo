@@ -394,6 +394,10 @@ test.describe("zeo desktop app", () => {
 
     // And it returned to the open list: seeded + restored = two rows.
     await expect(openItems).toHaveCount(2);
+
+    await expect(
+      sidebar.locator(`[data-tab-id="${archivedId}"]`),
+    ).toHaveAttribute("aria-current", "true");
   });
 
   // Case (e): PRD 2.3 pointer-drag reorder. Drives a REAL pointer gesture (not
