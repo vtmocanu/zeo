@@ -594,45 +594,7 @@ test.describe("zeo desktop app", () => {
       })
       .toEqual([bId, seededId]);
 
-    await sidebar.evaluate(() => {
-      const g = globalThis as unknown as { __zeoEvents?: unknown[] };
-      g.__zeoEvents = [];
-      for (const type of [
-        "pointerdown",
-        "pointermove",
-        "pointerup",
-        "mousedown",
-        "mousemove",
-        "mouseup",
-      ]) {
-        document.addEventListener(
-          type,
-          (ev) => {
-            const m = ev as MouseEvent;
-            g.__zeoEvents?.push({
-              type,
-              y: m.clientY,
-              t: Math.round(performance.now()),
-            });
-          },
-          true,
-        );
-      }
-    });
-    let step2Error: unknown = null;
-    try {
-      await dragRow(bId, () => edgeOf(cId, "below"));
-    } catch (err) {
-      step2Error = err;
-    }
-    const step2Events = await sidebar.evaluate(() => {
-      const g = globalThis as unknown as { __zeoEvents?: unknown[] };
-      return (g.__zeoEvents ?? []).slice(-60);
-    });
-    console.log("DRAGDBG events", JSON.stringify(step2Events));
-    if (step2Error !== null) {
-      throw step2Error;
-    }
+    await dragRow(bId, () => edgeOf(cId, "below"));
     await expect
       .poll(() => sectionOrder("unpinned-section"), {
         message: "expected the drag to unpin b and append it after c",
