@@ -23,6 +23,18 @@ interface BridgeState {
   activeTabId: string | null;
   archived: BridgeTab[];
 }
+// The serializable context-menu descriptor main returns from showContextMenu.
+// Structurally the @zeo/core TabContextMenuResult, redeclared here so e2e stays
+// import-free of @zeo/core. `id` is the stable action key we key assertions off.
+interface BridgeMenuItem {
+  id: string;
+  label: string;
+  enabled: boolean;
+}
+interface BridgeMenuResult {
+  tabId: string;
+  items: BridgeMenuItem[];
+}
 interface ZeoBridge {
   tabs: {
     create(url?: string): Promise<BridgeTab>;
@@ -30,6 +42,7 @@ interface ZeoBridge {
     pin(id: string): Promise<void>;
     archive(id: string): Promise<void>;
     list(): Promise<BridgeState>;
+    showContextMenu(id: string, x: number, y: number): Promise<BridgeMenuResult>;
   };
 }
 // Inside `page.evaluate` the callback runs in the renderer, where the real global
@@ -161,7 +174,10 @@ test.describe("zeo desktop app", () => {
       args: launchArgs,
       // Empty string forces main's production `loadFile` path instead of a
       // dev renderer URL — this is exactly the packaged/CI code path.
-      env: { ...process.env, ELECTRON_RENDERER_URL: "" },
+      // ZEO_E2E=1 puts main in headless test mode: showContextMenu still returns
+      // its serializable descriptor but skips popping the native menu (which
+      // cannot be driven headlessly), so the context-menu IPC is assertable.
+      env: { ...process.env, ELECTRON_RENDERER_URL: "", ZEO_E2E: "1" },
     });
     sidebar = await sidebarWindow(app);
   });
@@ -328,5 +344,138 @@ test.describe("zeo desktop app", () => {
       return zeo.tabs.list();
     });
     expect(state.archived.map((tab) => tab.id)).toContain(archivedId);
+  });
+
+  // Case (e): PRD 2.3 pointer-drag reorder. Drives a REAL pointer gesture (not
+  // HTML5 DnD, not Locator.dragTo) so the renderer's pointerdown -> 5px-threshold
+  // -> pointermove -> pointerup path runs end to end and round-trips through the
+  // bridge's reorder + the main->renderer state broadcast + a re-render. We assert
+  // only on the stable `data-tab-id` ORDER and the row count — never on rendered
+  // titles, which a real page load in CI could change.
+  test("dragging a tab past the one below it reorders the rendered list", async () => {
+    // Reads the current data-tab-id order from the rendered tab-item rows. This
+    // deliberately keys off tab-item only, so the transient drop-indicator /
+    // dropzone rows (distinct testids) never enter the order or the count.
+    const tabIdOrder = (): Promise<(string | null)[]> =>
+      sidebar
+        .getByTestId("tab-item")
+        .evaluateAll((els) => els.map((el) => el.getAttribute("data-tab-id")));
+
+    // Fresh launch seeds one unpinned tab; add a second so there are two rows to
+    // reorder. create() returns the created Tab, giving us its id directly.
+    const seededId = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      const s = await zeo.tabs.list();
+      return s.activeTabId ?? s.tabs[0].id;
+    });
+    const createdId = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      const created = await zeo.tabs.create("https://news.ycombinator.com/");
+      return created.id;
+    });
+
+    const items = sidebar.getByTestId("tab-item");
+    await expect(items).toHaveCount(2);
+    // Initial order: seeded first, created appended after it.
+    expect(await tabIdOrder()).toEqual([seededId, createdId]);
+
+    // Grab both rows' geometry. boundingBox() is in the page's CSS pixels, which
+    // is the coordinate space Playwright's mouse API drives.
+    const box1 = await items.nth(0).boundingBox();
+    const box2 = await items.nth(1).boundingBox();
+    if (box1 === null || box2 === null) {
+      throw new Error("tab-item rows had no bounding box");
+    }
+
+    // Press near the LEFT of the first row (x + 20), clear of the × close button
+    // on the far right, at its vertical midpoint.
+    const startX = box1.x + 20;
+    const startY = box1.y + box1.height / 2;
+
+    await sidebar.mouse.move(startX, startY);
+    await sidebar.mouse.down();
+    // Cross the 5px threshold first: this flips the renderer into drag mode,
+    // which reveals the (empty) opposite-section drop zone and thus SHIFTS the
+    // rows' on-screen positions. So we must re-read the target row's geometry
+    // AFTER the drag has started rather than trusting the pre-drag boundingBox
+    // (a human likewise aims at the live, shifted target).
+    await sidebar.mouse.move(startX, startY + box1.height, { steps: 6 });
+    const boxTargetDuringDrag = await items.nth(1).boundingBox();
+    if (boxTargetDuringDrag === null) {
+      throw new Error("target row had no bounding box mid-drag");
+    }
+    // Release just below the second row's midpoint so the computed insertion
+    // slot is the end of the unpinned section -> the dragged row moves last.
+    await sidebar.mouse.move(
+      boxTargetDuringDrag.x + 20,
+      boxTargetDuringDrag.y + boxTargetDuringDrag.height * 0.75,
+      { steps: 12 },
+    );
+    await sidebar.mouse.up();
+
+    // The reorder round-trips through the bridge + a main->renderer broadcast +
+    // a re-render, so poll rather than assert once.
+    await expect
+      .poll(async () => tabIdOrder(), {
+        message: "expected the pointer drag to reorder the rows to [created, seeded]",
+      })
+      .toEqual([createdId, seededId]);
+
+    // The drag moved a row; it neither added nor removed one, and the count is of
+    // tab-item rows only (any indicator/dropzone is a different testid).
+    await expect(items).toHaveCount(2);
+  });
+
+  // Case (f): PRD 2.3 §4 — the tab context menu. Rather than drive a native popup
+  // (skipped in test mode and not automatable headlessly), we assert the
+  // menu-open IPC fires and returns the correct serializable descriptor. The
+  // toggle item flips Pin<->Unpin and Archive disables on a pinned tab.
+  test("the context-menu IPC returns the expected descriptor and toggles on pin", async () => {
+    const id = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      const s = await zeo.tabs.list();
+      return s.activeTabId ?? s.tabs[0].id;
+    });
+
+    // Open the menu for the (unpinned) seeded tab. showContextMenu returns the
+    // descriptor even in test mode, where the native popup is skipped.
+    const res = await sidebar.evaluate(async (tabId) => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      return zeo.tabs.showContextMenu(tabId, 10, 10);
+    }, id);
+
+    expect(res.tabId).toBe(id);
+    // Exact id set, in build order: toggle, archive, close, copyUrl.
+    expect(res.items.map((item) => item.id)).toEqual([
+      "pin",
+      "archive",
+      "close",
+      "copyUrl",
+    ]);
+    const byId = new Map(res.items.map((item) => [item.id, item]));
+    // Unpinned tab -> toggle offers "Pin".
+    expect(byId.get("pin")).toMatchObject({ id: "pin", label: "Pin" });
+    // Archive is enabled while the tab is unpinned.
+    expect(byId.get("archive")?.enabled).toBe(true);
+    // Close and Copy URL are always present and enabled.
+    expect(byId.get("close")?.enabled).toBe(true);
+    expect(byId.get("copyUrl")?.enabled).toBe(true);
+
+    // Pin the tab, then reopen the menu: the toggle flips to Unpin and Archive
+    // disables (a pinned tab cannot be archived — the store throws on it).
+    await sidebar.evaluate(async (tabId) => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.tabs.pin(tabId);
+    }, id);
+    const pinnedRes = await sidebar.evaluate(async (tabId) => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      return zeo.tabs.showContextMenu(tabId, 10, 10);
+    }, id);
+
+    const pinnedById = new Map(pinnedRes.items.map((item) => [item.id, item]));
+    expect(pinnedById.get("unpin")).toMatchObject({ id: "unpin", label: "Unpin" });
+    // The old "pin" id is gone now that the toggle reads "Unpin".
+    expect(pinnedById.has("pin")).toBe(false);
+    expect(pinnedById.get("archive")?.enabled).toBe(false);
   });
 });
