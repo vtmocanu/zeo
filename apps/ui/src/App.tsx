@@ -138,6 +138,10 @@ function useTabDrag(pinned: Tab[], unpinned: Tab[]) {
         setDraggingId(session.id);
       }
       const target = computeDropTarget(event.clientY);
+      (globalThis as { __zeoDrag?: unknown }).__zeoDrag = {
+        y: event.clientY,
+        target,
+      };
       dropTargetRef.current = target;
       setDropTarget(target);
     },

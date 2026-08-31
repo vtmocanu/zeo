@@ -560,6 +560,29 @@ test.describe("zeo desktop app", () => {
       .toEqual([bId, seededId]);
 
     await dragRow(bId, () => edgeOf(cId, "below"));
+    const dbg = await sidebar.evaluate(() => {
+      const g = globalThis as { __zeoDrag?: unknown };
+      const rect = (sel: string) => {
+        const el = document.querySelector(sel);
+        if (!el) {
+          return null;
+        }
+        const r = el.getBoundingClientRect();
+        return { top: r.top, bottom: r.bottom, height: r.height };
+      };
+      return {
+        drag: g.__zeoDrag ?? null,
+        pinnedList: rect('[data-section="pinned"]'),
+        unpinnedList: rect('[data-section="unpinned"]'),
+        rows: Array.from(
+          document.querySelectorAll<HTMLElement>("[data-tab-id]"),
+        ).map((el) => {
+          const r = el.getBoundingClientRect();
+          return { id: el.getAttribute("data-tab-id"), top: r.top, bottom: r.bottom };
+        }),
+      };
+    });
+    console.log("DRAGDBG step2", JSON.stringify(dbg));
     await expect
       .poll(() => sectionOrder("unpinned-section"), {
         message: "expected the drag to unpin b and append it after c",
