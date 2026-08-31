@@ -3,7 +3,7 @@ import type { MenuItemConstructorOptions } from "electron";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { SpaceStore, IPC, titleForUrl, SIDEBAR_WIDTH } from "@zeo/core";
-import type { Space, SpacesState, Tab, TabContextMenuResult, TabsState } from "@zeo/core";
+import type { Profile, Space, SpacesState, Tab, TabContextMenuResult, TabsState } from "@zeo/core";
 
 // The built main is emitted by electron-vite as ESM (out/main/index.js, the
 // package is "type": "module"), so `__dirname` is not defined — derive it from
@@ -62,7 +62,9 @@ function createViewFor(tab: Tab, spaceId: string): void {
   if (win === null) {
     return;
   }
-  const view = new WebContentsView();
+  const view = new WebContentsView({
+    webPreferences: { partition: "persist:" + store.spaceProfileId(spaceId) },
+  });
   views.set(tab.id, { view, spaceId });
   win.contentView.addChildView(view);
   view.setBounds(viewBounds());
@@ -181,6 +183,66 @@ function deleteSpace(id: string): void {
     // The store activated a surviving space; show its active tab, hide the rest.
     setActive(store.activeTabId);
   }
+  broadcast();
+}
+
+/**
+ * Re-points a space at a different profile and migrates its live views onto the
+ * new session partition. Electron cannot change a live WebContents' partition in
+ * place, so every view the space owns is destroyed and recreated — the recreated
+ * views resolve the NEW partition via {@link createViewFor}'s `spaceProfileId`
+ * lookup.
+ *
+ * Pre-validates with no side effect (mirroring {@link deleteSpace}): when the
+ * remap would reject, {@link SpaceStore.setSpaceProfile} throws the specific error
+ * (unknown space / unknown profile) before any view is torn down. A same-profile
+ * call short-circuits — nothing changes, no teardown, no broadcast.
+ *
+ * The store reference is moved AFTER the old-partition views are destroyed and
+ * BEFORE they are recreated, so recreation resolves the new partition. If a
+ * recreation fails, the store reference is already moved, so no old-partition
+ * view survives; that tab simply has no view until its next activation retries it.
+ */
+function remapSpaceProfile(spaceId: string, profileId: string): void {
+  // Gate teardown on the store's OWN predicate. When the remap would reject
+  // (unknown space or unknown profile), defer to setSpaceProfile to throw the
+  // specific error BEFORE any view is torn down — a rejected remap has no effect.
+  if (!store.canSetSpaceProfile(spaceId, profileId)) {
+    store.setSpaceProfile(spaceId, profileId);
+    return; // unreachable: canSetSpaceProfile() === false means setSpaceProfile() throws.
+  }
+
+  // Nothing changes when the space already references this profile: no teardown,
+  // no recreation, no broadcast.
+  if (store.spaceProfileId(spaceId) === profileId) {
+    return;
+  }
+
+  // Capture the exact tab ids whose views are on the OLD partition, from the LIVE
+  // views map filtered by owning space — NOT from tabsOfSpace, which would
+  // spuriously materialize views for archived tabs that currently have none.
+  const tabIds = [...views]
+    .filter(([, tracked]) => tracked.spaceId === spaceId)
+    .map(([tabId]) => tabId);
+  // tabsOfSpace supplies only the id→url lookup for the captured ids.
+  const tabsById = new Map(store.tabsOfSpace(spaceId).map((t) => [t.id, t]));
+
+  for (const tabId of tabIds) {
+    destroyView(tabId);
+  }
+
+  store.setSpaceProfile(spaceId, profileId);
+
+  for (const tabId of tabIds) {
+    const tab = tabsById.get(tabId);
+    if (tab !== undefined) {
+      createViewFor(tab, spaceId);
+    }
+  }
+
+  // Global active tab: hides an inactive space's recreated views, shows the
+  // active one.
+  setActive(store.activeTabId);
   broadcast();
 }
 
@@ -441,6 +503,26 @@ ipcMain.handle(IPC.spacesActivate, (_event, id: string): void => {
 
 ipcMain.handle(IPC.spacesDelete, (_event, id: string): void => {
   deleteSpace(id);
+});
+
+ipcMain.handle(IPC.spacesSetProfile, (_event, spaceId: string, profileId: string): void => {
+  remapSpaceProfile(spaceId, profileId);
+});
+
+ipcMain.handle(IPC.profilesCreate, (_event, name: string): Profile => {
+  const profile = store.createProfile(name);
+  broadcast();
+  return profile;
+});
+
+ipcMain.handle(IPC.profilesRename, (_event, id: string, name: string): void => {
+  store.renameProfile(id, name);
+  broadcast();
+});
+
+ipcMain.handle(IPC.profilesDelete, (_event, id: string): void => {
+  store.deleteProfile(id);
+  broadcast();
 });
 
 ipcMain.handle(IPC.spacesList, (): SpacesState => store.spacesSnapshot());

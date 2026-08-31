@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from "electron";
 import { IPC } from "@zeo/core";
 import type {
+  Profile,
   Space,
   SpacesState,
   Tab,
@@ -33,7 +34,15 @@ const api = {
       ipcRenderer.invoke(IPC.spacesRename, id, name),
     delete: (id: string): Promise<void> => ipcRenderer.invoke(IPC.spacesDelete, id),
     activate: (id: string): Promise<void> => ipcRenderer.invoke(IPC.spacesActivate, id),
+    setProfile: (spaceId: string, profileId: string): Promise<void> =>
+      ipcRenderer.invoke(IPC.spacesSetProfile, spaceId, profileId),
     list: (): Promise<SpacesState> => ipcRenderer.invoke(IPC.spacesList),
+  },
+  profiles: {
+    create: (name: string): Promise<Profile> => ipcRenderer.invoke(IPC.profilesCreate, name),
+    rename: (id: string, name: string): Promise<void> =>
+      ipcRenderer.invoke(IPC.profilesRename, id, name),
+    delete: (id: string): Promise<void> => ipcRenderer.invoke(IPC.profilesDelete, id),
   },
   onStateChange: (listener: (state: TabsState) => void): (() => void) => {
     const handler = (_event: Electron.IpcRendererEvent, state: TabsState): void => listener(state);
