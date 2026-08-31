@@ -1,5 +1,5 @@
 import type { Tab } from "./tab.js";
-import type { TabsState } from "./ipc.js";
+import type { TabsSlice } from "./ipc.js";
 
 export interface TabStoreOptions {
   idFactory?: () => string;
@@ -449,8 +449,8 @@ export class TabStore {
     return record ? this.toTab(record) : null;
   }
 
-  /** The full state shape broadcast to renderers. */
-  snapshot(): TabsState {
+  /** This tab set's payload (tabs, active pointer, archived) for a snapshot. */
+  snapshot(): TabsSlice {
     return {
       tabs: this.list(),
       activeTabId: this.activeId,

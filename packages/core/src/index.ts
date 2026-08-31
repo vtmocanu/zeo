@@ -1,9 +1,13 @@
 export type { Tab } from "./tab.js";
+export type { Space } from "./space.js";
 export { TabStore } from "./tab-store.js";
 export type { TabStoreOptions } from "./tab-store.js";
 export type {
   TabsState,
+  TabsSlice,
+  SpacesState,
   TabsApi,
+  SpacesApi,
   ZeoApi,
   TabContextMenuItem,
   TabContextMenuResult,
