@@ -110,9 +110,52 @@ describe("SpaceStore.renameSpace", () => {
     expect(store.spaces()[0].name).toBe("Home");
   });
 
+  test("renames the space addressed by id, not the active space", () => {
+    const store = makeStore();
+    const personalId = store.activeSpaceId; // active
+    const work = store.createSpace("Work"); // not active
+
+    // Rename the NON-active space by id; the active space must be untouched.
+    store.renameSpace(work.id, "Errands");
+    expect(store.spaces().find((s) => s.id === work.id)?.name).toBe("Errands");
+    expect(store.spaces().find((s) => s.id === personalId)?.name).toBe("Personal");
+    expect(store.activeSpace.name).toBe("Personal");
+  });
+
   test("throws on an unknown space id", () => {
     const store = makeStore();
     expect(() => store.renameSpace("nope", "X")).toThrow(/Unknown space/);
+  });
+});
+
+describe("SpaceStore.allOpenTabs", () => {
+  test("returns every space's open tabs tagged with their owning space id", () => {
+    const store = makeStore();
+    const personalId = store.activeSpaceId;
+    const p1 = store.create({ url: "https://p1.test" });
+    const p2 = store.create({ url: "https://p2.test" });
+
+    const work = store.createSpace("Work");
+    store.setActiveSpace(work.id);
+    const w1 = store.create({ url: "https://w1.test" });
+
+    const all = store.allOpenTabs();
+    // Every open tab across both spaces, each tagged with its owner.
+    expect(all.map(({ spaceId, tab }) => [spaceId, tab.id])).toEqual([
+      [personalId, p1.id],
+      [personalId, p2.id],
+      [work.id, w1.id],
+    ]);
+  });
+
+  test("excludes archived tabs", () => {
+    const store = makeStore();
+    const personalId = store.activeSpaceId;
+    const open = store.create({ url: "https://open.test" });
+    const gone = store.create({ url: "https://gone.test" });
+    store.archive(gone.id);
+
+    expect(store.allOpenTabs()).toEqual([{ spaceId: personalId, tab: expect.objectContaining({ id: open.id }) }]);
   });
 });
 
