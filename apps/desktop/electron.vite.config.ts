@@ -7,6 +7,9 @@ import { defineConfig, externalizeDepsPlugin } from "electron-vite";
 export default defineConfig({
   main: {
     plugins: [externalizeDepsPlugin({ exclude: ["@zeo/core"] })],
+    ssr: {
+      external: ["electron"],
+    },
     build: {
       lib: {
         entry: "src/main/index.ts",
@@ -15,14 +18,6 @@ export default defineConfig({
   },
   preload: {
     plugins: [externalizeDepsPlugin({ exclude: ["@zeo/core"] })],
-    // electron-vite's preload preset forces `ssr.noExternal = true`, which tells
-    // the SSR bundler to inline every dependency. Under vite 8 (Rolldown) that now
-    // wins over `rollupOptions.external`, so `electron` gets bundled: Rolldown pulls
-    // in node_modules/electron/index.js — the binary-path shim (spawnSync into
-    // install.js) — instead of leaving `require("electron")` external. The bundled
-    // shim returns a path string, so `ipcRenderer` is undefined at runtime and the
-    // contextBridge/window.zeo setup silently fails. Listing electron in
-    // `ssr.external` takes precedence over noExternal and keeps it a runtime require.
     ssr: {
       external: ["electron"],
     },
