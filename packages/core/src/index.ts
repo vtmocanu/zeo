@@ -15,8 +15,14 @@ export type {
   ZeoApi,
   TabContextMenuItem,
   TabContextMenuResult,
+  SpaceContextMenuItem,
+  SpaceContextMenuResult,
+  SpaceMenuAction,
 } from "./ipc.js";
 export { IPC } from "./ipc.js";
+export { defaultSpaceName } from "./space-name.js";
+export { buildSpaceContextMenu } from "./space-menu.js";
+export type { SpaceContextMenuInput } from "./space-menu.js";
 export { titleForUrl } from "./tab-title.js";
 export { formatRelativeArchived } from "./relative-time.js";
 export { SIDEBAR_WIDTH } from "./layout.js";
