@@ -97,6 +97,9 @@ function createViewFor(tab: Tab, spaceId: string, urlOverride?: string): void {
       failedLoads.delete(tab.id);
     })
     .catch((err: unknown) => {
+      if (views.get(tab.id)?.view !== view) {
+        return;
+      }
       failedLoads.add(tab.id);
       console.error(`tab ${tab.id} failed to load ${urlOverride ?? tab.url}:`, err);
     });
@@ -209,30 +212,15 @@ function deleteSpace(id: string): void {
  * views resolve the NEW partition via {@link createViewFor}'s `spaceProfileId`
  * lookup.
  *
- * Pre-validates with no side effect (mirroring {@link deleteSpace}): when the
- * remap would reject, {@link SpaceStore.setSpaceProfile} throws the specific error
- * (unknown space / unknown profile) before any view is torn down. A same-profile
- * call short-circuits — nothing changes, no teardown, no broadcast.
- *
- * The store reference is moved AFTER the old-partition views are destroyed and
- * BEFORE they are recreated, so recreation resolves the new partition. If a
- * recreation fails, the store reference is already moved, so no old-partition
- * view survives; that tab simply has no view until its next activation retries it.
  */
 function remapSpaceProfile(spaceId: string, profileId: string): void {
-  // Gate teardown on the store's OWN predicate. When the remap would reject
-  // (unknown space or unknown profile), defer to setSpaceProfile to throw the
-  // specific error BEFORE any view is torn down — a rejected remap has no effect.
-  if (!store.canSetSpaceProfile(spaceId, profileId)) {
-    store.setSpaceProfile(spaceId, profileId);
-    return; // unreachable: canSetSpaceProfile() === false means setSpaceProfile() throws.
-  }
-
   // Nothing changes when the space already references this profile: no teardown,
   // no recreation, no broadcast.
   if (store.spaceProfileId(spaceId) === profileId) {
     return;
   }
+
+  store.setSpaceProfile(spaceId, profileId);
 
   // Capture the exact tab ids whose views are on the OLD partition, from the LIVE
   // views map filtered by owning space — NOT from tabsOfSpace, which would
@@ -246,14 +234,15 @@ function remapSpaceProfile(spaceId: string, profileId: string): void {
   // where the user was, not the tab's original creation url. getURL() returns ""
   // for a view that never finished loading.
   const liveUrls = new Map(
-    tabIds.map((tabId) => [tabId, views.get(tabId)?.view.webContents.getURL() ?? ""]),
+    tabIds.map((tabId) => {
+      const wc = views.get(tabId)?.view.webContents;
+      return [tabId, wc !== undefined && !wc.isDestroyed() ? wc.getURL() : ""] as const;
+    }),
   );
 
   for (const tabId of tabIds) {
     destroyView(tabId);
   }
-
-  store.setSpaceProfile(spaceId, profileId);
 
   for (const tabId of tabIds) {
     const tab = tabsById.get(tabId);
@@ -460,15 +449,10 @@ ipcMain.handle(IPC.tabsActivate, (_event, id: string): void => {
   } else if (failedLoads.has(id)) {
     const tracked = views.get(id);
     const tab = store.list().find((t) => t.id === id);
-    if (tracked !== undefined && tab !== undefined && !tracked.view.webContents.isDestroyed()) {
-      tracked.view.webContents
-        .loadURL(tab.url)
-        .then(() => {
-          failedLoads.delete(id);
-        })
-        .catch((err: unknown) => {
-          console.error(`tab ${id} retry failed to load ${tab.url}:`, err);
-        });
+    if (tracked !== undefined && tab !== undefined) {
+      destroyView(id);
+      failedLoads.delete(id);
+      createViewFor(tab, tracked.spaceId);
     }
   }
   setActive(id);
@@ -571,12 +555,16 @@ ipcMain.handle(IPC.profilesDelete, async (_event, id: string): Promise<void> => 
   // id, or still referenced by a space), so a rejected delete never wipes a
   // live partition.
   store.deleteProfile(id);
+  broadcast();
   // The profile record is gone, so nothing can reach persist:<id> again — drop
   // its on-disk cookies/storage/cache instead of orphaning them forever.
   const doomed = session.fromPartition("persist:" + id);
-  await doomed.clearStorageData();
-  await doomed.clearCache();
-  broadcast();
+  try {
+    await doomed.clearStorageData();
+    await doomed.clearCache();
+  } catch (err: unknown) {
+    console.error(`failed to clear session data for deleted profile ${id}:`, err);
+  }
 });
 
 ipcMain.handle(IPC.spacesList, (): SpacesState => store.spacesSnapshot());

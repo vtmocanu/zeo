@@ -313,15 +313,6 @@ export class SpaceStore {
     record.space = { ...record.space, profileId };
   }
 
-  /**
-   * Whether {@link setSpaceProfile} would succeed: both the space id and the
-   * profile id name known entities. A side-effect-free predicate the desktop
-   * main queries before tearing down and rebuilding a space's views.
-   */
-  canSetSpaceProfile(spaceId: string, profileId: string): boolean {
-    return this.spacesById.has(spaceId) && this.profilesById.has(profileId);
-  }
-
   /** The profile id a space references. Throws on an unknown space id. */
   spaceProfileId(id: string): string {
     return this.require(id).space.profileId;

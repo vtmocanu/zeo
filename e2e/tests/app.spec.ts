@@ -1052,4 +1052,36 @@ test.describe("zeo desktop app", () => {
     }, setup);
     expect(staleViewExists).toBe(false);
   });
+
+  test("deleting a profile clears its partition's stored data", async () => {
+    const prof = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      return zeo.profiles.create("Doomed");
+    });
+
+    const cookiesBefore = await app.evaluate(async ({ session }, id) => {
+      const sess = session.fromPartition("persist:" + id);
+      await sess.cookies.set({ url: "https://zeo-doomed.test/", name: "zeo_doom", value: "1" });
+      const got = await sess.cookies.get({ name: "zeo_doom" });
+      return got.length;
+    }, prof.id);
+    expect(cookiesBefore).toBe(1);
+
+    await sidebar.evaluate(async (id) => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.profiles.delete(id);
+    }, prof.id);
+
+    await expect
+      .poll(
+        async () =>
+          app.evaluate(async ({ session }, id) => {
+            const sess = session.fromPartition("persist:" + id);
+            const got = await sess.cookies.get({ name: "zeo_doom" });
+            return got.length;
+          }, prof.id),
+        { message: "expected the deleted profile's partition cookies to be cleared" },
+      )
+      .toBe(0);
+  });
 });

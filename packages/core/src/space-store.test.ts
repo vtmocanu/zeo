@@ -589,25 +589,6 @@ describe("SpaceStore.setSpaceProfile", () => {
   });
 });
 
-describe("SpaceStore.canSetSpaceProfile", () => {
-  test("is true for a known space and profile", () => {
-    const store = makeStore();
-    const profile = store.createProfile("Work");
-    expect(store.canSetSpaceProfile(store.activeSpaceId, profile.id)).toBe(true);
-    expect(store.canSetSpaceProfile(store.activeSpaceId, "default")).toBe(true);
-  });
-
-  test("is false for an unknown space", () => {
-    const store = makeStore();
-    expect(store.canSetSpaceProfile("nope", "default")).toBe(false);
-  });
-
-  test("is false for an unknown profile", () => {
-    const store = makeStore();
-    expect(store.canSetSpaceProfile(store.activeSpaceId, "nope")).toBe(false);
-  });
-});
-
 describe("SpaceStore.tabsOfSpace", () => {
   test("returns a space's open then archived tabs", () => {
     const store = makeStore();
