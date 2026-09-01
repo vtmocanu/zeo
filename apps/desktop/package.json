@@ -11,9 +11,11 @@
   },
   "dependencies": {
     "@zeo/core": "workspace:*",
-    "@zeo/ui": "workspace:*"
+    "@zeo/ui": "workspace:*",
+    "better-sqlite3": "^13.0.3"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^9.6.0",
     "@types/node": "^24.5.2",
     "electron": "^44.0.0",
     "electron-vite": "^5.0.0",

@@ -19,6 +19,7 @@ import type {
   TabContextMenuResult,
   TabsState,
 } from "@zeo/core";
+import { loadStore, scheduleSave, flush } from "./db.js";
 
 // The built main is emitted by electron-vite as ESM (out/main/index.js, the
 // package is "type": "module"), so `__dirname` is not defined — derive it from
@@ -39,7 +40,7 @@ const DEFAULT_URL = "https://example.com";
 const IDLE_THRESHOLD_MS = 12 * 60 * 60 * 1000;
 const SWEEP_INTERVAL_MS = 60 * 60 * 1000;
 
-const store = new SpaceStore();
+let store = new SpaceStore();
 /**
  * Live WebContentsView per tab id, tagged with the id of its OWNING space. The
  * active space's active tab is the single visible view; every other view (other
@@ -290,9 +291,56 @@ function setActive(id: string | null): void {
   }
 }
 
-/** Pushes the current store snapshot to the renderer. */
+/** Pushes the current store snapshot to the renderer, then schedules a save. */
 function broadcast(): void {
   win?.webContents.send(IPC.stateChange, store.snapshot());
+  scheduleSave(store);
+}
+
+/**
+ * Creates the active space's active-tab view if it has none yet (lazy restore),
+ * then shows it and hides the rest. Every other restored tab materializes its
+ * view on first activation.
+ */
+function ensureActiveView(): void {
+  const activeTabId = store.activeTabId;
+  if (activeTabId !== null && !views.has(activeTabId)) {
+    const tab = store.list().find((t) => t.id === activeTabId);
+    if (tab !== undefined) {
+      createViewFor(tab, store.activeSpaceId);
+    }
+  }
+  setActive(activeTabId);
+}
+
+/**
+ * Activates a tab: selects it in the store, then reconciles its view — recreating
+ * a missing view (e.g. a not-yet-materialized restored tab, so a numeric
+ * activator shows a real page rather than blank) and retrying a view whose last
+ * load failed — before showing it and broadcasting. Shared by the tabsActivate
+ * IPC handler and the "Activate Tab N" menu items.
+ */
+function activateTab(id: string): void {
+  store.activate(id);
+  // Honor the remap contract: a tab whose view failed to be created or failed
+  // to load is retried when the user next activates it. Recreate a missing
+  // view; otherwise re-issue the load for a view whose last load failed.
+  if (!views.has(id)) {
+    const tab = store.list().find((t) => t.id === id);
+    if (tab !== undefined) {
+      createViewFor(tab, store.activeSpaceId);
+    }
+  } else if (failedLoads.has(id)) {
+    const tracked = views.get(id);
+    const tab = store.list().find((t) => t.id === id);
+    if (tracked !== undefined && tab !== undefined) {
+      destroyView(id);
+      failedLoads.delete(id);
+      createViewFor(tab, tracked.spaceId);
+    }
+  }
+  setActive(id);
+  broadcast();
 }
 
 /**
@@ -459,7 +507,14 @@ function showSpaceContextMenu(id: string, x: number, y: number): SpaceContextMen
   return result;
 }
 
-function createWindow(): void {
+/**
+ * Creates the main window and its renderer. When `seed` is true and no open tab
+ * exists, seeds the default first tab (a fresh launch); a restored launch and a
+ * macOS re-activate pass `seed: false`. Restored tabs are NOT eagerly given
+ * views — only the active tab's view is materialized here (lazy restore), and
+ * every other tab materializes on first activation.
+ */
+function createWindow(seed: boolean): void {
   win = new BrowserWindow({
     width: 1280,
     height: 800,
@@ -514,17 +569,14 @@ function createWindow(): void {
     win = null;
   });
 
-  // Seed the first tab into the active (seeded "Personal") space only when it is
-  // empty (a fresh launch) — identical single-seeded-space launch behavior. On a
-  // macOS re-activate the store still holds the prior spaces and tabs, so we
-  // rebuild EVERY space's open-tab views for the new window.
-  if (store.allOpenTabs().length === 0) {
+  // Seed the first tab into the active (seeded "Personal") space only on a fresh
+  // launch with no open tab. A restored or re-activated launch keeps its state
+  // and does not seed. Views are created lazily: only the active tab's view is
+  // materialized now; every other tab gets its view on first activation.
+  if (seed && store.allOpenTabs().length === 0) {
     store.create({ url: DEFAULT_URL, title: titleForUrl(DEFAULT_URL) });
   }
-  for (const { spaceId, tab } of store.allOpenTabs()) {
-    createViewFor(tab, spaceId);
-  }
-  setActive(store.activeTabId);
+  ensureActiveView();
   broadcast();
 }
 
@@ -537,26 +589,7 @@ ipcMain.handle(IPC.tabsClose, (_event, id: string): void => {
 });
 
 ipcMain.handle(IPC.tabsActivate, (_event, id: string): void => {
-  store.activate(id);
-  // Honor the remap contract: a tab whose view failed to be created or failed
-  // to load is retried when the user next activates it. Recreate a missing
-  // view; otherwise re-issue the load for a view whose last load failed.
-  if (!views.has(id)) {
-    const tab = store.list().find((t) => t.id === id);
-    if (tab !== undefined) {
-      createViewFor(tab, store.activeSpaceId);
-    }
-  } else if (failedLoads.has(id)) {
-    const tracked = views.get(id);
-    const tab = store.list().find((t) => t.id === id);
-    if (tracked !== undefined && tab !== undefined) {
-      destroyView(id);
-      failedLoads.delete(id);
-      createViewFor(tab, tracked.spaceId);
-    }
-  }
-  setActive(id);
-  broadcast();
+  activateTab(id);
 });
 
 ipcMain.handle(IPC.tabsList, (): TabsState => store.snapshot());
@@ -626,8 +659,9 @@ ipcMain.handle(IPC.spacesRename, (_event, id: string, name: string): void => {
 
 ipcMain.handle(IPC.spacesActivate, (_event, id: string): void => {
   store.setActiveSpace(id);
-  // Hide the outgoing space's views and show the incoming space's active tab.
-  setActive(store.activeTabId);
+  // Hide the outgoing space's views and show the incoming space's active tab,
+  // materializing that tab's view if the restored space never had one.
+  ensureActiveView();
   broadcast();
 });
 
@@ -692,9 +726,7 @@ function buildMenu(): void {
         const tabs = store.list();
         const target = tabs[i];
         if (target !== undefined) {
-          store.activate(target.id);
-          setActive(target.id);
-          broadcast();
+          activateTab(target.id);
         }
       },
     }),
@@ -732,7 +764,7 @@ function buildMenu(): void {
         const target = store.spaces()[i];
         if (target !== undefined) {
           store.setActiveSpace(target.id);
-          setActive(store.activeTabId);
+          ensureActiveView();
           broadcast();
         }
       },
@@ -773,14 +805,29 @@ function buildMenu(): void {
 }
 
 app.whenReady().then(() => {
+  // Restore from disk if a prior session was persisted; otherwise start empty and
+  // let createWindow seed the first tab.
+  const restored = loadStore();
+  const restoredFromDisk = restored !== null;
+  if (restored !== null) {
+    store = restored;
+  }
   buildMenu();
-  createWindow();
-  sweepIdle();
+  createWindow(!restoredFromDisk);
+  // Skip the launch sweep on a restored session: its tabs' persisted
+  // lastActiveAt are stale by design (the app was closed), so an initial sweep
+  // would wrongly auto-archive every non-active restored tab. The recurring
+  // interval sweep still runs unconditionally.
+  if (!restoredFromDisk) {
+    sweepIdle();
+  }
   setInterval(sweepIdle, SWEEP_INTERVAL_MS);
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow();
+      // A re-activate must never seed: the in-memory store already reflects the
+      // user's state (even if all tabs are archived).
+      createWindow(false);
     }
   });
 });
@@ -789,4 +836,10 @@ app.on("window-all-closed", () => {
   if (process.platform !== "darwin") {
     app.quit();
   }
+});
+
+// Capture the final store snapshot synchronously at quit, so a mutation that
+// never broadcast (e.g. the window-focus lastActiveAt re-stamp) is still saved.
+app.on("before-quit", () => {
+  flush(store);
 });
