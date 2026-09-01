@@ -573,7 +573,9 @@ ipcMain.handle(IPC.profilesDelete, async (_event, id: string): Promise<void> => 
   store.deleteProfile(id);
   // The profile record is gone, so nothing can reach persist:<id> again — drop
   // its on-disk cookies/storage/cache instead of orphaning them forever.
-  await session.fromPartition("persist:" + id).clearStorageData();
+  const doomed = session.fromPartition("persist:" + id);
+  await doomed.clearStorageData();
+  await doomed.clearCache();
   broadcast();
 });
 

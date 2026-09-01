@@ -1015,6 +1015,17 @@ test.describe("zeo desktop app", () => {
       )
       .toBe(true);
 
+    const liveToken = "ZEOISO_FOXTROT";
+    await app.evaluate(async ({ webContents }, data) => {
+      const wc = webContents
+        .getAllWebContents()
+        .find((w) => w.getURL().includes(data.token));
+      if (wc === undefined) {
+        throw new Error("live view for the migration tab not found");
+      }
+      await wc.loadURL("data:text/html," + data.liveToken);
+    }, { ...setup, liveToken });
+
     // Over the bridge: reassign the space to the DESTINATION profile. This triggers
     // remapSpaceProfile's live path — capture tab ids, destroy views, move the
     // store profile reference, recreate views on the destination partition.
@@ -1023,20 +1034,22 @@ test.describe("zeo desktop app", () => {
       await zeo.spaces.setProfile(data.spaceId, data.toId);
     }, setup);
 
-    // Poll until the view matched by the SAME token exists AND now runs on the
-    // DESTINATION partition's Session by identity — proving the recreated view
-    // landed on the new partition, not the old one.
     await expect
       .poll(
         async () =>
           app.evaluate(({ session, webContents }, data) => {
             const wc = webContents
               .getAllWebContents()
-              .find((w) => w.getURL().includes(data.token));
+              .find((w) => w.getURL().includes(data.liveToken));
             return wc !== undefined && wc.session === session.fromPartition("persist:" + data.toId);
-          }, setup),
-        { message: "expected the recreated tab view to run on the destination profile's partition" },
+          }, { ...setup, liveToken }),
+        { message: "expected the recreated tab view on the destination partition at the navigated URL" },
       )
       .toBe(true);
+
+    const staleViewExists = await app.evaluate(({ webContents }, data) => {
+      return webContents.getAllWebContents().some((w) => w.getURL().includes(data.token));
+    }, setup);
+    expect(staleViewExists).toBe(false);
   });
 });
