@@ -294,7 +294,7 @@ test.describe("PRD 3.4 relaunch persistence", () => {
         }
         return state.archived.length;
       });
-      expect(archivedCount).toBeGreaterThanOrEqual(1);
+      expect(archivedCount).toBeGreaterThanOrEqual(2);
 
       await waitForDebouncedSave();
     } finally {
@@ -359,6 +359,13 @@ test.describe("PRD 3.4 relaunch persistence", () => {
     // --- Launch #2: read each partition's cookie store back. ---
     const second = await launch(userDataDir);
     try {
+      const spacesAfter = await readSpaces(second.sidebar);
+      const profileByName = new Map(
+        spacesAfter.spaces.map((s) => [s.name, s.profileId]),
+      );
+      expect(profileByName.get("SA")).toBe(profileIds.idA);
+      expect(profileByName.get("SB")).toBe(profileIds.idB);
+
       const result = await second.app.evaluate(
         async ({ session }, data) => {
           const a = await session
