@@ -279,7 +279,18 @@ export function loadStore(): SpaceStore | null {
     }
     moveDbAside();
     // Reopen a clean database in place so subsequent saves have somewhere to go.
-    db = openDb();
+    // If even the fresh open fails (e.g. an unwritable userData dir), degrade to
+    // no persistence rather than aborting startup: db stays null, scheduleSave/
+    // flush no-op, and the app still launches with a seeded in-memory store.
+    try {
+      db = openDb();
+    } catch (reopenErr: unknown) {
+      console.error(
+        "zeo.db could not be recreated; running without persistence this session:",
+        reopenErr,
+      );
+      db = null;
+    }
     return null;
   }
 }

@@ -136,7 +136,9 @@ function closeTab(id: string): void {
   // A thrown Error (e.g. unknown id) propagates out to the caller.
   store.close(id);
   destroyView(id);
-  setActive(store.activeTabId);
+  // MRU re-activation may land on a not-yet-materialized restored sibling tab,
+  // so ensure its view exists before showing it (lazy restore).
+  ensureActiveView();
   broadcast();
 }
 
@@ -150,7 +152,9 @@ function removeTab(id: string): void {
   // A thrown Error (e.g. unknown id) propagates out to the caller.
   store.remove(id);
   destroyView(id);
-  setActive(store.activeTabId);
+  // MRU re-activation may land on a not-yet-materialized restored sibling tab,
+  // so ensure its view exists before showing it (lazy restore).
+  ensureActiveView();
   broadcast();
 }
 
@@ -180,7 +184,9 @@ function unpinTab(id: string): void {
 
 function archiveTab(id: string): void {
   store.archive(id);
-  setActive(store.activeTabId);
+  // Archiving the active tab re-points active to an MRU sibling that may be a
+  // not-yet-materialized restored tab, so ensure its view exists (lazy restore).
+  ensureActiveView();
   broadcast();
 }
 
@@ -215,8 +221,9 @@ function deleteSpace(id: string): void {
   store.deleteSpace(id);
 
   if (wasActive) {
-    // The store activated a surviving space; show its active tab, hide the rest.
-    setActive(store.activeTabId);
+    // The store activated a surviving space; materialize its active tab's view
+    // if the lazy restore never created one, then show it and hide the rest.
+    ensureActiveView();
   }
   broadcast();
 }
