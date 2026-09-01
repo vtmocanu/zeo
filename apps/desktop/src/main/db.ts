@@ -245,17 +245,29 @@ function openDb(): DatabaseType {
   const database = new Database(dbPath());
   database.pragma("journal_mode = WAL");
   database.pragma("foreign_keys = ON");
-  migrate(database);
+  try {
+    migrate(database);
+  } catch (err) {
+    try {
+      database.close();
+    } catch {
+      // Ignore close failures while unwinding an already-failed open.
+    }
+    throw err;
+  }
   return database;
 }
 
 /**
  * Opens (creating/migrating as needed) the on-disk database and returns the
  * restored {@link SpaceStore}, or `null` when there is nothing to restore (a
- * fresh database — the caller then seeds an initial store). On ANY failure to
- * open, migrate, or read (a corrupt file, or a schema version this build cannot
- * read), the offending files are moved aside, a fresh empty database is created
- * in their place, and `null` is returned so the app still launches.
+ * fresh database — the caller then seeds an initial store). On a corrupt or
+ * otherwise unreadable file, the offending files are moved aside, a fresh empty
+ * database is created in their place, and `null` is returned so the app still
+ * launches. The ONE exception is a database written by a NEWER build (schema
+ * version ahead of this build): that file is PRESERVED in place — never moved
+ * aside or replaced — and the session simply runs without persistence, so a
+ * later upgrade can still read the state.
  */
 export function loadStore(): SpaceStore | null {
   try {
@@ -265,6 +277,24 @@ export function loadStore(): SpaceStore | null {
     }
     return null;
   } catch (err: unknown) {
+    if (err instanceof UnsupportedSchemaVersionError) {
+      // A newer build wrote this database. Do NOT move it aside or replace it —
+      // that would destroy state a later upgrade could still read. Preserve the
+      // file at its active path and run without persistence this session.
+      if (db !== null) {
+        try {
+          db.close();
+        } catch {
+          // Ignore close failures on the newer-schema handle.
+        }
+        db = null;
+      }
+      console.error(
+        "zeo.db was written by a newer build; running without persistence this session:",
+        err,
+      );
+      return null;
+    }
     console.error(
       "zeo.db could not be opened/read; moving it aside and starting fresh:",
       err,
