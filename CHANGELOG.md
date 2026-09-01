@@ -9,6 +9,26 @@ milestone, a minor bump only for very large breakthroughs.
 
 ## [Unreleased]
 
+## [0.0.8] - 2026-09-01
+
+### Added
+
+- Persistence: spaces, profiles, and tabs now survive quit and relaunch via
+  an on-disk SQLite database (`better-sqlite3`) owned by the Electron main
+  process. State loads on launch, saves are debounced (~1s) after
+  mutations, and a final synchronous write runs on quit so no in-flight
+  change is lost.
+- Persisted state covers each space's open and archived tabs, pin state and
+  order, the active space, and each space's active tab — a relaunch
+  restores the browser to where it was left, including an archived-only
+  space (nothing re-seeded).
+- Restored tabs recreate their `WebContentsView`s lazily: only the active
+  space's active tab gets a view at startup, with the rest materialized on
+  first activation (including switching space/MRU) to keep launch fast.
+- A corrupt or unreadable database, or one written by a newer schema
+  version, is moved aside rather than crashing or silently discarding data,
+  and the app starts fresh from a new database.
+
 ## [0.0.7] - 2026-09-01
 
 ### Added
