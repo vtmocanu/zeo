@@ -45,6 +45,57 @@ export class TabStore {
   }
 
   /**
+   * Rebuilds a {@link TabStore} from persisted tabs, laying the records into the
+   * internal array in EXACTLY the given order and assigning the private sequence
+   * fields so the store REPRODUCES the input under `list()`/`archived()`.
+   *
+   * The caller passes open tabs in `list()` order (pinned-then-unpinned)
+   * followed by archived tabs in `archived()` order (most-recently-archived
+   * first). Because `list()` filters by the `pinned` flag while preserving array
+   * order, the open prefix reproduces exactly. For the archived suffix,
+   * `archived()` sorts by `archivedAt` desc then `archivalSeq` desc, so an
+   * EARLIER archived-array element is given a LARGER `archivalSeq`; that keeps
+   * the caller's order when two archived tabs share an `archivedAt`.
+   * `activationSeq` increases in array order, and the internal `seq` counter is
+   * advanced past every value assigned so later operations stay monotonic.
+   *
+   * The active pointer is set to `activeTabId` verbatim (`null` allowed); the
+   * caller is responsible for having repaired it to a valid OPEN tab id or
+   * `null` beforehand — this method does not re-validate it.
+   */
+  static hydrate(
+    orderedOpenThenArchived: Tab[],
+    activeTabId: string | null,
+    options: TabStoreOptions = {},
+  ): TabStore {
+    const store = new TabStore(options);
+    let seq = 0;
+    const records: TabRecord[] = orderedOpenThenArchived.map((tab) => ({
+      id: tab.id,
+      url: tab.url,
+      title: tab.title,
+      faviconUrl: tab.faviconUrl,
+      createdAt: tab.createdAt,
+      pinned: tab.pinned,
+      lastActiveAt: tab.lastActiveAt,
+      archivedAt: tab.archivedAt,
+      activationSeq: ++seq,
+      archivalSeq: 0,
+    }));
+    // Assign `archivalSeq` so the FIRST archived-array element (which
+    // `archived()` must return first) gets the LARGEST value: walk the archived
+    // records in reverse, stamping increasing values.
+    const archivedRecords = records.filter((record) => record.archivedAt !== null);
+    for (let i = archivedRecords.length - 1; i >= 0; i--) {
+      archivedRecords[i].archivalSeq = ++seq;
+    }
+    store.tabs.push(...records);
+    store.seq = seq;
+    store.activeId = activeTabId;
+    return store;
+  }
+
+  /**
    * Projects an internal record down to the public {@link Tab} shape, dropping
    * the private `activationSeq`/`archivalSeq` fields. Every accessor returns
    * the result of this helper so the sequence bookkeeping never leaks.
@@ -85,6 +136,35 @@ export class TabStore {
   /** Open (non-archived) records in their current array order. */
   private openTabs(): TabRecord[] {
     return this.tabs.filter((tab) => tab.archivedAt === null);
+  }
+
+  /**
+   * Re-bases every OPEN (non-archived) tab's `lastActiveAt` by a single shared
+   * delta so the most-recently-active open tab lands exactly at `now`, while the
+   * relative MRU spacing among open tabs is preserved. Used at relaunch so idle
+   * sweeps measure idleness from the restart, not across the closed gap.
+   *
+   * No-op when there are no open tabs or when the required delta is 0. Archived
+   * tabs and the active pointer (`this.activeId`) are left untouched.
+   */
+  rebaseActivity(now: number): void {
+    const open = this.openTabs();
+    if (open.length === 0) {
+      return;
+    }
+    let max = open[0].lastActiveAt;
+    for (const record of open) {
+      if (record.lastActiveAt > max) {
+        max = record.lastActiveAt;
+      }
+    }
+    const delta = now - max;
+    if (delta === 0) {
+      return;
+    }
+    for (const record of open) {
+      record.lastActiveAt += delta;
+    }
   }
 
   /**

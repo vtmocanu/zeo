@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { TabStore } from "./tab-store.js";
+import type { Tab } from "./tab.js";
 
 /**
  * Builds a store with deterministic id and clock factories:
@@ -693,6 +694,89 @@ describe("TabStore.archiveIdle", () => {
     for (const tab of store.archived()) {
       expect(tab.archivedAt).not.toBeNull();
     }
+  });
+});
+
+describe("TabStore.rebaseActivity", () => {
+  /** Builds a persisted {@link Tab} with the given id/lastActiveAt/archivedAt. */
+  function persistedTab(
+    id: string,
+    lastActiveAt: number,
+    archivedAt: number | null = null,
+  ): Tab {
+    return {
+      id,
+      url: `https://${id}.test`,
+      title: id,
+      faviconUrl: null,
+      createdAt: 0,
+      pinned: false,
+      lastActiveAt,
+      archivedAt,
+    };
+  }
+
+  test("shifts open tabs so the newest lands at now, preserving order and spacing", () => {
+    // Open tabs (list order) with distinct lastActiveAt; newest is t2 at 300.
+    const store = TabStore.hydrate(
+      [
+        persistedTab("t1", 100),
+        persistedTab("t2", 300),
+        persistedTab("t3", 200),
+      ],
+      "t2",
+    );
+
+    store.rebaseActivity(1000);
+
+    const byId = new Map(store.list().map((t) => [t.id, t]));
+    // delta = 1000 - 300 = 700; every open tab shifts by the same delta.
+    expect(byId.get("t1")!.lastActiveAt).toBe(800);
+    expect(byId.get("t2")!.lastActiveAt).toBe(1000);
+    expect(byId.get("t3")!.lastActiveAt).toBe(900);
+    // Newest open tab sits exactly at now; relative differences preserved.
+    expect(byId.get("t2")!.lastActiveAt).toBe(1000);
+    expect(byId.get("t2")!.lastActiveAt - byId.get("t1")!.lastActiveAt).toBe(200);
+    expect(byId.get("t2")!.lastActiveAt - byId.get("t3")!.lastActiveAt).toBe(100);
+    // Array/MRU order among open tabs is unchanged.
+    expect(store.list().map((t) => t.id)).toEqual(["t1", "t2", "t3"]);
+    // Active pointer untouched.
+    expect(store.activeTabId).toBe("t2");
+  });
+
+  test("no-op when there are no open tabs (all archived)", () => {
+    const store = TabStore.hydrate(
+      [persistedTab("t1", 100, 150), persistedTab("t2", 200, 250)],
+      null,
+    );
+
+    store.rebaseActivity(1_000_000);
+
+    const archived = new Map(store.archived().map((t) => [t.id, t]));
+    expect(archived.get("t1")!.lastActiveAt).toBe(100);
+    expect(archived.get("t2")!.lastActiveAt).toBe(200);
+    expect(store.list()).toEqual([]);
+  });
+
+  test("leaves archived tabs' lastActiveAt untouched", () => {
+    const store = TabStore.hydrate(
+      [
+        persistedTab("t1", 100),
+        persistedTab("t2", 300),
+        persistedTab("a1", 50, 60),
+      ],
+      "t2",
+    );
+
+    store.rebaseActivity(1000);
+
+    // Open tabs shifted by delta = 700.
+    const open = new Map(store.list().map((t) => [t.id, t]));
+    expect(open.get("t1")!.lastActiveAt).toBe(800);
+    expect(open.get("t2")!.lastActiveAt).toBe(1000);
+    // Archived tab is left exactly where it was.
+    const archived = new Map(store.archived().map((t) => [t.id, t]));
+    expect(archived.get("a1")!.lastActiveAt).toBe(50);
   });
 });
 

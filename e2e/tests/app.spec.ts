@@ -1,6 +1,9 @@
 import { test, expect, _electron as electron } from "@playwright/test";
 import type { ElectronApplication, Page } from "@playwright/test";
 import { fileURLToPath } from "node:url";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 // Absolute path to the built Electron main entry, resolved from this test file
 // (e2e is ESM, so no __dirname). Layout: e2e/tests/app.spec.ts -> repo root is
@@ -210,16 +213,24 @@ test.describe("zeo desktop app", () => {
   // state. Cold start under xvfb is slow, hence the config's 60s per-test budget.
   let app!: ElectronApplication;
   let sidebar!: Page;
+  let userDataDir: string | undefined;
 
   test.beforeEach(async () => {
+    // Isolate on-disk persistence per test. PRD 3.4 makes every launch load and
+    // save a zeo.db in Electron's userData dir, so WITHOUT a per-test userData
+    // dir the launches would share one on-disk database and each test would
+    // inherit the previous one's spaces/tabs — breaking the "pristine store per
+    // launch" assumption above. A fresh temp dir per test restores isolation.
+    userDataDir = mkdtempSync(join(tmpdir(), "zeo-e2e-"));
     // Chromium refuses to launch as root without --no-sandbox. The GitHub CI
     // job runs as a non-root user, so it needs no flag; a containerized run
     // (the documented Playwright docker sidecar, which runs as root) sets
     // ZEO_E2E_NO_SANDBOX=1 to opt in. Gated so the default/CI path is unchanged.
+    const baseArgs = [mainPath, "--user-data-dir=" + userDataDir];
     const launchArgs =
       process.env.ZEO_E2E_NO_SANDBOX === "1"
-        ? [mainPath, "--no-sandbox"]
-        : [mainPath];
+        ? [...baseArgs, "--no-sandbox"]
+        : baseArgs;
     app = await electron.launch({
       args: launchArgs,
       // Empty string forces main's production `loadFile` path instead of a
@@ -237,6 +248,12 @@ test.describe("zeo desktop app", () => {
     // undefined and an unguarded close would throw a secondary error masking the
     // real launch failure.
     await app?.close();
+    // Remove the per-test userData dir (best-effort; the process has exited so
+    // its files are released). force ignores a missing dir if launch failed.
+    if (userDataDir !== undefined) {
+      rmSync(userDataDir, { recursive: true, force: true });
+      userDataDir = undefined;
+    }
   });
 
   test("shows the seeded tab and adds one via the new-tab button", async () => {
