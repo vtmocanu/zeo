@@ -139,6 +139,35 @@ export class TabStore {
   }
 
   /**
+   * Re-bases every OPEN (non-archived) tab's `lastActiveAt` by a single shared
+   * delta so the most-recently-active open tab lands exactly at `now`, while the
+   * relative MRU spacing among open tabs is preserved. Used at relaunch so idle
+   * sweeps measure idleness from the restart, not across the closed gap.
+   *
+   * No-op when there are no open tabs or when the required delta is 0. Archived
+   * tabs and the active pointer (`this.activeId`) are left untouched.
+   */
+  rebaseActivity(now: number): void {
+    const open = this.openTabs();
+    if (open.length === 0) {
+      return;
+    }
+    let max = open[0].lastActiveAt;
+    for (const record of open) {
+      if (record.lastActiveAt > max) {
+        max = record.lastActiveAt;
+      }
+    }
+    const delta = now - max;
+    if (delta === 0) {
+      return;
+    }
+    for (const record of open) {
+      record.lastActiveAt += delta;
+    }
+  }
+
+  /**
    * Creates a new tab with a fresh id and `createdAt` from the injected clock,
    * appends it to the end of the order, and makes it the active tab. A create
    * counts as an activation, so it seeds `lastActiveAt` from the clock and

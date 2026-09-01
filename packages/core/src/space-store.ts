@@ -389,6 +389,18 @@ export class SpaceStore {
   }
 
   /**
+   * Re-bases restored tab activity across EVERY space at launch: each space's
+   * `TabStore.rebaseActivity(now)` shifts its open tabs so the most-recently
+   * active one lands at `now`. This resets the idle clock to relaunch time so
+   * restored non-active tabs are not archived merely because the app was closed.
+   */
+  rebaseActivity(now: number): void {
+    for (const spaceId of this.order) {
+      this.spacesById.get(spaceId)!.tabs.rebaseActivity(now);
+    }
+  }
+
+  /**
    * Every open (non-archived) tab across all spaces, each tagged with its
    * owning space id. The desktop main uses this to rebuild every space's tab
    * views when a window is recreated (e.g. a macOS re-activate).

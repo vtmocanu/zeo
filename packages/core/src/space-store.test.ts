@@ -373,6 +373,65 @@ describe("SpaceStore.archiveIdleAll", () => {
   });
 });
 
+describe("SpaceStore.rebaseActivity", () => {
+  const IDLE_THRESHOLD = 100;
+  const RELAUNCH_AT = 1000 + 10_000;
+
+  /**
+   * Builds a two-space store whose tabs were all last active at t=1000 (the
+   * "persisted" state) and whose non-active tabs are p1 (Personal) and w1
+   * (Work). Returns the store plus its setClock so a test can jump to relaunch.
+   */
+  function twoSpaceStore(): {
+    store: SpaceStore;
+    setClock: (value: number) => void;
+    ids: { p1: string; p2: string; w1: string; w2: string };
+  } {
+    const { store, setClock } = makeClockStore(1000);
+    const p1 = store.create({ url: "https://p1.test" });
+    const p2 = store.create({ url: "https://p2.test" }); // active in Personal
+    const work = store.createSpace("Work");
+    store.setActiveSpace(work.id);
+    const w1 = store.create({ url: "https://w1.test" });
+    const w2 = store.create({ url: "https://w2.test" }); // active in Work
+    return {
+      store,
+      setClock,
+      ids: { p1: p1.id, p2: p2.id, w1: w1.id, w2: w2.id },
+    };
+  }
+
+  test("re-basing at relaunch keeps restored non-active tabs from being archived", () => {
+    // Control: WITHOUT a rebase, the closed-gap idle age archives every
+    // non-active tab across both spaces.
+    {
+      const { store, setClock, ids } = twoSpaceStore();
+      setClock(RELAUNCH_AT);
+      expect(new Set(store.archiveIdleAll(IDLE_THRESHOLD))).toEqual(
+        new Set([ids.p1, ids.w1]),
+      );
+    }
+
+    // With a rebase to relaunch time, the same sweep archives nothing: the
+    // restored open tabs read as freshly active.
+    const { store, setClock, ids } = twoSpaceStore();
+    setClock(RELAUNCH_AT);
+    store.rebaseActivity(RELAUNCH_AT);
+    expect(store.archiveIdleAll(IDLE_THRESHOLD)).toEqual([]);
+
+    // Every tab is still open in its own space.
+    const openIds = new Set<string>();
+    for (const spaceId of store.spaces().map((s) => s.id)) {
+      store.setActiveSpace(spaceId);
+      for (const tab of store.list()) {
+        openIds.add(tab.id);
+      }
+      expect(store.archived()).toEqual([]);
+    }
+    expect(openIds).toEqual(new Set([ids.p1, ids.p2, ids.w1, ids.w2]));
+  });
+});
+
 describe("SpaceStore.updateMeta", () => {
   test("updates the owning space's tab regardless of which space is active", () => {
     const store = makeStore();

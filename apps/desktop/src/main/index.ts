@@ -818,6 +818,10 @@ app.whenReady().then(() => {
   const restoredFromDisk = restored !== null;
   if (restored !== null) {
     store = restored;
+    // Reset the idle clock to relaunch time so restored non-active tabs are not
+    // archived by the recurring sweep just because the app was closed: re-base
+    // every open tab's lastActiveAt so the most-recently-active one sits at now.
+    store.rebaseActivity(Date.now());
   }
   buildMenu();
   createWindow(!restoredFromDisk);
