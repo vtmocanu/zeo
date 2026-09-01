@@ -2,8 +2,23 @@ import { app, BrowserWindow, WebContentsView, clipboard, ipcMain, Menu, session 
 import type { MenuItemConstructorOptions } from "electron";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { SpaceStore, IPC, titleForUrl, SIDEBAR_WIDTH } from "@zeo/core";
-import type { Profile, Space, SpacesState, Tab, TabContextMenuResult, TabsState } from "@zeo/core";
+import {
+  SpaceStore,
+  IPC,
+  titleForUrl,
+  SIDEBAR_WIDTH,
+  buildSpaceContextMenu,
+  defaultSpaceName,
+} from "@zeo/core";
+import type {
+  Profile,
+  Space,
+  SpaceContextMenuResult,
+  SpacesState,
+  Tab,
+  TabContextMenuResult,
+  TabsState,
+} from "@zeo/core";
 
 // The built main is emitted by electron-vite as ESM (out/main/index.js, the
 // package is "type": "module"), so `__dirname` is not defined — derive it from
@@ -359,6 +374,91 @@ function showTabContextMenu(id: string, x: number, y: number): TabContextMenuRes
   return { tabId: id, items };
 }
 
+/**
+ * Builds a space's context-menu descriptor and, outside headless e2e, pops the
+ * native menu for it. Mirrors {@link showTabContextMenu}: an unknown id returns
+ * an empty descriptor (and skips the throwing store reads), the descriptor is
+ * built purely by core's `buildSpaceContextMenu`, and the returned descriptor is
+ * the assertable seam. The native popup is dispatched by stable item id — rename
+ * and new-profile push a `spaceMenuAction` to the renderer for inline editing,
+ * delete and profile-assignment resolve entirely in main.
+ */
+function showSpaceContextMenu(id: string, x: number, y: number): SpaceContextMenuResult {
+  if (!store.spaces().some((s) => s.id === id)) {
+    return { spaceId: id, items: [] };
+  }
+
+  const result = buildSpaceContextMenu({
+    spaceId: id,
+    profiles: store.profiles(),
+    tabCount: store.tabsOfSpace(id).length,
+    currentProfileId: store.spaceProfileId(id),
+    canDelete: store.canDeleteSpace(id),
+  });
+
+  // Gate the native popup so headless e2e never blocks on it. win is non-null in
+  // this branch, so the webContents.send calls below are safe.
+  if (process.env.ZEO_E2E !== "1" && win !== null) {
+    const popWin = win;
+    const menu = Menu.buildFromTemplate(
+      result.items.map((item): MenuItemConstructorOptions => {
+        const wrap = (actionId: string, body: () => void) => (): void => {
+          try {
+            body();
+          } catch (err: unknown) {
+            console.error(`space context-menu action "${actionId}" failed:`, err);
+          }
+        };
+        if (item.id === "rename") {
+          return {
+            label: item.label,
+            enabled: item.enabled,
+            click: wrap(item.id, () =>
+              popWin.webContents.send(IPC.spaceMenuAction, { action: "rename", spaceId: id }),
+            ),
+          };
+        }
+        if (item.id === "delete") {
+          return {
+            label: item.label,
+            enabled: item.enabled,
+            click: wrap(item.id, () => deleteSpace(id)),
+          };
+        }
+        // item.id === "profile": the submenu parent.
+        return {
+          label: item.label,
+          enabled: item.enabled,
+          submenu: (item.submenu ?? []).map((child): MenuItemConstructorOptions => {
+            if (child.id === "new-profile") {
+              return {
+                label: child.label,
+                enabled: child.enabled,
+                click: wrap(child.id, () =>
+                  popWin.webContents.send(IPC.spaceMenuAction, { action: "new-profile", spaceId: id }),
+                ),
+              };
+            }
+            const pid = child.id.slice("profile:".length);
+            return {
+              label: child.label,
+              enabled: child.enabled,
+              type: "radio",
+              checked: child.checked === true,
+              click: wrap(child.id, () => remapSpaceProfile(id, pid)),
+            };
+          }),
+        };
+      }),
+    );
+    // x/y are window-relative (the renderer passes clientX/clientY); popup's
+    // x/y are window-relative too, so no screen conversion is needed.
+    menu.popup({ window: popWin, x, y });
+  }
+
+  return result;
+}
+
 function createWindow(): void {
   win = new BrowserWindow({
     width: 1280,
@@ -567,6 +667,12 @@ ipcMain.handle(IPC.profilesDelete, async (_event, id: string): Promise<void> => 
   }
 });
 
+ipcMain.handle(
+  IPC.spacesContextMenu,
+  (_event, id: string, x: number, y: number): SpaceContextMenuResult =>
+    showSpaceContextMenu(id, x, y),
+);
+
 ipcMain.handle(IPC.spacesList, (): SpacesState => store.spacesSnapshot());
 
 /**
@@ -576,14 +682,11 @@ ipcMain.handle(IPC.spacesList, (): SpacesState => store.spacesSnapshot());
  * globalShortcut / before-input-event (both forbidden by the PRD).
  */
 function buildMenu(): void {
-  // Nine hidden Activate-Tab-N items. The list is queried live inside each
-  // click at press time (never a build-time snapshot); accelerators still fire
-  // while visible:false. i is 0-based (0..8) mapping to Cmd/Ctrl+1..9.
   const activateItems: MenuItemConstructorOptions[] = Array.from(
     { length: 9 },
     (_unused, i): MenuItemConstructorOptions => ({
       label: `Activate Tab ${i + 1}`,
-      accelerator: `CmdOrCtrl+${i + 1}`,
+      accelerator: `CmdOrCtrl+Alt+${i + 1}`,
       visible: false,
       click: () => {
         const tabs = store.list();
@@ -619,6 +722,40 @@ function buildMenu(): void {
     ...activateItems,
   ];
 
+  const activateSpaceItems: MenuItemConstructorOptions[] = Array.from(
+    { length: 9 },
+    (_unused, i): MenuItemConstructorOptions => ({
+      label: `Activate Space ${i + 1}`,
+      accelerator: `CmdOrCtrl+${i + 1}`,
+      visible: false,
+      click: () => {
+        const target = store.spaces()[i];
+        if (target !== undefined) {
+          store.setActiveSpace(target.id);
+          setActive(store.activeTabId);
+          broadcast();
+        }
+      },
+    }),
+  );
+
+  const spacesSubmenu: MenuItemConstructorOptions[] = [
+    {
+      label: "New Space",
+      accelerator: "CmdOrCtrl+Shift+N",
+      // Create a default-named space, make it active, then run the same
+      // hide/show transition as a space switch and broadcast the new snapshot.
+      click: () => {
+        const space = store.createSpace(defaultSpaceName(store.spaces()));
+        store.setActiveSpace(space.id);
+        setActive(store.activeTabId);
+        broadcast();
+      },
+    },
+    { type: "separator" },
+    ...activateSpaceItems,
+  ];
+
   const template: MenuItemConstructorOptions[] = [
     // macOS app menu (role: appMenu) provides the standard about/quit set;
     // omitting it on darwin would strip Cmd+Q and friends.
@@ -626,6 +763,7 @@ function buildMenu(): void {
       ? [{ role: "appMenu" } as MenuItemConstructorOptions]
       : []),
     { label: "Tabs", submenu: tabsSubmenu },
+    { label: "Spaces", submenu: spacesSubmenu },
     // editMenu preserves undo/redo/cut/copy/paste/selectAll accelerators so web
     // contents keep Cmd/Ctrl+C/V/X/A.
     { role: "editMenu" },

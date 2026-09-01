@@ -8,7 +8,7 @@ import {
   type RefObject,
 } from "react";
 import type { Tab, TabsState } from "@zeo/core";
-import { SIDEBAR_WIDTH, formatRelativeArchived } from "@zeo/core";
+import { SIDEBAR_WIDTH, defaultSpaceName, formatRelativeArchived } from "@zeo/core";
 import "./App.css";
 
 // Pointer travel (px) required before a press turns into a drag. Below this a
@@ -385,6 +385,44 @@ function ArchivedRow({ tab, now }: { tab: Tab; now: number }) {
   );
 }
 
+type SpaceEdit =
+  | { mode: "create" }
+  | { mode: "rename"; spaceId: string }
+  | { mode: "new-profile"; spaceId: string };
+
+function SpaceNameInput({
+  value,
+  onChange,
+  onCommit,
+  onCancel,
+}: {
+  value: string;
+  onChange: (next: string) => void;
+  onCommit: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <input
+      type="text"
+      className="space-name-input"
+      data-testid="space-name-input"
+      autoFocus
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          onCommit();
+        } else if (event.key === "Escape") {
+          event.preventDefault();
+          onCancel();
+        }
+      }}
+      onBlur={() => onCancel()}
+    />
+  );
+}
+
 /**
  * Keyboard-first left sidebar listing open tabs. This is the renderer: it
  * reaches the main process ONLY through the injected global `window.zeo`
@@ -402,6 +440,31 @@ export function App() {
   const [showArchived, setShowArchived] = useState(false);
   const [now, setNow] = useState(() => Date.now());
 
+  // Ephemeral inline-edit buffer for the space switcher (create / rename /
+  // new-profile). `editRef` mirrors `edit` so a stray blur firing after an
+  // Escape-cancel unmounts the input is a guaranteed no-op.
+  const [edit, setEditState] = useState<SpaceEdit | null>(null);
+  const [draft, setDraft] = useState("");
+  const editRef = useRef<SpaceEdit | null>(null);
+  const spacesRef = useRef<TabsState["spaces"]>([]);
+  const openEdit = useCallback((next: SpaceEdit, initialDraft: string) => {
+    editRef.current = next;
+    setDraft(initialDraft);
+    setEditState(next);
+  }, []);
+  const cancelEdit = useCallback(() => {
+    editRef.current = null;
+    setEditState(null);
+  }, []);
+
+  useEffect(() => {
+    spacesRef.current = state.spaces;
+    const current = editRef.current;
+    if (current !== null && current.mode !== "create" && !state.spaces.some((s) => s.id === current.spaceId)) {
+      cancelEdit();
+    }
+  }, [state.spaces, cancelEdit]);
+
   useEffect(() => {
     if (!showArchived) {
       return;
@@ -418,9 +481,17 @@ export function App() {
       return;
     }
     let sawBroadcast = false;
-    const unsub = window.zeo.onStateChange((s) => {
+    const unsubState = window.zeo.onStateChange((s) => {
       sawBroadcast = true;
       setState(s);
+    });
+    const unsubMenu = window.zeo.onSpaceMenuAction((action) => {
+      if (action.action === "rename") {
+        const space = spacesRef.current.find((s) => s.id === action.spaceId);
+        openEdit({ mode: "rename", spaceId: action.spaceId }, space?.name ?? "");
+      } else {
+        openEdit({ mode: "new-profile", spaceId: action.spaceId }, "");
+      }
     });
     window.zeo.tabs
       .list()
@@ -430,8 +501,57 @@ export function App() {
         }
       })
       .catch(() => {});
-    return unsub;
-  }, []);
+    return () => {
+      unsubState();
+      unsubMenu();
+    };
+  }, [openEdit]);
+
+  const commitEdit = useCallback(() => {
+    const current = editRef.current;
+    if (!current) {
+      return;
+    }
+    cancelEdit();
+    const name = draft.trim();
+    if (name.length === 0) {
+      // Blank/whitespace-only: cancel rather than dispatch a name the store
+      // would reject anyway.
+      return;
+    }
+    if (current.mode !== "create" && !spacesRef.current.some((s) => s.id === current.spaceId)) {
+      return;
+    }
+    if (current.mode === "rename") {
+      void window.zeo?.spaces.rename(current.spaceId, name).catch(() => {});
+      return;
+    }
+    if (current.mode === "create") {
+      void (async () => {
+        try {
+          const created = await window.zeo?.spaces.create(name);
+          if (created) {
+            await window.zeo?.spaces.activate(created.id);
+          }
+        } catch {
+          // Bridge unavailable or the store rejected the name; the buffer is
+          // already discarded, so nothing to roll back.
+        }
+      })();
+      return;
+    }
+    const spaceId = current.spaceId;
+    void (async () => {
+      try {
+        const created = await window.zeo?.profiles.create(name);
+        if (created) {
+          await window.zeo?.spaces.setProfile(spaceId, created.id);
+        }
+      } catch {
+        // As above: buffer discarded, nothing to roll back.
+      }
+    })();
+  }, [draft, cancelEdit]);
 
   // `state.tabs` is already ordered pinned-first then unpinned; filtering
   // preserves that order within each section.
@@ -525,6 +645,71 @@ export function App() {
           + New tab
         </button>
       </header>
+
+      <nav className="space-switcher" data-testid="space-switcher">
+        {state.spaces.map((space) => {
+          const isActive = space.id === state.activeSpaceId;
+          if (edit?.mode === "rename" && edit.spaceId === space.id) {
+            return (
+              <SpaceNameInput
+                key={space.id}
+                value={draft}
+                onChange={setDraft}
+                onCommit={commitEdit}
+                onCancel={cancelEdit}
+              />
+            );
+          }
+          return (
+            <button
+              key={space.id}
+              type="button"
+              className={`space-item${isActive ? " space-item--active" : ""}`}
+              data-testid="space-item"
+              data-space-id={space.id}
+              aria-current={isActive ? "true" : undefined}
+              onClick={() =>
+                void window.zeo?.spaces.activate(space.id).catch(() => {})
+              }
+              onDoubleClick={() =>
+                openEdit({ mode: "rename", spaceId: space.id }, space.name)
+              }
+              onContextMenu={(event) => {
+                event.preventDefault();
+                void window.zeo?.spaces
+                  .showContextMenu(space.id, event.clientX, event.clientY)
+                  .then((result) => {
+                    (
+                      globalThis as { __zeoLastSpaceContextMenu?: unknown }
+                    ).__zeoLastSpaceContextMenu = result;
+                  })
+                  .catch(() => {});
+              }}
+            >
+              {space.name}
+            </button>
+          );
+        })}
+        {edit?.mode === "create" || edit?.mode === "new-profile" ? (
+          <SpaceNameInput
+            key="space-edit-trailing"
+            value={draft}
+            onChange={setDraft}
+            onCommit={commitEdit}
+            onCancel={cancelEdit}
+          />
+        ) : (
+          <button
+            type="button"
+            className="space-new"
+            data-testid="new-space-button"
+            aria-label="New space"
+            onClick={() => openEdit({ mode: "create" }, defaultSpaceName(state.spaces))}
+          >
+            +
+          </button>
+        )}
+      </nav>
 
       {state.tabs.length === 0 ? (
         <p className="sidebar__empty">No open tabs</p>

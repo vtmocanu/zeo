@@ -53,6 +53,22 @@ interface BridgeMenuResult {
   tabId: string;
   items: BridgeMenuItem[];
 }
+// The serializable space context-menu descriptor main returns from
+// spaces.showContextMenu. Structurally @zeo/core's SpaceContextMenuResult,
+// redeclared here (like BridgeMenuResult for tabs) so e2e stays import-free of
+// @zeo/core. `id` is the stable action key; `submenu` carries the Profile
+// entries (one `checked`) plus a trailing "new-profile" item.
+interface BridgeSpaceMenuItem {
+  id: string;
+  label: string;
+  enabled: boolean;
+  checked?: boolean;
+  submenu?: BridgeSpaceMenuItem[];
+}
+interface BridgeSpaceMenuResult {
+  spaceId: string;
+  items: BridgeSpaceMenuItem[];
+}
 interface ZeoBridge {
   tabs: {
     create(url?: string): Promise<BridgeTab>;
@@ -71,6 +87,7 @@ interface ZeoBridge {
     activate(id: string): Promise<void>;
     setProfile(spaceId: string, profileId: string): Promise<void>;
     list(): Promise<BridgeSpacesState>;
+    showContextMenu(id: string, x: number, y: number): Promise<BridgeSpaceMenuResult>;
   };
   profiles: {
     create(name: string): Promise<BridgeProfile>;
@@ -332,7 +349,37 @@ test.describe("zeo desktop app", () => {
     expect(accelerators["New Tab"]).toBe("CmdOrCtrl+T");
     expect(accelerators["Close Tab"]).toBe("CmdOrCtrl+W");
     for (let n = 1; n <= 9; n += 1) {
-      expect(accelerators[`Activate Tab ${n}`]).toBe(`CmdOrCtrl+${n}`);
+      expect(accelerators[`Activate Tab ${n}`]).toBe(`CmdOrCtrl+Alt+${n}`);
+    }
+  });
+
+  // PRD 3.3 — the NEW "Spaces" application-menu submenu binds its accelerators.
+  // Mirrors the "Tabs" accelerator test: reads the `.accelerator` strings from the
+  // main process so a removed/altered binding fails here (the numeric activators
+  // now own the plain CmdOrCtrl+N chord; New Space is CmdOrCtrl+Shift+N).
+  test("the Spaces menu binds the expected accelerators", async () => {
+    const accelerators = await app.evaluate(({ Menu }) => {
+      const menu = Menu.getApplicationMenu();
+      if (menu === null) {
+        throw new Error("no application menu installed");
+      }
+      const spacesMenu = menu.items.find((item) => item.label === "Spaces");
+      if (spacesMenu?.submenu == null) {
+        throw new Error('no "Spaces" submenu');
+      }
+      const map: Record<string, string | null | undefined> = {};
+      for (const item of spacesMenu.submenu.items) {
+        if (!item.label) {
+          continue;
+        }
+        map[item.label] = item.accelerator;
+      }
+      return map;
+    });
+
+    expect(accelerators["New Space"]).toBe("CmdOrCtrl+Shift+N");
+    for (let n = 1; n <= 9; n += 1) {
+      expect(accelerators[`Activate Space ${n}`]).toBe(`CmdOrCtrl+${n}`);
     }
   });
 
@@ -1083,5 +1130,278 @@ test.describe("zeo desktop app", () => {
         { message: "expected the deleted profile's partition cookies to be cleared" },
       )
       .toBe(0);
+  });
+
+  // PRD 3.3 deliverable — the switcher strip renders every space and marks the
+  // active one with aria-current. Fresh launch shows the single seeded "Personal"
+  // space (active); creating a second space over the bridge (which does NOT steal
+  // focus) renders a second strip item while Personal keeps aria-current. Keys off
+  // testids / data-space-id / names only, so no network navigation can flake it.
+  test("the switcher renders all spaces and highlights the active one", async () => {
+    const spaceItems = sidebar.getByTestId("space-item");
+
+    // Fresh launch: exactly one strip item, "Personal", active.
+    await expect(spaceItems).toHaveCount(1);
+    await expect(spaceItems.first()).toHaveText("Personal");
+    await expect(spaceItems.first()).toHaveAttribute("aria-current", "true");
+
+    const personalId = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      return (await zeo.spaces.list()).activeSpaceId;
+    });
+
+    // Create a second space over the bridge; Personal stays active.
+    const work = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      return zeo.spaces.create("Work");
+    });
+
+    // Both spaces now render, in creation order, and only Personal is current.
+    await expect(spaceItems).toHaveCount(2);
+    await expect(spaceItems).toHaveText(["Personal", "Work"]);
+    await expect(
+      sidebar.locator(`[data-space-id="${personalId}"]`),
+    ).toHaveAttribute("aria-current", "true");
+    await expect(
+      sidebar.locator(`[data-space-id="${work.id}"]`),
+    ).not.toHaveAttribute("aria-current", "true");
+  });
+
+  // PRD 3.3 deliverable — clicking a switcher item activates that space and swaps
+  // the rendered tab list to that space's own tabs. We seed a tab into "Work" over
+  // the bridge, then drive the switch through the UI (click the strip item, located
+  // by data-space-id) and assert the tab-item order and aria-current follow. All
+  // assertions key off ids (never live titles); Work's tab loads about:blank.
+  test("clicking a space item switches the visible tab list", async () => {
+    const tabIds = (): Promise<(string | null)[]> =>
+      sidebar
+        .getByTestId("tab-item")
+        .evaluateAll((els) => els.map((el) => el.getAttribute("data-tab-id")));
+
+    // Fresh launch: Personal is active with its single seeded tab.
+    const initial = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      return zeo.tabs.list();
+    });
+    const personalId = initial.activeSpaceId;
+    const seededTabId = initial.activeTabId;
+    expect(seededTabId).not.toBeNull();
+
+    // Over the bridge: create Work, activate it, seed one tab into it.
+    const workTab = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      const work = await zeo.spaces.create("Work");
+      await zeo.spaces.activate(work.id);
+      const tab = await zeo.tabs.create("about:blank");
+      return { spaceId: work.id, tabId: tab.id };
+    });
+
+    // Work is active and shows only its own tab.
+    await expect.poll(tabIds).toEqual([workTab.tabId]);
+    await expect(
+      sidebar.locator(`[data-space-id="${workTab.spaceId}"]`),
+    ).toHaveAttribute("aria-current", "true");
+
+    // Click the Personal strip item (round-trips: click -> bridge activate ->
+    // broadcast -> re-render). The tab list becomes Personal's seeded tab, and
+    // aria-current follows the click.
+    await sidebar.locator(`[data-space-id="${personalId}"]`).click();
+    await expect.poll(tabIds).toEqual([seededTabId]);
+    await expect(
+      sidebar.locator(`[data-space-id="${personalId}"]`),
+    ).toHaveAttribute("aria-current", "true");
+    await expect(
+      sidebar.locator(`[data-space-id="${workTab.spaceId}"]`),
+    ).not.toHaveAttribute("aria-current", "true");
+
+    // Click Work again: the list swaps back to Work's tab.
+    await sidebar.locator(`[data-space-id="${workTab.spaceId}"]`).click();
+    await expect.poll(tabIds).toEqual([workTab.tabId]);
+    await expect(
+      sidebar.locator(`[data-space-id="${workTab.spaceId}"]`),
+    ).toHaveAttribute("aria-current", "true");
+    await expect(
+      sidebar.locator(`[data-space-id="${personalId}"]`),
+    ).not.toHaveAttribute("aria-current", "true");
+  });
+
+  // PRD 3.3 deliverable — the inline "+" create flow. Clicking new-space-button
+  // opens the shared inline input prefilled with the default name ("Space 2" when
+  // only "Personal" exists); committing on Enter creates the space AND activates it
+  // (unlike the bridge `create`, which does not steal focus). Assert both the strip
+  // (aria-current) and the store (activeSpaceId) reflect the new space.
+  test("creating a space via the + button activates it", async () => {
+    const spaceItems = sidebar.getByTestId("space-item");
+    await expect(spaceItems).toHaveCount(1);
+
+    // Open the inline create input; it prefills the next default name.
+    await sidebar.getByTestId("new-space-button").click();
+    const input = sidebar.getByTestId("space-name-input");
+    await expect(input).toBeVisible();
+    await expect(input).toHaveValue("Space 2");
+
+    // Commit on Enter.
+    await input.press("Enter");
+
+    // A second strip item "Space 2" appears and becomes active.
+    await expect(spaceItems).toHaveCount(2);
+    await expect(spaceItems).toHaveText(["Personal", "Space 2"]);
+    const created = sidebar.locator(`[data-space-id]`).filter({ hasText: "Space 2" });
+    await expect(created).toHaveAttribute("aria-current", "true");
+
+    // The store agrees: the active space is the newly created "Space 2".
+    const list = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      return zeo.spaces.list();
+    });
+    const active = list.spaces.find((s) => s.id === list.activeSpaceId);
+    expect(active?.name).toBe("Space 2");
+  });
+
+  // PRD 3.3 deliverable — inline rename via double-click. Double-clicking a strip
+  // item opens the shared inline input prefilled with the live name; committing on
+  // Enter renames the space and the strip reflects the STORE after commit. Keys off
+  // testids / names only.
+  test("renaming a space via double-click updates the strip", async () => {
+    const spaceItems = sidebar.getByTestId("space-item");
+    const personalId = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      return (await zeo.spaces.list()).activeSpaceId;
+    });
+
+    // Double-click the "Personal" item to open its inline rename input.
+    await sidebar.locator(`[data-space-id="${personalId}"]`).dblclick();
+    const input = sidebar.getByTestId("space-name-input");
+    await expect(input).toBeVisible();
+    await expect(input).toHaveValue("Personal");
+
+    // Select-all + replace, then commit on Enter.
+    await input.fill("Renamed");
+    await input.press("Enter");
+
+    // The strip reflects the committed store name.
+    await expect(spaceItems).toHaveCount(1);
+    await expect(spaceItems.first()).toHaveText("Renamed");
+    const renamed = await sidebar.evaluate(async (id) => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      const list = await zeo.spaces.list();
+      return list.spaces.find((s) => s.id === id)?.name ?? null;
+    }, personalId);
+    expect(renamed).toBe("Renamed");
+  });
+
+  // PRD 3.3 deliverable — deleting a space falls back to another. The switcher has
+  // no delete button (deletion is via the native menu, not headlessly poppable), so
+  // — like the 3.1 test — we drive delete over the bridge and assert the strip and
+  // active-space fallback. Create + activate an empty "Work", delete it, and the
+  // strip drops back to the single active "Personal".
+  test("deleting an empty space falls back to another", async () => {
+    const spaceItems = sidebar.getByTestId("space-item");
+
+    const ids = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      const before = await zeo.spaces.list();
+      const work = await zeo.spaces.create("Work");
+      await zeo.spaces.activate(work.id);
+      return { personalId: before.activeSpaceId, workId: work.id };
+    });
+    await expect(spaceItems).toHaveCount(2);
+
+    // Delete Work over the bridge while it is active.
+    await sidebar.evaluate(async (id) => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.spaces.delete(id);
+    }, ids.workId);
+
+    // The strip drops to a single "Personal" item, and it is active.
+    await expect(spaceItems).toHaveCount(1);
+    await expect(spaceItems.first()).toHaveText("Personal");
+    await expect(
+      sidebar.locator(`[data-space-id="${ids.personalId}"]`),
+    ).toHaveAttribute("aria-current", "true");
+    const afterDelete = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      return zeo.spaces.list();
+    });
+    expect(afterDelete.activeSpaceId).toBe(ids.personalId);
+  });
+
+  // PRD 3.3 deliverable — the space context-menu descriptor. Covers three shapes:
+  // (1) the LAST remaining space omits "delete" (read over the bridge to avoid
+  //     depending on a right-click when only one space exists);
+  // (2) a deletable space right-clicked in the UI stashes {rename,delete,profile}
+  //     on globalThis.__zeoLastSpaceContextMenu, with a Profile submenu carrying a
+  //     checked current-profile entry and a trailing "New profile…" item;
+  // (3) a space WITH tabs labels delete "Delete (N tabs)".
+  // All assertions key off stable ids/labels (never live titles).
+  test("right-clicking a space returns the expected context-menu descriptor", async () => {
+    // (1) Fresh launch: a single "Personal" space is the LAST space, so its
+    // descriptor (read over the bridge) has NO "delete" item.
+    const personalId = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      return (await zeo.spaces.list()).activeSpaceId;
+    });
+    const lastSpaceDescriptor = await sidebar.evaluate(async (id) => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      return zeo.spaces.showContextMenu(id, 0, 0);
+    }, personalId);
+    expect(lastSpaceDescriptor.spaceId).toBe(personalId);
+    expect(lastSpaceDescriptor.items.some((i) => i.id === "delete")).toBe(false);
+    // Rename and Profile are always present.
+    expect(lastSpaceDescriptor.items.map((i) => i.id)).toEqual(["rename", "profile"]);
+
+    // (2) Create a second space so Personal becomes DELETABLE, then right-click it
+    // in the UI and assert the stashed descriptor.
+    await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.spaces.create("Work");
+    });
+    await expect(sidebar.getByTestId("space-item")).toHaveCount(2);
+
+    const lastSpaceMenu = (): Promise<BridgeSpaceMenuResult | null> =>
+      sidebar.evaluate(
+        () =>
+          (
+            globalThis as unknown as {
+              __zeoLastSpaceContextMenu?: BridgeSpaceMenuResult;
+            }
+          ).__zeoLastSpaceContextMenu ?? null,
+      );
+
+    await sidebar.locator(`[data-space-id="${personalId}"]`).click({ button: "right" });
+    await expect.poll(lastSpaceMenu).not.toBeNull();
+    const res = (await lastSpaceMenu()) as BridgeSpaceMenuResult;
+
+    expect(res.spaceId).toBe(personalId);
+    expect(res.items.map((i) => i.id)).toEqual(["rename", "delete", "profile"]);
+
+    // The Profile submenu carries a checked current-profile entry and a trailing
+    // "New profile…" item ending in the U+2026 ellipsis.
+    const profileItem = res.items.find((i) => i.id === "profile");
+    const submenu = profileItem?.submenu ?? [];
+    const checked = submenu.filter((i) => i.checked === true);
+    expect(checked).toHaveLength(1);
+    expect(checked[0].id.startsWith("profile:")).toBe(true);
+    const trailing = submenu[submenu.length - 1];
+    expect(trailing.id).toBe("new-profile");
+    expect(trailing.label).toBe("New profile…");
+    expect(trailing.label.endsWith("…")).toBe(true);
+
+    // (3) A space WITH tabs: activate the second space, seed a tab into it, then
+    // read its descriptor over the bridge — delete is labelled "Delete (N tabs)".
+    const withTabsDescriptor = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      const list = await zeo.spaces.list();
+      const work = list.spaces.find((s) => s.name === "Work");
+      if (work === undefined) {
+        throw new Error("expected a Work space");
+      }
+      await zeo.spaces.activate(work.id);
+      await zeo.tabs.create("about:blank");
+      return zeo.spaces.showContextMenu(work.id, 0, 0);
+    });
+    const deleteItem = withTabsDescriptor.items.find((i) => i.id === "delete");
+    expect(deleteItem).toBeDefined();
+    expect(deleteItem?.label).toMatch(/^Delete \(\d+ tabs?\)$/);
   });
 });

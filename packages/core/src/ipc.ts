@@ -57,6 +57,33 @@ export interface TabContextMenuResult {
   items: TabContextMenuItem[];
 }
 
+/** A single item in the native SPACE context menu, reported back to the renderer
+ *  by SpacesApi.showContextMenu. `id` is a stable action key (never the label):
+ *  "rename", "delete", "profile" (the submenu parent), "profile:<profileId>", or
+ *  "new-profile". `checked` marks the space's current profile in the submenu;
+ *  `submenu` holds the Profile submenu's children. */
+export interface SpaceContextMenuItem {
+  id: string;
+  label: string;
+  enabled: boolean;
+  checked?: boolean;
+  submenu?: SpaceContextMenuItem[];
+}
+/** Descriptor returned by SpacesApi.showContextMenu: the space the menu was built
+ *  for and the items it offers. Mirrors TabContextMenuResult — a serializable seam
+ *  a headless test can assert against without driving a native popup. */
+export interface SpaceContextMenuResult {
+  spaceId: string;
+  items: SpaceContextMenuItem[];
+}
+/** A menu action the MAIN process pushes to the renderer over IPC.spaceMenuAction
+ *  when a native space-menu item needs renderer-side inline editing: "rename" opens
+ *  inline rename of the space; "new-profile" opens an inline new-profile-name prompt
+ *  for the space. (Delete and profile-assignment dispatch entirely in main.) */
+export type SpaceMenuAction =
+  | { action: "rename"; spaceId: string }
+  | { action: "new-profile"; spaceId: string };
+
 /**
  * Commands the renderer invokes over IPC. The main process handles each of
  * these against the active space of its `SpaceStore`. `list()` returns the full
@@ -96,6 +123,13 @@ export interface SpacesApi {
   activate(id: string): Promise<void>;
   setProfile(spaceId: string, profileId: string): Promise<void>;
   list(): Promise<SpacesState>;
+  /**
+   * Builds (and, outside test mode, pops) the native space context menu for `id`
+   * at window coordinates `x`/`y`, returning a descriptor of the items it
+   * offers. Menu actions dispatch through the same store ops as the other
+   * commands and broadcast the resulting state.
+   */
+  showContextMenu(id: string, x: number, y: number): Promise<SpaceContextMenuResult>;
 }
 
 /**
@@ -123,6 +157,9 @@ export interface ZeoApi {
   spaces: SpacesApi;
   profiles: ProfilesApi;
   onStateChange(listener: (state: TabsState) => void): () => void;
+  /** Registers a listener for main-pushed space-menu actions (Rename / New
+   *  profile…) and returns an unsubscribe function, mirroring onStateChange. */
+  onSpaceMenuAction(listener: (action: SpaceMenuAction) => void): () => void;
 }
 
 /**
@@ -147,6 +184,8 @@ export const IPC = {
   spacesActivate: "zeo:spaces:activate",
   spacesList: "zeo:spaces:list",
   spacesSetProfile: "zeo:spaces:set-profile",
+  spacesContextMenu: "zeo:spaces:context-menu",
+  spaceMenuAction: "zeo:spaces:menu-action",
   profilesCreate: "zeo:profiles:create",
   profilesRename: "zeo:profiles:rename",
   profilesDelete: "zeo:profiles:delete",

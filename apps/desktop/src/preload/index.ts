@@ -3,6 +3,8 @@ import { IPC } from "@zeo/core";
 import type {
   Profile,
   Space,
+  SpaceContextMenuResult,
+  SpaceMenuAction,
   SpacesState,
   Tab,
   TabContextMenuResult,
@@ -37,6 +39,8 @@ const api = {
     setProfile: (spaceId: string, profileId: string): Promise<void> =>
       ipcRenderer.invoke(IPC.spacesSetProfile, spaceId, profileId),
     list: (): Promise<SpacesState> => ipcRenderer.invoke(IPC.spacesList),
+    showContextMenu: (id: string, x: number, y: number): Promise<SpaceContextMenuResult> =>
+      ipcRenderer.invoke(IPC.spacesContextMenu, id, x, y),
   },
   profiles: {
     create: (name: string): Promise<Profile> => ipcRenderer.invoke(IPC.profilesCreate, name),
@@ -49,6 +53,13 @@ const api = {
     ipcRenderer.on(IPC.stateChange, handler);
     return () => {
       ipcRenderer.removeListener(IPC.stateChange, handler);
+    };
+  },
+  onSpaceMenuAction: (listener: (action: SpaceMenuAction) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, action: SpaceMenuAction): void => listener(action);
+    ipcRenderer.on(IPC.spaceMenuAction, handler);
+    return () => {
+      ipcRenderer.removeListener(IPC.spaceMenuAction, handler);
     };
   },
 } satisfies ZeoApi;
