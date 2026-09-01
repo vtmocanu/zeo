@@ -24,7 +24,10 @@ export function buildSpaceContextMenu(input: SpaceContextMenuInput): SpaceContex
   if (input.canDelete) {
     items.push({
       id: "delete",
-      label: input.tabCount > 0 ? `Delete (${input.tabCount} tabs)` : "Delete",
+      label:
+        input.tabCount > 0
+          ? `Delete (${input.tabCount} ${input.tabCount === 1 ? "tab" : "tabs"})`
+          : "Delete",
       enabled: true,
     });
   }

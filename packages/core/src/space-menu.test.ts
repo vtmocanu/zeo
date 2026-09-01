@@ -29,6 +29,8 @@ describe("buildSpaceContextMenu", () => {
   test("labels Delete with the tab count when the space owns tabs", () => {
     const result = buildSpaceContextMenu(input({ tabCount: 3 }));
     expect(result.items.find((i) => i.id === "delete")?.label).toBe("Delete (3 tabs)");
+    const single = buildSpaceContextMenu(input({ tabCount: 1 }));
+    expect(single.items.find((i) => i.id === "delete")?.label).toBe("Delete (1 tab)");
   });
 
   test("labels Delete plainly when the space owns no tabs", () => {

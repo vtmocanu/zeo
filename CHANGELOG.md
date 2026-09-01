@@ -24,16 +24,14 @@ milestone, a minor bump only for very large breakthroughs.
   tabs)" when the space has open or archived tabs), and a Profile submenu
   listing profiles with the current one checked plus a "New profile…" entry.
 - Application-menu accelerators: Cmd/Ctrl+1..9 activate the Nth space and
-  Cmd/Ctrl+Shift+N creates a new space; tab numeric activation moved from
-  Cmd/Ctrl+1..9 to Cmd/Ctrl+Alt+1..9 to free the plain number chords for
-  spaces.
+  Cmd/Ctrl+Shift+N creates a new space.
 - Playwright e2e coverage for the switcher (render, highlight, switch,
   create, rename, delete) and for the space context-menu descriptor.
 
-No new domain-model or store method was needed — state stays in the
-main-process `SpaceStore` and the renderer subscribes/dispatches. Spaces and
-profiles still aren't persisted across restarts; that lands in a later
-milestone.
+### Changed
+
+- Tab numeric activation is rebound from Cmd/Ctrl+1..9 to Cmd/Ctrl+Alt+1..9;
+  the plain number chords now activate spaces.
 
 ## [0.0.6] - 2026-08-31
 

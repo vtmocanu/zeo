@@ -402,25 +402,27 @@ function showSpaceContextMenu(id: string, x: number, y: number): SpaceContextMen
     const popWin = win;
     const menu = Menu.buildFromTemplate(
       result.items.map((item): MenuItemConstructorOptions => {
-        const wrap = (body: () => void) => (): void => {
+        const wrap = (actionId: string, body: () => void) => (): void => {
           try {
             body();
           } catch (err: unknown) {
-            console.error(`space context-menu action "${item.id}" failed:`, err);
+            console.error(`space context-menu action "${actionId}" failed:`, err);
           }
         };
         if (item.id === "rename") {
           return {
             label: item.label,
             enabled: item.enabled,
-            click: wrap(() => popWin.webContents.send(IPC.spaceMenuAction, { action: "rename", spaceId: id })),
+            click: wrap(item.id, () =>
+              popWin.webContents.send(IPC.spaceMenuAction, { action: "rename", spaceId: id }),
+            ),
           };
         }
         if (item.id === "delete") {
           return {
             label: item.label,
             enabled: item.enabled,
-            click: wrap(() => deleteSpace(id)),
+            click: wrap(item.id, () => deleteSpace(id)),
           };
         }
         // item.id === "profile": the submenu parent.
@@ -432,7 +434,7 @@ function showSpaceContextMenu(id: string, x: number, y: number): SpaceContextMen
               return {
                 label: child.label,
                 enabled: child.enabled,
-                click: wrap(() =>
+                click: wrap(child.id, () =>
                   popWin.webContents.send(IPC.spaceMenuAction, { action: "new-profile", spaceId: id }),
                 ),
               };
@@ -443,7 +445,7 @@ function showSpaceContextMenu(id: string, x: number, y: number): SpaceContextMen
               enabled: child.enabled,
               type: "radio",
               checked: child.checked === true,
-              click: wrap(() => remapSpaceProfile(id, pid)),
+              click: wrap(child.id, () => remapSpaceProfile(id, pid)),
             };
           }),
         };
@@ -680,10 +682,6 @@ ipcMain.handle(IPC.spacesList, (): SpacesState => store.spacesSnapshot());
  * globalShortcut / before-input-event (both forbidden by the PRD).
  */
 function buildMenu(): void {
-  // Nine hidden Activate-Tab-N items. The list is queried live inside each
-  // click at press time (never a build-time snapshot); accelerators still fire
-  // while visible:false. i is 0-based (0..8) mapping to Cmd/Ctrl+Alt+1..9 (the
-  // plain Cmd/Ctrl+1..9 accelerators now activate spaces).
   const activateItems: MenuItemConstructorOptions[] = Array.from(
     { length: 9 },
     (_unused, i): MenuItemConstructorOptions => ({
@@ -724,10 +722,6 @@ function buildMenu(): void {
     ...activateItems,
   ];
 
-  // Nine hidden Activate-Space-N items. Mirrors activateItems: the space list is
-  // queried live inside each click at press time (never a build-time snapshot);
-  // accelerators still fire while visible:false. i is 0-based (0..8) mapping to
-  // Cmd/Ctrl+1..9 (the plain digit chord now switches spaces).
   const activateSpaceItems: MenuItemConstructorOptions[] = Array.from(
     { length: 9 },
     (_unused, i): MenuItemConstructorOptions => ({

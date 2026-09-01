@@ -348,8 +348,6 @@ test.describe("zeo desktop app", () => {
 
     expect(accelerators["New Tab"]).toBe("CmdOrCtrl+T");
     expect(accelerators["Close Tab"]).toBe("CmdOrCtrl+W");
-    // PRD 3.3: the nine numeric activators moved OFF the plain digit chord (now
-    // owned by space activation) onto CmdOrCtrl+Alt+N.
     for (let n = 1; n <= 9; n += 1) {
       expect(accelerators[`Activate Tab ${n}`]).toBe(`CmdOrCtrl+Alt+${n}`);
     }
@@ -1404,6 +1402,6 @@ test.describe("zeo desktop app", () => {
     });
     const deleteItem = withTabsDescriptor.items.find((i) => i.id === "delete");
     expect(deleteItem).toBeDefined();
-    expect(deleteItem?.label).toMatch(/^Delete \(\d+ tabs\)$/);
+    expect(deleteItem?.label).toMatch(/^Delete \(\d+ tabs?\)$/);
   });
 });
