@@ -3,10 +3,37 @@ import type { Tab } from "./tab.js";
 import type { Space } from "./space.js";
 import type { Profile } from "./profile.js";
 import type { TabsState, SpacesState } from "./ipc.js";
+import { SCHEMA_VERSION, UnsupportedSchemaVersionError } from "./persistence.js";
+import type { PersistedState, TabRow } from "./persistence.js";
 
 export interface SpaceStoreOptions {
   idFactory?: () => string;
   now?: () => number;
+  /**
+   * Whether the constructor seeds the default `"Personal"` space and
+   * `"Default"` profile (the normal path). `false` builds an EMPTY store with no
+   * active space — used only by {@link SpaceStore.fromPersisted}, which rebuilds
+   * the spaces and sets a real active id before returning. Defaults to `true`.
+   */
+  seed?: boolean;
+}
+
+/**
+ * Projects a persisted {@link TabRow} down to the public {@link Tab} shape,
+ * dropping the row-only `spaceId`/`position` fields. Used when rebuilding a
+ * space's tab set for {@link TabStore.hydrate}.
+ */
+function tabRowToTab(row: TabRow): Tab {
+  return {
+    id: row.id,
+    url: row.url,
+    title: row.title,
+    faviconUrl: row.faviconUrl,
+    createdAt: row.createdAt,
+    pinned: row.pinned,
+    lastActiveAt: row.lastActiveAt,
+    archivedAt: row.archivedAt,
+  };
 }
 
 /** The default profile every space references until PRD 3.2 adds real profiles. */
@@ -54,12 +81,18 @@ export class SpaceStore {
   constructor(options: SpaceStoreOptions = {}) {
     this.idFactory = options.idFactory ?? (() => crypto.randomUUID());
     this.now = options.now ?? (() => Date.now());
-    // Seed the default profile BEFORE the seed space so the space's
-    // `profileId: "default"` resolves through the same validation `createSpace`
-    // will apply.
-    this.insertProfile(DEFAULT_PROFILE_ID, "Default");
-    const seed = this.insertSpace("Personal", DEFAULT_PROFILE_ID);
-    this.activeId = seed.id;
+    // A non-seeded store (seed: false) is produced ONLY by `fromPersisted`,
+    // which overwrites `activeId` with a real space id before returning; the
+    // placeholder keeps the field type-safe until then.
+    this.activeId = "";
+    if (options.seed !== false) {
+      // Seed the default profile BEFORE the seed space so the space's
+      // `profileId: "default"` resolves through the same validation
+      // `createSpace` will apply.
+      this.insertProfile(DEFAULT_PROFILE_ID, "Default");
+      const seed = this.insertSpace("Personal", DEFAULT_PROFILE_ID);
+      this.activeId = seed.id;
+    }
   }
 
   /**
@@ -391,4 +424,172 @@ export class SpaceStore {
       profiles: this.profiles(),
     };
   }
+
+  // --- Persistence codec ---------------------------------------------------
+
+  /**
+   * Serializes the whole store to a versioned {@link PersistedState} — a pure
+   * read with no mutation. Profiles and spaces carry their creation-order index
+   * as `position`; each space's tabs are emitted as `list()` (pinned-then-
+   * unpinned) followed by `archived()` (most-recently-archived first), with a
+   * per-space running `position` so read-back reproduces the order. The meta
+   * row stamps {@link SCHEMA_VERSION} and the active space id.
+   */
+  toPersisted(): PersistedState {
+    const profiles = this.profileOrder.map((id, position) => {
+      const profile = this.profilesById.get(id)!;
+      return {
+        id: profile.id,
+        name: profile.name,
+        createdAt: profile.createdAt,
+        position,
+      };
+    });
+
+    const spaces = this.order.map((id, position) => {
+      const record = this.spacesById.get(id)!;
+      return {
+        id: record.space.id,
+        name: record.space.name,
+        profileId: record.space.profileId,
+        createdAt: record.space.createdAt,
+        activeTabId: record.tabs.activeTabId,
+        position,
+      };
+    });
+
+    const tabs: TabRow[] = [];
+    for (const spaceId of this.order) {
+      const record = this.spacesById.get(spaceId)!;
+      const ordered = [...record.tabs.list(), ...record.tabs.archived()];
+      ordered.forEach((tab, position) => {
+        tabs.push({
+          id: tab.id,
+          spaceId,
+          url: tab.url,
+          title: tab.title,
+          faviconUrl: tab.faviconUrl,
+          createdAt: tab.createdAt,
+          pinned: tab.pinned,
+          lastActiveAt: tab.lastActiveAt,
+          archivedAt: tab.archivedAt,
+          position,
+        });
+      });
+    }
+
+    return {
+      meta: { schemaVersion: SCHEMA_VERSION, activeSpaceId: this.activeId },
+      profiles,
+      spaces,
+      tabs,
+    };
+  }
+
+  /**
+   * Rebuilds a {@link SpaceStore} from a persisted state — a pure rows→store
+   * construction. Throws {@link UnsupportedSchemaVersionError} when the state
+   * was written by a newer build (`meta.schemaVersion > SCHEMA_VERSION`).
+   *
+   * Profiles and spaces are restored in `position` order, preserving every
+   * stored id/name/createdAt (and each space's `profileId`). Each space's tabs
+   * are gathered by `spaceId`, ordered by `position`, split into open
+   * (`archivedAt === null`) and archived, and handed to {@link TabStore.hydrate}
+   * as open-then-archived.
+   *
+   * Repair rules, applied BEFORE the active pointers are set:
+   * - A space's `activeTabId` restores only when it names an OPEN tab in the
+   *   SAME space; an archived tab, a missing id, or a tab owned by another space
+   *   all restore to `null` (so an archived-only space restores with no active
+   *   tab).
+   * - `meta.activeSpaceId` restores to the first space (in `position` order)
+   *   when it is `null` or names no rebuilt space.
+   *
+   * A state with zero spaces (only reachable from a hand-built
+   * {@link PersistedState}; the desktop layer calls this only when there is
+   * data) restores with an empty `""` active space id — no space is fabricated.
+   */
+  static fromPersisted(
+    state: PersistedState,
+    options: SpaceStoreOptions = {},
+  ): SpaceStore {
+    if (state.meta.schemaVersion > SCHEMA_VERSION) {
+      throw new UnsupportedSchemaVersionError(state.meta.schemaVersion);
+    }
+
+    const store = new SpaceStore({ ...options, seed: false });
+
+    const orderedProfiles = [...state.profiles].sort(
+      (a, b) => a.position - b.position,
+    );
+    for (const row of orderedProfiles) {
+      const profile: Profile = {
+        id: row.id,
+        name: row.name,
+        createdAt: row.createdAt,
+      };
+      store.profilesById.set(profile.id, profile);
+      store.profileOrder.push(profile.id);
+    }
+
+    const orderedSpaces = [...state.spaces].sort(
+      (a, b) => a.position - b.position,
+    );
+    for (const row of orderedSpaces) {
+      const space: Space = {
+        id: row.id,
+        name: row.name,
+        profileId: row.profileId,
+        createdAt: row.createdAt,
+      };
+      const spaceTabs = state.tabs
+        .filter((tab) => tab.spaceId === row.id)
+        .sort((a, b) => a.position - b.position);
+      const open = spaceTabs
+        .filter((tab) => tab.archivedAt === null)
+        .map(tabRowToTab);
+      const archived = spaceTabs
+        .filter((tab) => tab.archivedAt !== null)
+        .map(tabRowToTab);
+      // Repair: an active tab is valid only when it is an OPEN tab in THIS
+      // space; anything else (archived, missing, foreign) restores to null.
+      const activeTabId = open.some((tab) => tab.id === row.activeTabId)
+        ? row.activeTabId
+        : null;
+      const tabs = TabStore.hydrate(open.concat(archived), activeTabId, {
+        idFactory: store.idFactory,
+        now: store.now,
+      });
+      store.spacesById.set(space.id, { space, tabs });
+      store.order.push(space.id);
+    }
+
+    // Repair: fall back to the first space when the persisted active space id is
+    // null or names no rebuilt space.
+    const activeSpaceId = state.meta.activeSpaceId;
+    if (activeSpaceId !== null && store.spacesById.has(activeSpaceId)) {
+      store.activeId = activeSpaceId;
+    } else if (store.order.length > 0) {
+      store.activeId = store.order[0];
+    }
+
+    return store;
+  }
 }
+
+/**
+ * Free-function alias for {@link SpaceStore.toPersisted} — serializes a store to
+ * its versioned {@link PersistedState}.
+ */
+export const serializeStore = (store: SpaceStore): PersistedState =>
+  store.toPersisted();
+
+/**
+ * Free-function alias for {@link SpaceStore.fromPersisted} — rebuilds a store
+ * from a persisted state, throwing {@link UnsupportedSchemaVersionError} on a
+ * newer schema version.
+ */
+export const deserializeStore = (
+  state: PersistedState,
+  options?: SpaceStoreOptions,
+): SpaceStore => SpaceStore.fromPersisted(state, options);

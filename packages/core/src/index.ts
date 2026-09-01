@@ -3,8 +3,20 @@ export type { Space } from "./space.js";
 export type { Profile } from "./profile.js";
 export { TabStore } from "./tab-store.js";
 export type { TabStoreOptions } from "./tab-store.js";
-export { SpaceStore } from "./space-store.js";
+export { SpaceStore, serializeStore, deserializeStore } from "./space-store.js";
 export type { SpaceStoreOptions } from "./space-store.js";
+export {
+  SCHEMA_VERSION,
+  UnsupportedSchemaVersionError,
+  migrationAction,
+} from "./persistence.js";
+export type {
+  MetaRow,
+  ProfileRow,
+  SpaceRow,
+  TabRow,
+  PersistedState,
+} from "./persistence.js";
 export type {
   TabsState,
   TabsSlice,
