@@ -59,6 +59,80 @@ body {
   background: #34344a;
 }
 
+/* Space switcher ---------------------------------------------------------- */
+
+/* Horizontal, wrapping strip of spaces sitting between the header and the tab
+   sections. Matches the header's 1px divider and padding tokens. */
+.space-switcher {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  padding: 8px;
+  border-bottom: 1px solid #2c2c3a;
+}
+
+.space-item {
+  appearance: none;
+  border: 1px solid transparent;
+  background: none;
+  color: #e6e6ee;
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 12px;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.space-item:hover {
+  background: #2a2a38;
+}
+
+.space-item--active {
+  background: #34344a;
+}
+
+.space-item:focus-visible {
+  outline: 2px solid #6b6bff;
+  outline-offset: -2px;
+}
+
+.space-new {
+  appearance: none;
+  border: 1px solid #3a3a4c;
+  background: #2a2a38;
+  color: #e6e6ee;
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.space-new:hover {
+  background: #34344a;
+}
+
+.space-name-input {
+  appearance: none;
+  border: 1px solid #3a3a4c;
+  background: #14141c;
+  color: #e6e6ee;
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 12px;
+  min-width: 0;
+  flex: 1 1 80px;
+}
+
+.space-name-input:focus {
+  outline: none;
+  border-color: #6b6bff;
+}
+
 .sidebar__sections {
   flex: 1;
   min-height: 0;

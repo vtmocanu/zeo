@@ -8,7 +8,7 @@ import {
   type RefObject,
 } from "react";
 import type { Tab, TabsState } from "@zeo/core";
-import { SIDEBAR_WIDTH, formatRelativeArchived } from "@zeo/core";
+import { SIDEBAR_WIDTH, defaultSpaceName, formatRelativeArchived } from "@zeo/core";
 import "./App.css";
 
 // Pointer travel (px) required before a press turns into a drag. Below this a
@@ -386,6 +386,57 @@ function ArchivedRow({ tab, now }: { tab: Tab; now: number }) {
 }
 
 /**
+ * Ephemeral inline-edit buffer for the space switcher. Exactly one of the three
+ * modes is active at a time; the in-progress text lives in a sibling `draft`
+ * string. This is the ONLY new local state — no domain state is forked here. On
+ * commit the buffer is discarded and the displayed name comes from the next
+ * main-process broadcast.
+ */
+type SpaceEdit =
+  | { mode: "create" }
+  | { mode: "rename"; spaceId: string }
+  | { mode: "new-profile"; spaceId: string };
+
+/**
+ * The single shared inline-edit input used by all three space-edit modes. Thin:
+ * it holds no state, is fully controlled by the parent's `draft`, commits on
+ * Enter/blur and cancels on Escape. `autoFocus` grabs focus each time it mounts
+ * (mode switches remount it via distinct React keys).
+ */
+function SpaceNameInput({
+  value,
+  onChange,
+  onCommit,
+  onCancel,
+}: {
+  value: string;
+  onChange: (next: string) => void;
+  onCommit: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <input
+      type="text"
+      className="space-name-input"
+      data-testid="space-name-input"
+      autoFocus
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          onCommit();
+        } else if (event.key === "Escape") {
+          event.preventDefault();
+          onCancel();
+        }
+      }}
+      onBlur={() => onCommit()}
+    />
+  );
+}
+
+/**
  * Keyboard-first left sidebar listing open tabs. This is the renderer: it
  * reaches the main process ONLY through the injected global `window.zeo`
  * (which implements ZeoApi). No Node or Electron imports.
@@ -401,6 +452,17 @@ export function App() {
   });
   const [showArchived, setShowArchived] = useState(false);
   const [now, setNow] = useState(() => Date.now());
+
+  // Ephemeral inline-edit buffer for the space switcher (create / rename /
+  // new-profile). `editRef` mirrors `edit` so a stray blur firing after an
+  // Escape-cancel unmounts the input is a guaranteed no-op.
+  const [edit, setEditState] = useState<SpaceEdit | null>(null);
+  const [draft, setDraft] = useState("");
+  const editRef = useRef<SpaceEdit | null>(null);
+  const setEdit = useCallback((next: SpaceEdit | null) => {
+    editRef.current = next;
+    setEditState(next);
+  }, []);
 
   useEffect(() => {
     if (!showArchived) {
@@ -418,9 +480,19 @@ export function App() {
       return;
     }
     let sawBroadcast = false;
-    const unsub = window.zeo.onStateChange((s) => {
+    const unsubState = window.zeo.onStateChange((s) => {
       sawBroadcast = true;
       setState(s);
+    });
+    // Native space-menu items that need renderer-side inline editing arrive
+    // here (Delete / profile-assignment dispatch entirely in main). The draft
+    // is seeded by the effect keyed on `edit`, which reads the live space name.
+    const unsubMenu = window.zeo.onSpaceMenuAction((action) => {
+      if (action.action === "rename") {
+        setEdit({ mode: "rename", spaceId: action.spaceId });
+      } else {
+        setEdit({ mode: "new-profile", spaceId: action.spaceId });
+      }
     });
     window.zeo.tabs
       .list()
@@ -430,8 +502,76 @@ export function App() {
         }
       })
       .catch(() => {});
-    return unsub;
-  }, []);
+    return () => {
+      unsubState();
+      unsubMenu();
+    };
+  }, [setEdit]);
+
+  // Seed the draft whenever a new edit begins, reading the LIVE space list so a
+  // rename prefills the current name and a create prefills the next default.
+  useEffect(() => {
+    if (edit === null) {
+      return;
+    }
+    if (edit.mode === "create") {
+      setDraft(defaultSpaceName(state.spaces));
+    } else if (edit.mode === "rename") {
+      const space = state.spaces.find((s) => s.id === edit.spaceId);
+      setDraft(space?.name ?? "");
+    } else {
+      setDraft("");
+    }
+    // Seed once per edit session (keyed on `edit` only): live edits to
+    // `state.spaces` mid-rename must not clobber what the user is typing.
+  }, [edit]);
+
+  const cancelEdit = useCallback(() => {
+    setEdit(null);
+  }, [setEdit]);
+
+  const commitEdit = useCallback(() => {
+    const current = editRef.current;
+    if (!current) {
+      return;
+    }
+    setEdit(null);
+    const name = draft.trim();
+    if (name.length === 0) {
+      // Blank/whitespace-only: cancel rather than dispatch a name the store
+      // would reject anyway.
+      return;
+    }
+    if (current.mode === "rename") {
+      void window.zeo?.spaces.rename(current.spaceId, name).catch(() => {});
+      return;
+    }
+    if (current.mode === "create") {
+      void (async () => {
+        try {
+          const created = await window.zeo?.spaces.create(name);
+          if (created) {
+            await window.zeo?.spaces.activate(created.id);
+          }
+        } catch {
+          // Bridge unavailable or the store rejected the name; the buffer is
+          // already discarded, so nothing to roll back.
+        }
+      })();
+      return;
+    }
+    const spaceId = current.spaceId;
+    void (async () => {
+      try {
+        const created = await window.zeo?.profiles.create(name);
+        if (created) {
+          await window.zeo?.spaces.setProfile(spaceId, created.id);
+        }
+      } catch {
+        // As above: buffer discarded, nothing to roll back.
+      }
+    })();
+  }, [draft, setEdit]);
 
   // `state.tabs` is already ordered pinned-first then unpinned; filtering
   // preserves that order within each section.
@@ -525,6 +665,71 @@ export function App() {
           + New tab
         </button>
       </header>
+
+      <nav className="space-switcher" data-testid="space-switcher">
+        {state.spaces.map((space) => {
+          const isActive = space.id === state.activeSpaceId;
+          if (edit?.mode === "rename" && edit.spaceId === space.id) {
+            return (
+              <SpaceNameInput
+                key={space.id}
+                value={draft}
+                onChange={setDraft}
+                onCommit={commitEdit}
+                onCancel={cancelEdit}
+              />
+            );
+          }
+          return (
+            <button
+              key={space.id}
+              type="button"
+              className={`space-item${isActive ? " space-item--active" : ""}`}
+              data-testid="space-item"
+              data-space-id={space.id}
+              aria-current={isActive ? "true" : undefined}
+              onClick={() =>
+                void window.zeo?.spaces.activate(space.id).catch(() => {})
+              }
+              onDoubleClick={() =>
+                setEdit({ mode: "rename", spaceId: space.id })
+              }
+              onContextMenu={(event) => {
+                event.preventDefault();
+                void window.zeo?.spaces
+                  .showContextMenu(space.id, event.clientX, event.clientY)
+                  .then((result) => {
+                    (
+                      globalThis as { __zeoLastSpaceContextMenu?: unknown }
+                    ).__zeoLastSpaceContextMenu = result;
+                  })
+                  .catch(() => {});
+              }}
+            >
+              {space.name}
+            </button>
+          );
+        })}
+        {edit?.mode === "create" || edit?.mode === "new-profile" ? (
+          <SpaceNameInput
+            key="space-edit-trailing"
+            value={draft}
+            onChange={setDraft}
+            onCommit={commitEdit}
+            onCancel={cancelEdit}
+          />
+        ) : (
+          <button
+            type="button"
+            className="space-new"
+            data-testid="new-space-button"
+            aria-label="New space"
+            onClick={() => setEdit({ mode: "create" })}
+          >
+            +
+          </button>
+        )}
+      </nav>
 
       {state.tabs.length === 0 ? (
         <p className="sidebar__empty">No open tabs</p>
