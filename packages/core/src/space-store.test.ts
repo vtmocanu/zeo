@@ -438,3 +438,197 @@ describe("SpaceStore snapshots", () => {
     expect(work.id).toBeDefined();
   });
 });
+
+describe("SpaceStore profile seeding", () => {
+  test("a fresh store has exactly one profile named Default with id default", () => {
+    const store = makeStore();
+    const profiles = store.profiles();
+    expect(profiles).toHaveLength(1);
+    expect(profiles[0].id).toBe("default");
+    expect(profiles[0].name).toBe("Default");
+  });
+
+  test("the seeded Personal space references the default profile", () => {
+    const store = makeStore();
+    expect(store.spaces()[0].profileId).toBe("default");
+    expect(store.spaceProfileId(store.activeSpaceId)).toBe("default");
+  });
+
+  test("profiles() returns copies, not internal references", () => {
+    const store = makeStore();
+    const profiles = store.profiles();
+    profiles[0].name = "Mutated";
+    expect(store.profiles()[0].name).toBe("Default");
+  });
+});
+
+describe("SpaceStore.createProfile", () => {
+  test("creates a profile with a fresh id from the id factory", () => {
+    const store = makeStore();
+    // The seed space consumed t1; the first created profile consumes t2.
+    const profile = store.createProfile("Work");
+    expect(profile.id).toBe("t2");
+    expect(profile.id).not.toBe("default");
+    expect(profile.name).toBe("Work");
+    expect(store.profiles().some((p) => p.id === profile.id)).toBe(true);
+  });
+
+  test("appends the new profile after the default in order", () => {
+    const store = makeStore();
+    const work = store.createProfile("Work");
+    expect(store.profiles().map((p) => p.id)).toEqual(["default", work.id]);
+  });
+
+  test("throws on a blank name", () => {
+    const store = makeStore();
+    expect(() => store.createProfile("")).toThrow(/blank/);
+    expect(() => store.createProfile("   ")).toThrow(/blank/);
+    expect(store.profiles()).toHaveLength(1);
+  });
+});
+
+describe("SpaceStore.renameProfile", () => {
+  test("renames an existing profile", () => {
+    const store = makeStore();
+    const work = store.createProfile("Work");
+    store.renameProfile(work.id, "Job");
+    expect(store.profiles().find((p) => p.id === work.id)?.name).toBe("Job");
+  });
+
+  test("throws on a blank name", () => {
+    const store = makeStore();
+    const work = store.createProfile("Work");
+    expect(() => store.renameProfile(work.id, "")).toThrow(/blank/);
+    expect(() => store.renameProfile(work.id, "   ")).toThrow(/blank/);
+    expect(store.profiles().find((p) => p.id === work.id)?.name).toBe("Work");
+  });
+
+  test("throws on an unknown profile id", () => {
+    const store = makeStore();
+    expect(() => store.renameProfile("nope", "X")).toThrow(/Unknown profile/);
+  });
+});
+
+describe("SpaceStore.deleteProfile", () => {
+  test("throws when deleting the default profile", () => {
+    const store = makeStore();
+    expect(() => store.deleteProfile("default")).toThrow(
+      /Cannot delete the default profile/,
+    );
+    expect(store.profiles().some((p) => p.id === "default")).toBe(true);
+  });
+
+  test("throws on an unknown profile id", () => {
+    const store = makeStore();
+    expect(() => store.deleteProfile("nope")).toThrow(/Unknown profile/);
+  });
+
+  test("throws when a space references the profile", () => {
+    const store = makeStore();
+    const work = store.createProfile("Work");
+    store.setSpaceProfile(store.activeSpaceId, work.id);
+    expect(() => store.deleteProfile(work.id)).toThrow(/referenced by a space/);
+    expect(store.profiles().some((p) => p.id === work.id)).toBe(true);
+  });
+
+  test("deletes an unreferenced profile and removes it from profiles()", () => {
+    const store = makeStore();
+    const work = store.createProfile("Work");
+    store.deleteProfile(work.id);
+    expect(store.profiles().some((p) => p.id === work.id)).toBe(false);
+    expect(store.profiles().map((p) => p.id)).toEqual(["default"]);
+  });
+});
+
+describe("SpaceStore.createSpace with a profile", () => {
+  test("defaults the profile to default when omitted", () => {
+    const store = makeStore();
+    const work = store.createSpace("Work");
+    expect(work.profileId).toBe("default");
+  });
+
+  test("uses an explicit valid profile id", () => {
+    const store = makeStore();
+    const profile = store.createProfile("Work");
+    const space = store.createSpace("Work", profile.id);
+    expect(space.profileId).toBe(profile.id);
+    expect(store.spaceProfileId(space.id)).toBe(profile.id);
+  });
+
+  test("throws on an unknown profile and creates no space", () => {
+    const store = makeStore();
+    const before = store.spaces().length;
+    expect(() => store.createSpace("Work", "nope")).toThrow(/Unknown profile/);
+    expect(store.spaces()).toHaveLength(before);
+  });
+});
+
+describe("SpaceStore.setSpaceProfile", () => {
+  test("re-points a space at a valid profile", () => {
+    const store = makeStore();
+    const profile = store.createProfile("Work");
+    store.setSpaceProfile(store.activeSpaceId, profile.id);
+    expect(store.spaceProfileId(store.activeSpaceId)).toBe(profile.id);
+  });
+
+  test("throws on an unknown space id", () => {
+    const store = makeStore();
+    const profile = store.createProfile("Work");
+    expect(() => store.setSpaceProfile("nope", profile.id)).toThrow(
+      /Unknown space/,
+    );
+  });
+
+  test("throws on an unknown profile id", () => {
+    const store = makeStore();
+    expect(() => store.setSpaceProfile(store.activeSpaceId, "nope")).toThrow(
+      /Unknown profile/,
+    );
+    // The space keeps its original profile.
+    expect(store.spaceProfileId(store.activeSpaceId)).toBe("default");
+  });
+});
+
+describe("SpaceStore.tabsOfSpace", () => {
+  test("returns a space's open then archived tabs", () => {
+    const store = makeStore();
+    const personalId = store.activeSpaceId;
+    const open = store.create({ url: "https://open.test" });
+    const gone = store.create({ url: "https://gone.test" });
+    store.archive(gone.id);
+
+    expect(store.tabsOfSpace(personalId).map((t) => t.id)).toEqual([
+      open.id,
+      gone.id,
+    ]);
+  });
+
+  test("throws on an unknown space id", () => {
+    const store = makeStore();
+    expect(() => store.tabsOfSpace("nope")).toThrow(/Unknown space/);
+  });
+});
+
+describe("SpaceStore profile snapshots", () => {
+  test("spacesSnapshot carries the profile list and each space's profileId", () => {
+    const store = makeStore();
+    const profile = store.createProfile("Work");
+    const work = store.createSpace("Work", profile.id);
+
+    const snap = store.spacesSnapshot();
+    expect(snap.profiles.map((p) => p.id)).toEqual(["default", profile.id]);
+    expect(snap.spaces.find((s) => s.id === work.id)?.profileId).toBe(
+      profile.id,
+    );
+    expect(snap.spaces.find((s) => s.id === store.activeSpaceId)?.profileId).toBe(
+      "default",
+    );
+  });
+
+  test("snapshot carries the profile list and each space's profileId", () => {
+    const store = makeStore();
+    const snap = store.snapshot();
+    expect(snap.profiles.map((p) => p.id)).toEqual(["default"]);
+    expect(snap.spaces[0].profileId).toBe("default");
+  });
+});

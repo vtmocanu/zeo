@@ -394,6 +394,7 @@ export function App() {
   const [state, setState] = useState<TabsState>({
     spaces: [],
     activeSpaceId: "",
+    profiles: [],
     tabs: [],
     activeTabId: null,
     archived: [],

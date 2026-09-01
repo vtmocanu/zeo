@@ -1,9 +1,9 @@
-import { app, BrowserWindow, WebContentsView, clipboard, ipcMain, Menu } from "electron";
+import { app, BrowserWindow, WebContentsView, clipboard, ipcMain, Menu, session } from "electron";
 import type { MenuItemConstructorOptions } from "electron";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { SpaceStore, IPC, titleForUrl, SIDEBAR_WIDTH } from "@zeo/core";
-import type { Space, SpacesState, Tab, TabContextMenuResult, TabsState } from "@zeo/core";
+import type { Profile, Space, SpacesState, Tab, TabContextMenuResult, TabsState } from "@zeo/core";
 
 // The built main is emitted by electron-vite as ESM (out/main/index.js, the
 // package is "type": "module"), so `__dirname` is not defined — derive it from
@@ -37,6 +37,12 @@ interface TrackedView {
   spaceId: string;
 }
 const views = new Map<string, TrackedView>();
+/**
+ * Tab ids whose most recent view load rejected. A failed load is retried on the
+ * next activation of that tab (see the tabsActivate handler); a successful load
+ * or a view teardown clears the id.
+ */
+const failedLoads = new Set<string>();
 let win: BrowserWindow | null = null;
 
 /** Bounds of the tab web-view region: everything right of the sidebar. */
@@ -56,13 +62,16 @@ function viewBounds(): Electron.Rectangle {
 /**
  * Creates a hidden web view for a tab owned by `spaceId` and starts loading its
  * url. The view is tracked with its owning space so a space switch or delete can
- * find it.
+ * find it. `urlOverride`, when given, is loaded instead of the tab's stored url
+ * (used by profile remap to preserve each live view's current url).
  */
-function createViewFor(tab: Tab, spaceId: string): void {
+function createViewFor(tab: Tab, spaceId: string, urlOverride?: string): void {
   if (win === null) {
     return;
   }
-  const view = new WebContentsView();
+  const view = new WebContentsView({
+    webPreferences: { partition: "persist:" + store.spaceProfileId(spaceId) },
+  });
   views.set(tab.id, { view, spaceId });
   win.contentView.addChildView(view);
   view.setBounds(viewBounds());
@@ -81,9 +90,19 @@ function createViewFor(tab: Tab, spaceId: string): void {
     broadcast();
   });
 
-  view.webContents.loadURL(tab.url).catch((err: unknown) => {
-    console.error(`tab ${tab.id} failed to load ${tab.url}:`, err);
-  });
+  // Track load failure so activation can retry it; a later success clears it.
+  view.webContents
+    .loadURL(urlOverride ?? tab.url)
+    .then(() => {
+      failedLoads.delete(tab.id);
+    })
+    .catch((err: unknown) => {
+      if (views.get(tab.id)?.view !== view) {
+        return;
+      }
+      failedLoads.add(tab.id);
+      console.error(`tab ${tab.id} failed to load ${urlOverride ?? tab.url}:`, err);
+    });
 }
 
 /** Full new-tab lifecycle: store entry, view, activation, broadcast. */
@@ -128,6 +147,8 @@ function destroyView(id: string): void {
       tracked.view.webContents.close();
     }
     views.delete(id);
+    // Drop any retry marker so a stale id never lingers past its view.
+    failedLoads.delete(id);
   }
 }
 
@@ -181,6 +202,60 @@ function deleteSpace(id: string): void {
     // The store activated a surviving space; show its active tab, hide the rest.
     setActive(store.activeTabId);
   }
+  broadcast();
+}
+
+/**
+ * Re-points a space at a different profile and migrates its live views onto the
+ * new session partition. Electron cannot change a live WebContents' partition in
+ * place, so every view the space owns is destroyed and recreated — the recreated
+ * views resolve the NEW partition via {@link createViewFor}'s `spaceProfileId`
+ * lookup.
+ *
+ */
+function remapSpaceProfile(spaceId: string, profileId: string): void {
+  // Nothing changes when the space already references this profile: no teardown,
+  // no recreation, no broadcast.
+  if (store.spaceProfileId(spaceId) === profileId) {
+    return;
+  }
+
+  store.setSpaceProfile(spaceId, profileId);
+
+  // Capture the exact tab ids whose views are on the OLD partition, from the LIVE
+  // views map filtered by owning space — NOT from tabsOfSpace, which would
+  // spuriously materialize views for archived tabs that currently have none.
+  const tabIds = [...views]
+    .filter(([, tracked]) => tracked.spaceId === spaceId)
+    .map(([tabId]) => tabId);
+  // tabsOfSpace supplies only the id→url lookup for the captured ids.
+  const tabsById = new Map(store.tabsOfSpace(spaceId).map((t) => [t.id, t]));
+  // Snapshot each live view's current url BEFORE teardown so recreation resumes
+  // where the user was, not the tab's original creation url. getURL() returns ""
+  // for a view that never finished loading.
+  const liveUrls = new Map(
+    tabIds.map((tabId) => {
+      const wc = views.get(tabId)?.view.webContents;
+      return [tabId, wc !== undefined && !wc.isDestroyed() ? wc.getURL() : ""] as const;
+    }),
+  );
+
+  for (const tabId of tabIds) {
+    destroyView(tabId);
+  }
+
+  for (const tabId of tabIds) {
+    const tab = tabsById.get(tabId);
+    if (tab !== undefined) {
+      // Pass the captured url only when non-empty; otherwise fall back to tab.url.
+      const liveUrl = liveUrls.get(tabId);
+      createViewFor(tab, spaceId, liveUrl && liveUrl.length > 0 ? liveUrl : undefined);
+    }
+  }
+
+  // Global active tab: hides an inactive space's recreated views, shows the
+  // active one.
+  setActive(store.activeTabId);
   broadcast();
 }
 
@@ -363,6 +438,23 @@ ipcMain.handle(IPC.tabsClose, (_event, id: string): void => {
 
 ipcMain.handle(IPC.tabsActivate, (_event, id: string): void => {
   store.activate(id);
+  // Honor the remap contract: a tab whose view failed to be created or failed
+  // to load is retried when the user next activates it. Recreate a missing
+  // view; otherwise re-issue the load for a view whose last load failed.
+  if (!views.has(id)) {
+    const tab = store.list().find((t) => t.id === id);
+    if (tab !== undefined) {
+      createViewFor(tab, store.activeSpaceId);
+    }
+  } else if (failedLoads.has(id)) {
+    const tracked = views.get(id);
+    const tab = store.list().find((t) => t.id === id);
+    if (tracked !== undefined && tab !== undefined) {
+      destroyView(id);
+      failedLoads.delete(id);
+      createViewFor(tab, tracked.spaceId);
+    }
+  }
   setActive(id);
   broadcast();
 });
@@ -441,6 +533,38 @@ ipcMain.handle(IPC.spacesActivate, (_event, id: string): void => {
 
 ipcMain.handle(IPC.spacesDelete, (_event, id: string): void => {
   deleteSpace(id);
+});
+
+ipcMain.handle(IPC.spacesSetProfile, (_event, spaceId: string, profileId: string): void => {
+  remapSpaceProfile(spaceId, profileId);
+});
+
+ipcMain.handle(IPC.profilesCreate, (_event, name: string): Profile => {
+  const profile = store.createProfile(name);
+  broadcast();
+  return profile;
+});
+
+ipcMain.handle(IPC.profilesRename, (_event, id: string, name: string): void => {
+  store.renameProfile(id, name);
+  broadcast();
+});
+
+ipcMain.handle(IPC.profilesDelete, async (_event, id: string): Promise<void> => {
+  // Throws before any mutation on a rejected delete (default profile, unknown
+  // id, or still referenced by a space), so a rejected delete never wipes a
+  // live partition.
+  store.deleteProfile(id);
+  broadcast();
+  // The profile record is gone, so nothing can reach persist:<id> again — drop
+  // its on-disk cookies/storage/cache instead of orphaning them forever.
+  const doomed = session.fromPartition("persist:" + id);
+  try {
+    await doomed.clearStorageData();
+    await doomed.clearCache();
+  } catch (err: unknown) {
+    console.error(`failed to clear session data for deleted profile ${id}:`, err);
+  }
 });
 
 ipcMain.handle(IPC.spacesList, (): SpacesState => store.spacesSnapshot());

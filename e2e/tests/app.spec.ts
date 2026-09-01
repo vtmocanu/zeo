@@ -24,6 +24,14 @@ interface BridgeSpace {
   profileId: string;
   createdAt: number;
 }
+// A profile as returned by the m2 `profiles.create` bridge method. Structurally
+// the @zeo/core Profile, redeclared here (like BridgeSpace) so e2e stays
+// import-free of @zeo/core; only `id` is load-bearing for the isolation test.
+interface BridgeProfile {
+  id: string;
+  name: string;
+  createdAt: number;
+}
 interface BridgeSpacesState {
   spaces: BridgeSpace[];
   activeSpaceId: string;
@@ -61,7 +69,13 @@ interface ZeoBridge {
     rename(id: string, name: string): Promise<void>;
     delete(id: string): Promise<void>;
     activate(id: string): Promise<void>;
+    setProfile(spaceId: string, profileId: string): Promise<void>;
     list(): Promise<BridgeSpacesState>;
+  };
+  profiles: {
+    create(name: string): Promise<BridgeProfile>;
+    rename(id: string, name: string): Promise<void>;
+    delete(id: string): Promise<void>;
   };
 }
 // Inside `page.evaluate` the callback runs in the renderer, where the real global
@@ -789,5 +803,285 @@ test.describe("zeo desktop app", () => {
     expect(afterDelete.tabs.map((t) => t.id)).toEqual([seededTabId]);
     expect(afterDelete.tabs.map((t) => t.id)).not.toContain(workTab.id);
     await expect(items).toHaveCount(1);
+  });
+
+  // PRD 3.2 deliverable #4 — per-space session/cookie ISOLATION, end to end.
+  //
+  // Mechanism: a profile maps to an Electron session partition
+  // ("persist:<profile-id>"); every tab's WebContentsView is created with
+  // `webPreferences.partition` resolved from its space's profile (see
+  // apps/desktop main `createViewFor`). So two spaces on DIFFERENT profiles run
+  // their views on different Session objects and cannot see each other's
+  // cookies, while two spaces SHARING a profile run on the SAME Session and do.
+  //
+  // We drive space/profile setup and tab creation over the sidebar bridge (the
+  // only window carrying `window.zeo`; tab WebContentsViews have none), then
+  // reach the Sessions in the MAIN process via `app.evaluate`. Isolation is
+  // proven two ways: (1) partition wiring by IDENTITY — each tab's
+  // `webContents.session` is the very `session.fromPartition("persist:"+id)`
+  // object its profile maps to; (2) a cookie set on profile A's Session is
+  // read back present from A and absent from B.
+  //
+  // Network-independent by construction: tabs load `data:` URLs (no fetch), and
+  // the cookie is keyed to https://zeo.test/ — a URL the app never navigates to
+  // or fetches, so `cookies.set`/`cookies.get` on the partition store touch no
+  // network. All webContents matching is by a distinct in-URL TOKEN (never a
+  // live page title), and the tokens are chosen so none is a substring of
+  // another (ZEOISO_ALPHA / ZEOISO_BETA / ZEOISO_GAMMA).
+  test("spaces on different profiles isolate cookies; spaces sharing a profile share them", async () => {
+    // Distinct data-URL tokens: no token is a substring of another, so a URL
+    // `includes(token)` match identifies exactly one tab's view.
+    const tokenA = "ZEOISO_ALPHA";
+    const tokenB = "ZEOISO_BETA";
+    const tokenA2 = "ZEOISO_GAMMA";
+
+    // Set up two profiles and three spaces over the bridge. A and A2 share
+    // profile A; B is on profile B. setProfile re-points each space's profile.
+    const setup = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      const profA = await zeo.profiles.create("ProfileA");
+      const profB = await zeo.profiles.create("ProfileB");
+      const spaceA = await zeo.spaces.create("A");
+      const spaceB = await zeo.spaces.create("B");
+      const spaceA2 = await zeo.spaces.create("A2");
+      await zeo.spaces.setProfile(spaceA.id, profA.id);
+      await zeo.spaces.setProfile(spaceB.id, profB.id);
+      await zeo.spaces.setProfile(spaceA2.id, profA.id);
+      return {
+        idA: profA.id,
+        idB: profB.id,
+        spaceA: spaceA.id,
+        spaceB: spaceB.id,
+        spaceA2: spaceA2.id,
+      };
+    });
+    expect(setup.idA).not.toBe(setup.idB);
+
+    // For each space: activate it, then create a tab loading its distinct data:
+    // URL. The view is created on the ACTIVE space's partition, so activation
+    // must precede creation. Capture each tab id (they must be three distinct
+    // tabs across the three spaces).
+    const makeTab = (spaceId: string, token: string): Promise<BridgeTab> =>
+      sidebar.evaluate(
+        async (args) => {
+          const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+          await zeo.spaces.activate(args.spaceId);
+          return zeo.tabs.create("data:text/html," + args.token);
+        },
+        { spaceId, token },
+      );
+    const tabA = await makeTab(setup.spaceA, tokenA);
+    const tabB = await makeTab(setup.spaceB, tokenB);
+    const tabA2 = await makeTab(setup.spaceA2, tokenA2);
+    // Three distinct tabs were created, one per space.
+    expect(new Set([tabA.id, tabB.id, tabA2.id]).size).toBe(3);
+
+    // Poll (web-first, no fixed sleep) until all three tab WebContentsViews are
+    // present in the main process, matched by their in-URL token, before we
+    // assert on their sessions.
+    await expect
+      .poll(
+        async () =>
+          app.evaluate(({ webContents }, tokens) => {
+            const urls = webContents.getAllWebContents().map((wc) => wc.getURL());
+            return tokens.filter((t) => urls.some((u) => u.includes(t))).length;
+          }, [tokenA, tokenB, tokenA2]),
+        { message: "expected all three tab WebContentsViews to have loaded" },
+      )
+      .toBe(3);
+
+    // In MAIN: assert partition wiring by identity, then set/read a cookie on
+    // profile A's Session. Return only serializable booleans; assert outside.
+    const result = await app.evaluate(
+      async ({ session, webContents }, data) => {
+        const all = webContents.getAllWebContents();
+        const findByToken = (token: string) =>
+          all.find((wc) => wc.getURL().includes(token)) ?? null;
+        const wcA = findByToken(data.tokenA);
+        const wcB = findByToken(data.tokenB);
+        const wcA2 = findByToken(data.tokenA2);
+
+        const sessA = session.fromPartition("persist:" + data.idA);
+        const sessB = session.fromPartition("persist:" + data.idB);
+
+        // Cookie keyed to a URL the app never fetches — pure partition store I/O.
+        await sessA.cookies.set({ url: "https://zeo.test/", name: "iso", value: "A" });
+        const inA = await sessA.cookies.get({ url: "https://zeo.test/" });
+        const inB = await sessB.cookies.get({ url: "https://zeo.test/" });
+        // Read the cookie back through A2's OWN view session (the Session its
+        // view really runs on), not via session.fromPartition again — a
+        // behavioral read that a space sharing profile A sees the cookie.
+        const inA2 =
+          wcA2 !== null ? await wcA2.session.cookies.get({ url: "https://zeo.test/" }) : [];
+
+        return {
+          foundA: wcA !== null,
+          foundB: wcB !== null,
+          foundA2: wcA2 !== null,
+          // Each view runs on the Session its profile maps to (identity, not ==).
+          aOnPartitionA: wcA !== null && wcA.session === sessA,
+          bOnPartitionB: wcB !== null && wcB.session === sessB,
+          // A2 shares profile A: its Session IS partition A's Session. That
+          // identity is exactly what "spaces sharing a profile share cookies"
+          // means — they read/write the same cookie store.
+          a2OnPartitionA: wcA2 !== null && wcA2.session === sessA,
+          // Cookie visible from A, invisible from B.
+          isoInA: inA.some((c) => c.name === "iso" && c.value === "A"),
+          isoInB: inB.some((c) => c.name === "iso"),
+          isoInA2: inA2.some((c) => c.name === "iso" && c.value === "A"),
+        };
+      },
+      { idA: setup.idA, idB: setup.idB, tokenA, tokenB, tokenA2 },
+    );
+
+    // All three tab views were located in main.
+    expect(result.foundA).toBe(true);
+    expect(result.foundB).toBe(true);
+    expect(result.foundA2).toBe(true);
+
+    // Partition wiring (m2 deliverable): A and A2 tabs run on partition A's
+    // Session; B tab runs on partition B's Session.
+    expect(result.aOnPartitionA).toBe(true);
+    expect(result.a2OnPartitionA).toBe(true);
+    expect(result.bOnPartitionB).toBe(true);
+
+    // Cookie isolation: the cookie set on partition A is PRESENT when read from
+    // A and ABSENT from B — spaces on different profiles do not share cookies.
+    expect(result.isoInA).toBe(true);
+    expect(result.isoInB).toBe(false);
+    // A space SHARING profile A reads the same cookie through its own view's
+    // session (PRD 3.2 #4: cookie present in a second space that shares A).
+    expect(result.isoInA2).toBe(true);
+  });
+
+  // PRD 3.2 — LIVE-VIEW profile migration path (remapSpaceProfile in the desktop
+  // main process). The isolation test above only ever calls setProfile on EMPTY
+  // spaces, so remapSpaceProfile always takes its empty-tabIds branch: no view is
+  // ever captured, destroyed, or recreated. That leaves the highest-risk
+  // migration logic untested — capturing the live tab ids on the OLD partition,
+  // destroying their WebContentsViews, moving the store's profile reference, and
+  // recreating the views on the NEW partition's Session.
+  //
+  // This test exercises exactly that path: it reassigns the profile of a space
+  // that ALREADY has a loaded tab, then asserts the tab's recreated view moved to
+  // the destination partition's Session. Before the remap the view must run on the
+  // source partition (persist:<from>); after it, on the destination partition
+  // (persist:<to>) — the same in-URL token identifies the view across the
+  // destroy/recreate because recreation resumes the snapshotted data: URL.
+  //
+  // Network-independent by construction: the tab loads a `data:` URL (no fetch)
+  // and the assertion is by Session IDENTITY only (`wc.session ===
+  // session.fromPartition("persist:"+id)`), never a cookie or a live page title.
+  // The token ZEOISO_DELTA is not a substring of any other test's token, so a URL
+  // `includes(token)` match identifies exactly this space's tab view.
+  test("reassigning a profile on a space with a loaded tab migrates the live view to the new partition", async () => {
+    const token = "ZEOISO_DELTA";
+
+    // Over the bridge: two profiles (source + destination), a space initially on
+    // the SOURCE profile, activate it, then create a tab loading the data: URL.
+    // Activation must precede tab creation so the view is created on the active
+    // space's (source) partition.
+    const setup = await sidebar.evaluate(async (tok) => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      const profFrom = await zeo.profiles.create("MigrateFrom");
+      const profTo = await zeo.profiles.create("MigrateTo");
+      const space = await zeo.spaces.create("Migrate");
+      await zeo.spaces.setProfile(space.id, profFrom.id);
+      await zeo.spaces.activate(space.id);
+      const tab = await zeo.tabs.create("data:text/html," + tok);
+      return {
+        fromId: profFrom.id,
+        toId: profTo.id,
+        spaceId: space.id,
+        tabId: tab.id,
+        token: tok,
+      };
+    }, token);
+    expect(setup.fromId).not.toBe(setup.toId);
+
+    // Poll (web-first, no fixed sleep) until the tab's view exists AND runs on the
+    // SOURCE partition's Session by identity — proving it STARTED on the old
+    // partition, so the upcoming remap has a live view to migrate.
+    await expect
+      .poll(
+        async () =>
+          app.evaluate(({ session, webContents }, data) => {
+            const wc = webContents
+              .getAllWebContents()
+              .find((w) => w.getURL().includes(data.token));
+            return wc !== undefined && wc.session === session.fromPartition("persist:" + data.fromId);
+          }, setup),
+        { message: "expected the tab view to start on the source profile's partition" },
+      )
+      .toBe(true);
+
+    const liveToken = "ZEOISO_FOXTROT";
+    await app.evaluate(async ({ webContents }, data) => {
+      const wc = webContents
+        .getAllWebContents()
+        .find((w) => w.getURL().includes(data.token));
+      if (wc === undefined) {
+        throw new Error("live view for the migration tab not found");
+      }
+      await wc.loadURL("data:text/html," + data.liveToken);
+    }, { ...setup, liveToken });
+
+    // Over the bridge: reassign the space to the DESTINATION profile. This triggers
+    // remapSpaceProfile's live path — capture tab ids, destroy views, move the
+    // store profile reference, recreate views on the destination partition.
+    await sidebar.evaluate(async (data) => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.spaces.setProfile(data.spaceId, data.toId);
+    }, setup);
+
+    await expect
+      .poll(
+        async () =>
+          app.evaluate(({ session, webContents }, data) => {
+            const wc = webContents
+              .getAllWebContents()
+              .find((w) => w.getURL().includes(data.liveToken));
+            return wc !== undefined && wc.session === session.fromPartition("persist:" + data.toId);
+          }, { ...setup, liveToken }),
+        { message: "expected the recreated tab view on the destination partition at the navigated URL" },
+      )
+      .toBe(true);
+
+    const staleViewExists = await app.evaluate(({ webContents }, data) => {
+      return webContents.getAllWebContents().some((w) => w.getURL().includes(data.token));
+    }, setup);
+    expect(staleViewExists).toBe(false);
+  });
+
+  test("deleting a profile clears its partition's stored data", async () => {
+    const prof = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      return zeo.profiles.create("Doomed");
+    });
+
+    const cookiesBefore = await app.evaluate(async ({ session }, id) => {
+      const sess = session.fromPartition("persist:" + id);
+      await sess.cookies.set({ url: "https://zeo-doomed.test/", name: "zeo_doom", value: "1" });
+      const got = await sess.cookies.get({ name: "zeo_doom" });
+      return got.length;
+    }, prof.id);
+    expect(cookiesBefore).toBe(1);
+
+    await sidebar.evaluate(async (id) => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.profiles.delete(id);
+    }, prof.id);
+
+    await expect
+      .poll(
+        async () =>
+          app.evaluate(async ({ session }, id) => {
+            const sess = session.fromPartition("persist:" + id);
+            const got = await sess.cookies.get({ name: "zeo_doom" });
+            return got.length;
+          }, prof.id),
+        { message: "expected the deleted profile's partition cookies to be cleared" },
+      )
+      .toBe(0);
   });
 });

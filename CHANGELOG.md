@@ -9,6 +9,35 @@ milestone, a minor bump only for very large breakthroughs.
 
 ## [Unreleased]
 
+## [0.0.6] - 2026-08-31
+
+### Added
+
+- Profiles: a profile model in `packages/core` (`Profile` = id, name,
+  createdAt). `SpaceStore` gains profile create/rename/delete with
+  referential guards — the seeded "default" profile can't be deleted, nor
+  can a profile any space still references. A fresh store seeds one profile
+  named "Default" with id `"default"`.
+- Spaces reference profiles: `createSpace` takes an optional profileId
+  (defaults to `"default"`), and a new `spaces.setProfile` re-points an
+  existing space to a different profile.
+- Per-space session isolation: every tab's `WebContentsView` is created on
+  the `persist:<profile-id>` partition resolved from its space, so spaces on
+  different profiles have isolated cookies and storage while spaces sharing
+  a profile share them. Re-pointing a space's profile migrates its views to
+  the new partition in order (destroy, update the store reference, recreate,
+  then broadcast once) since Electron cannot repartition a live
+  `WebContents` in place — affected pages reload.
+- IPC/bridge: `profiles.create`/`rename`/`delete` and `spaces.setProfile`;
+  the broadcast state now carries the profile list alongside each space's
+  `profileId`.
+- Playwright e2e coverage proving cookie and session-partition isolation
+  across spaces on different profiles, and sharing on spaces with the same
+  profile.
+
+There is no profile-management UI yet (the sidebar is unchanged) and
+profiles are not persisted across restarts — both land in later milestones.
+
 ## [0.0.5] - 2026-08-31
 
 ### Added
