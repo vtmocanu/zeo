@@ -9,6 +9,32 @@ milestone, a minor bump only for very large breakthroughs.
 
 ## [Unreleased]
 
+## [0.0.7] - 2026-09-01
+
+### Added
+
+- Spaces UI: a sidebar space-switcher strip above the tab sections, one item
+  per space with the active one highlighted, click to switch, and a
+  new-space button that creates a space (name prompted inline, default
+  "Space N") and activates it.
+- Inline rename and create directly in the switcher strip, editing the space
+  name in place rather than via a dialog.
+- Space management via a native context menu on a space item: Rename,
+  Delete (offered only when it isn't the last space, and reading "Delete (N
+  tabs)" when the space has open or archived tabs), and a Profile submenu
+  listing profiles with the current one checked plus a "New profile…" entry.
+- Application-menu accelerators: Cmd/Ctrl+1..9 activate the Nth space and
+  Cmd/Ctrl+Shift+N creates a new space; tab numeric activation moved from
+  Cmd/Ctrl+1..9 to Cmd/Ctrl+Alt+1..9 to free the plain number chords for
+  spaces.
+- Playwright e2e coverage for the switcher (render, highlight, switch,
+  create, rename, delete) and for the space context-menu descriptor.
+
+No new domain-model or store method was needed — state stays in the
+main-process `SpaceStore` and the renderer subscribes/dispatches. Spaces and
+profiles still aren't persisted across restarts; that lands in a later
+milestone.
+
 ## [0.0.6] - 2026-08-31
 
 ### Added
