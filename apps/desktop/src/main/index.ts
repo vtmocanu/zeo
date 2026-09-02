@@ -9,8 +9,12 @@ import {
   SIDEBAR_WIDTH,
   buildSpaceContextMenu,
   defaultSpaceName,
+  commandBarBounds,
+  resolveInput,
 } from "@zeo/core";
 import type {
+  CommandBarMode,
+  CommandBarState,
   Profile,
   Space,
   SpaceContextMenuResult,
@@ -60,6 +64,31 @@ const views = new Map<string, TrackedView>();
  */
 const failedLoads = new Set<string>();
 let win: BrowserWindow | null = null;
+/**
+ * The command-bar overlay view. A single {@link WebContentsView} layered above
+ * the tab views, showing the same renderer bundle loaded with `?view=command-bar`.
+ * Created once in {@link createWindow}, kept topmost by re-adding it after every
+ * new tab view, hidden except while the bar is open, and nulled on window close.
+ */
+let overlay: WebContentsView | null = null;
+/**
+ * The command bar's current state, mirrored to the overlay renderer over
+ * {@link IPC.commandBarChange}. Toggled by {@link openCommandBar} /
+ * {@link closeCommandBar} and read back by the `commandBarState` IPC handler.
+ */
+let commandBar: CommandBarState = { open: false, mode: "navigate", initialText: "" };
+/**
+ * Per-tab navigation sequence counter for last-request-wins: each
+ * {@link navigateTab} bumps its tab's number, and a settling `loadURL` only
+ * mutates `failedLoads` when its captured number is still current.
+ */
+const navSeq = new Map<string, number>();
+/**
+ * Tab ids whose live page has reported a real `page-title-updated` title. While
+ * set, `did-navigate` url tracking leaves the stored title alone (the real page
+ * title wins over the hostname fallback); reset at the start of each navigate.
+ */
+const hasRealTitle = new Set<string>();
 
 /** Bounds of the tab web-view region: everything right of the sidebar. */
 function viewBounds(): Electron.Rectangle {
@@ -73,6 +102,19 @@ function viewBounds(): Electron.Rectangle {
     width: Math.max(0, width - SIDEBAR_WIDTH),
     height,
   };
+}
+
+/**
+ * Positions the command-bar overlay over the page region using the shared
+ * {@link commandBarBounds} geometry. A no-op unless both the window and the
+ * overlay exist. Called when the bar opens and on every resize while it is open.
+ */
+function layoutOverlay(): void {
+  if (win === null || overlay === null) {
+    return;
+  }
+  const [width, height] = win.getContentSize();
+  overlay.setBounds(commandBarBounds(width, height));
 }
 
 /**
@@ -97,6 +139,7 @@ function createViewFor(tab: Tab, spaceId: string, urlOverride?: string): void {
   // as the fallback until the first page-title-updated arrives. updateMeta
   // no-ops on an unknown/torn-down id, so late events after close are safe.
   view.webContents.on("page-title-updated", (_event, title) => {
+    hasRealTitle.add(tab.id);
     store.updateMeta(tab.id, { title });
     broadcast();
   });
@@ -105,6 +148,25 @@ function createViewFor(tab: Tab, spaceId: string, urlOverride?: string): void {
     store.updateMeta(tab.id, { faviconUrl });
     broadcast();
   });
+
+  // Live url tracking: mirror the view's real url into the store on every commit
+  // (cross-document and same-document). Until a real page-title-updated arrives
+  // (tracked in hasRealTitle), also re-derive the hostname title fallback so the
+  // sidebar label follows the url; once a real title is known it wins.
+  const onDidNavigate = (): void => {
+    const current = view.webContents.getURL(); // read live, never a captured value
+    if (current === "") {
+      return;
+    }
+    const meta: { url: string; title?: string } = { url: current };
+    if (!hasRealTitle.has(tab.id)) {
+      meta.title = titleForUrl(current);
+    }
+    store.updateMeta(tab.id, meta);
+    broadcast();
+  };
+  view.webContents.on("did-navigate", onDidNavigate);
+  view.webContents.on("did-navigate-in-page", onDidNavigate);
 
   // Track load failure so activation can retry it; a later success clears it.
   view.webContents
@@ -119,6 +181,13 @@ function createViewFor(tab: Tab, spaceId: string, urlOverride?: string): void {
       failedLoads.add(tab.id);
       console.error(`tab ${tab.id} failed to load ${urlOverride ?? tab.url}:`, err);
     });
+
+  // Keep the command-bar overlay above every tab view: re-adding it as a child
+  // raises it to the top of the z-order over the view just added. Null-guarded so
+  // the first createViewFor (which may run before the overlay is created) is safe.
+  if (overlay !== null) {
+    win.contentView.addChildView(overlay);
+  }
 }
 
 /** Full new-tab lifecycle: store entry, view, activation, broadcast. */
@@ -129,6 +198,133 @@ function createTab(url?: string): Tab {
   setActive(tab.id);
   broadcast();
   return tab;
+}
+
+/**
+ * Navigates the tab `id` to `url` with last-request-wins semantics. Validates
+ * that the tab is one of the ACTIVE space's open tabs (throwing otherwise, so the
+ * ipc handler rejects the invoke like the other tab commands). The stored url and
+ * its hostname title fallback are updated and broadcast synchronously; the view's
+ * `loadURL` is then kicked off, and its settle only touches `failedLoads` when the
+ * captured sequence number is still current (a superseded load aborts silently).
+ */
+function navigateTab(id: string, url: string): void {
+  if (!store.list().some((t) => t.id === id)) {
+    throw new Error(`Cannot navigate unknown or non-active-space tab: ${id}`);
+  }
+
+  const seq = (navSeq.get(id) ?? 0) + 1;
+  navSeq.set(id, seq);
+
+  // Reset the real-title flag so the hostname fallback tracks the new url until
+  // the destination reports its own title, and seed the stored url synchronously.
+  hasRealTitle.delete(id);
+  store.updateMeta(id, { url, title: titleForUrl(url) });
+  broadcast();
+
+  const tracked = views.get(id);
+  if (tracked !== undefined) {
+    tracked.view.webContents
+      .loadURL(url)
+      .then(() => {
+        if (navSeq.get(id) === seq) {
+          failedLoads.delete(id);
+        }
+      })
+      .catch((err: unknown) => {
+        if (navSeq.get(id) !== seq) {
+          // Superseded by a newer navigate — the aborted load rejects with
+          // ERR_ABORTED; ignore it (no failedLoads, no log).
+          return;
+        }
+        if (views.get(id)?.view !== tracked.view) {
+          return;
+        }
+        failedLoads.add(id);
+        console.error(`tab ${id} failed to navigate to ${url}:`, err);
+      });
+  }
+  // NOTE: the pre-existing initial createViewFor load detects aborts by
+  // view-identity, not by seq, so navigating a tab whose INITIAL load is still in
+  // flight could spuriously mark it failedLoads. The command-bar flow only ever
+  // navigates the already-settled active tab, so this is latent, not hit here.
+}
+
+/** Pushes the current command-bar state to the OVERLAY renderer (which hosts the
+ *  CommandBar UI), seeding its input; the sidebar is intentionally not targeted. */
+function pushCommandBar(): void {
+  overlay?.webContents.send(IPC.commandBarChange, commandBar);
+}
+
+/**
+ * Opens the command bar in `mode`. A `"navigate"` request with no active tab
+ * falls back to `"new-tab"`. `initialText` is the active tab's current stored url
+ * in navigate mode (empty if it cannot be found) and empty in new-tab mode. Lays
+ * out and shows the overlay, focuses it, and pushes the new state.
+ */
+function openCommandBar(mode: CommandBarMode): void {
+  const effectiveMode: CommandBarMode =
+    mode === "navigate" && store.activeTabId === null ? "new-tab" : mode;
+  let initialText = "";
+  if (effectiveMode === "navigate") {
+    const active = store.list().find((t) => t.id === store.activeTabId);
+    initialText = active?.url ?? "";
+  }
+  commandBar = { open: true, mode: effectiveMode, initialText };
+  layoutOverlay();
+  overlay?.setVisible(true);
+  overlay?.webContents.focus();
+  pushCommandBar();
+}
+
+/**
+ * Closes the command bar and returns focus to the active tab's view (or the
+ * window when there is none). Idempotent: a no-op when already closed, which
+ * prevents the overlay-blur handler from recursing through the focus return.
+ */
+function closeCommandBar(): void {
+  if (!commandBar.open) {
+    return;
+  }
+  commandBar = { open: false, mode: commandBar.mode, initialText: "" };
+  overlay?.setVisible(false);
+  pushCommandBar();
+  const activeTabId = store.activeTabId;
+  if (activeTabId !== null && views.has(activeTabId)) {
+    views.get(activeTabId)?.view.webContents.focus();
+  } else {
+    win?.webContents.focus();
+  }
+}
+
+/**
+ * Resolves `text` and performs the command-bar action. A null resolution (empty
+ * or whitespace-only input) closes the bar without navigating. Otherwise the
+ * effective mode (the passed `mode`, else the open bar's mode, else `"navigate"`,
+ * downgraded to `"new-tab"` when there is no active tab) either navigates the
+ * active tab or creates a new tab, then closes the bar if it was open.
+ */
+function submitCommandBar(text: string, mode?: CommandBarMode): void {
+  const target = resolveInput(text);
+  if (target === null) {
+    if (commandBar.open) {
+      closeCommandBar();
+    }
+    return;
+  }
+  const wasOpen = commandBar.open;
+  let effectiveMode: CommandBarMode = mode ?? (commandBar.open ? commandBar.mode : "navigate");
+  if (effectiveMode === "navigate" && store.activeTabId === null) {
+    effectiveMode = "new-tab";
+  }
+  if (effectiveMode === "navigate") {
+    navigateTab(store.activeTabId!, target.url);
+  } else {
+    createTab(target.url);
+  }
+  if (wasOpen) {
+    closeCommandBar();
+  }
 }
 
 /** Full close lifecycle: store removal, view teardown, re-activation, broadcast. */
@@ -169,6 +365,9 @@ function destroyView(id: string): void {
     views.delete(id);
     // Drop any retry marker so a stale id never lingers past its view.
     failedLoads.delete(id);
+    // Drop the per-tab nav sequence and title-state so a reused id starts fresh.
+    navSeq.delete(id);
+    hasRealTitle.delete(id);
   }
 }
 
@@ -549,11 +748,50 @@ function createWindow(seed: boolean): void {
     void win.loadFile(join(moduleDir, "../renderer/index.html"));
   }
 
+  // Create the command-bar overlay ONCE, before any tab view is materialized, so
+  // createViewFor's topmost re-add always has a target. Same webPreferences as the
+  // window and no partition (default session, like the sidebar). It stays parented
+  // and hidden until the bar opens. Load the same renderer bundle with a
+  // ?view=command-bar marker, mirroring the window's dev/prod branch above.
+  overlay = new WebContentsView({
+    webPreferences: {
+      preload: join(moduleDir, "../preload/index.cjs"),
+      contextIsolation: true,
+      sandbox: false,
+      nodeIntegration: false,
+    },
+  });
+  win.contentView.addChildView(overlay);
+  overlay.setVisible(false);
+  if (rendererUrl !== undefined && rendererUrl !== "") {
+    overlay.webContents.loadURL(rendererUrl + "?view=command-bar").catch(() => {
+      // Dev-server races are retried by the window's loadDev loop; the overlay
+      // shares the same bundle, so a transient failure here is non-fatal.
+    });
+  } else {
+    void overlay.webContents.loadFile(join(moduleDir, "../renderer/index.html"), {
+      query: { view: "command-bar" },
+    });
+  }
+  // Click on the page or sidebar (overlay loses focus) dismisses the bar.
+  // closeCommandBar is idempotent, so the focus return it performs never recurses.
+  overlay.webContents.on("blur", () => {
+    closeCommandBar();
+  });
+
   win.on("resize", () => {
     const active = store.activeTabId;
     if (active !== null) {
       views.get(active)?.view.setBounds(viewBounds());
     }
+    if (commandBar.open) {
+      layoutOverlay();
+    }
+  });
+
+  // Window lost OS focus → dismiss the command bar.
+  win.on("blur", () => {
+    closeCommandBar();
   });
 
   // Re-stamp the active tab's lastActiveAt on window focus so a tab left focused
@@ -573,6 +811,7 @@ function createWindow(seed: boolean): void {
       }
     }
     views.clear();
+    overlay = null;
     win = null;
   });
 
@@ -646,6 +885,28 @@ ipcMain.handle(
   (_event, id: string, x: number, y: number): TabContextMenuResult =>
     showTabContextMenu(id, x, y),
 );
+
+// --- Command bar --------------------------------------------------------------
+// tabsNavigate throws (rejecting the invoke) on an unknown/non-active-space id,
+// like the other tab commands. The command-bar handlers drive the single overlay
+// controller; commandBarState reads the current state back synchronously.
+ipcMain.handle(IPC.tabsNavigate, (_event, id: string, url: string): void => {
+  navigateTab(id, url);
+});
+
+ipcMain.handle(IPC.commandBarOpen, (_event, mode: CommandBarMode): void => {
+  openCommandBar(mode);
+});
+
+ipcMain.handle(IPC.commandBarClose, (): void => {
+  closeCommandBar();
+});
+
+ipcMain.handle(IPC.commandBarSubmit, (_event, text: string, mode?: CommandBarMode): void => {
+  submitCommandBar(text, mode);
+});
+
+ipcMain.handle(IPC.commandBarState, (): CommandBarState => commandBar);
 
 // --- Space commands -----------------------------------------------------------
 // The renderer's single UI bridge drives these; tab WebContentsViews have no
@@ -743,8 +1004,18 @@ function buildMenu(): void {
     {
       label: "New Tab",
       accelerator: "CmdOrCtrl+T",
+      // Open the command bar in new-tab mode instead of immediately creating a
+      // tab, so the user types the destination first.
       click: () => {
-        createTab();
+        openCommandBar("new-tab");
+      },
+    },
+    {
+      label: "Open Location",
+      accelerator: "CmdOrCtrl+L",
+      // Open the command bar in navigate mode, prefilled with the active tab's url.
+      click: () => {
+        openCommandBar("navigate");
       },
     },
     {

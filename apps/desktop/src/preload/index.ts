@@ -1,6 +1,8 @@
 import { contextBridge, ipcRenderer } from "electron";
 import { IPC } from "@zeo/core";
 import type {
+  CommandBarMode,
+  CommandBarState,
   Profile,
   Space,
   SpaceContextMenuResult,
@@ -18,6 +20,8 @@ import type {
 const api = {
   tabs: {
     create: (url?: string): Promise<Tab> => ipcRenderer.invoke(IPC.tabsCreate, url),
+    navigate: (id: string, url: string): Promise<void> =>
+      ipcRenderer.invoke(IPC.tabsNavigate, id, url),
     close: (id: string): Promise<void> => ipcRenderer.invoke(IPC.tabsClose, id),
     activate: (id: string): Promise<void> => ipcRenderer.invoke(IPC.tabsActivate, id),
     list: (): Promise<TabsState> => ipcRenderer.invoke(IPC.tabsList),
@@ -48,11 +52,26 @@ const api = {
       ipcRenderer.invoke(IPC.profilesRename, id, name),
     delete: (id: string): Promise<void> => ipcRenderer.invoke(IPC.profilesDelete, id),
   },
+  commandBar: {
+    open: (mode: CommandBarMode): Promise<void> => ipcRenderer.invoke(IPC.commandBarOpen, mode),
+    close: (): Promise<void> => ipcRenderer.invoke(IPC.commandBarClose),
+    submit: (text: string, mode?: CommandBarMode): Promise<void> =>
+      ipcRenderer.invoke(IPC.commandBarSubmit, text, mode),
+    state: (): Promise<CommandBarState> => ipcRenderer.invoke(IPC.commandBarState),
+  },
   onStateChange: (listener: (state: TabsState) => void): (() => void) => {
     const handler = (_event: Electron.IpcRendererEvent, state: TabsState): void => listener(state);
     ipcRenderer.on(IPC.stateChange, handler);
     return () => {
       ipcRenderer.removeListener(IPC.stateChange, handler);
+    };
+  },
+  onCommandBarChange: (listener: (state: CommandBarState) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, state: CommandBarState): void =>
+      listener(state);
+    ipcRenderer.on(IPC.commandBarChange, handler);
+    return () => {
+      ipcRenderer.removeListener(IPC.commandBarChange, handler);
     };
   },
   onSpaceMenuAction: (listener: (action: SpaceMenuAction) => void): (() => void) => {
