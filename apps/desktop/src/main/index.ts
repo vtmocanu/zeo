@@ -178,6 +178,13 @@ function createViewFor(tab: Tab, spaceId: string, urlOverride?: string): void {
       if (views.get(tab.id)?.view !== view) {
         return;
       }
+      // A navigateTab call on this tab while its initial load is still in flight
+      // aborts that load (Electron rejects with ERR_ABORTED). That is a
+      // superseded load, not a failure: per the last-request-wins contract it must
+      // never mark failedLoads or log. The newer load owns the retry state.
+      if ((err as { code?: string }).code === "ERR_ABORTED") {
+        return;
+      }
       failedLoads.add(tab.id);
       console.error(`tab ${tab.id} failed to load ${urlOverride ?? tab.url}:`, err);
     });
@@ -244,10 +251,10 @@ function navigateTab(id: string, url: string): void {
         console.error(`tab ${id} failed to navigate to ${url}:`, err);
       });
   }
-  // NOTE: the pre-existing initial createViewFor load detects aborts by
-  // view-identity, not by seq, so navigating a tab whose INITIAL load is still in
-  // flight could spuriously mark it failedLoads. The command-bar flow only ever
-  // navigates the already-settled active tab, so this is latent, not hit here.
+  // Navigating a tab whose INITIAL createViewFor load is still in flight aborts
+  // that load; createViewFor's own catch ignores ERR_ABORTED, so the superseded
+  // initial load never spuriously marks failedLoads or logs — this navigate's
+  // load owns the retry state from here.
 }
 
 /** Pushes the current command-bar state to the OVERLAY renderer (which hosts the
