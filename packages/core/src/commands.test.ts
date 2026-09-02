@@ -21,6 +21,7 @@ const ALL_IDS: CommandId[] = [
   "space.rename",
   "space.delete",
   "bar.open-location",
+  "blocking.toggle",
 ];
 
 /** Builds a command context, defaulting to no active tab and a single space. */
@@ -71,10 +72,24 @@ describe("COMMANDS registry", () => {
 });
 
 describe("isCommandEnabled — always-enabled commands", () => {
-  test("tab.new, space.new, space.rename, bar.open-location are enabled with no active tab", () => {
-    for (const id of ["tab.new", "space.new", "space.rename", "bar.open-location"] as const) {
+  test("tab.new, space.new, space.rename, bar.open-location, blocking.toggle are enabled with no active tab", () => {
+    for (const id of ["tab.new", "space.new", "space.rename", "bar.open-location", "blocking.toggle"] as const) {
       expect(isCommandEnabled(id, context({ activeTab: null }))).toBe(true);
     }
+  });
+});
+
+describe("blocking.toggle command", () => {
+  test("is registered in the view menu with no accelerator", () => {
+    const entry = COMMANDS.find((c) => c.id === "blocking.toggle");
+    expect(entry).toBeDefined();
+    expect(entry?.menu).toBe("view");
+    expect(entry?.accelerator).toBeNull();
+  });
+
+  test("is always enabled regardless of context", () => {
+    expect(isCommandEnabled("blocking.toggle", context({ activeTab: null, spaceCount: 1 }))).toBe(true);
+    expect(isCommandEnabled("blocking.toggle", context({ activeTab: activeTab(), spaceCount: 3 }))).toBe(true);
   });
 });
 
@@ -137,15 +152,15 @@ describe("isCommandEnabled — no active tab yields exactly the expected set", (
     return ALL_IDS.filter((id) => isCommandEnabled(id, ctx)).sort();
   }
 
-  test("with one space: only the four always-enabled commands", () => {
+  test("with one space: only the five always-enabled commands", () => {
     expect(enabledIds(context({ activeTab: null, spaceCount: 1 }))).toEqual(
-      ["bar.open-location", "space.new", "space.rename", "tab.new"].sort(),
+      ["bar.open-location", "blocking.toggle", "space.new", "space.rename", "tab.new"].sort(),
     );
   });
 
-  test("with more than one space: the four plus space.delete", () => {
+  test("with more than one space: the five plus space.delete", () => {
     expect(enabledIds(context({ activeTab: null, spaceCount: 2 }))).toEqual(
-      ["bar.open-location", "space.delete", "space.new", "space.rename", "tab.new"].sort(),
+      ["bar.open-location", "blocking.toggle", "space.delete", "space.new", "space.rename", "tab.new"].sort(),
     );
   });
 });

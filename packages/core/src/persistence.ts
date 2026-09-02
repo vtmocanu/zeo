@@ -16,7 +16,7 @@
  * highest version it can read back. A stored version ABOVE this is from a newer
  * build and cannot be understood ({@link UnsupportedSchemaVersionError}).
  */
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 /**
  * The single meta row: the schema version the state was written with and the
@@ -107,21 +107,23 @@ export class UnsupportedSchemaVersionError extends Error {
  *
  * - `> SCHEMA_VERSION` ⇒ `"abort"` — a newer build wrote it; refuse to touch it.
  * - `=== SCHEMA_VERSION` ⇒ `"noop"` — current; read it as-is.
- * - otherwise (`<= 0`, or any value below the current version) ⇒ `"create"` —
- *   there is nothing readable, so initialize a fresh schema.
- *
- * With `SCHEMA_VERSION === 1` the open interval `(0, SCHEMA_VERSION)` is empty,
- * but the `create` branch also absorbs `0`, negative, and any unexpected value
- * so the helper stays total.
+ * - `> 0 && < SCHEMA_VERSION` ⇒ `"migrate"` — an existing older DB to upgrade
+ *   in place.
+ * - otherwise (`<= 0`) ⇒ `"create"` — there is nothing readable, so initialize
+ *   a fresh schema. This branch also absorbs negative and any unexpected value
+ *   so the helper stays total.
  */
 export function migrationAction(
   currentVersion: number,
-): "create" | "noop" | "abort" {
+): "create" | "migrate" | "noop" | "abort" {
   if (currentVersion > SCHEMA_VERSION) {
     return "abort";
   }
   if (currentVersion === SCHEMA_VERSION) {
     return "noop";
+  }
+  if (currentVersion > 0) {
+    return "migrate";
   }
   return "create";
 }

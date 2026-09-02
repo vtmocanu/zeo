@@ -3,6 +3,7 @@ import type { Space } from "./space.js";
 import type { Profile } from "./profile.js";
 import type { CommandBarMode, CommandBarState } from "./command-bar.js";
 import type { CommandDescriptor, CommandId } from "./commands.js";
+import type { BlockingState } from "./blocking.js";
 
 /**
  * A single space's tab payload, in the pre-space shape. This is what
@@ -26,14 +27,25 @@ export interface SpacesState {
 }
 
 /**
- * The full application state broadcast from main to renderers. Produced by
- * {@link SpaceStore.snapshot} and pushed over the state-change channel.
+ * The pure store's snapshot shape: the space slice plus the active space's tab
+ * slice, with NO blocking dimension. Produced by {@link SpaceStore.snapshot};
+ * the store does not know about content blocking.
+ */
+export interface StoreSnapshot extends SpacesState, TabsSlice {}
+
+/**
+ * The full application state broadcast from main to renderers: the store
+ * snapshot plus the {@link BlockingState} slice main maintains. Pushed over the
+ * state-change channel.
  *
  * The space dimension (`spaces`, `activeSpaceId`) sits alongside the active
  * space's `tabs`/`activeTabId`/`archived` in the existing shape, so renderer
- * code written against the pre-space snapshot keeps working unchanged.
+ * code written against the pre-space snapshot keeps working unchanged; `blocking`
+ * carries the content-blocking counts main attaches before broadcast.
  */
-export interface TabsState extends SpacesState, TabsSlice {}
+export interface TabsState extends StoreSnapshot {
+  blocking: BlockingState;
+}
 
 /**
  * A single item in the tab context menu, as reported back to the renderer by
@@ -205,6 +217,16 @@ export interface CommandsApi {
 }
 
 /**
+ * Content-blocking commands the renderer invokes over IPC, handled in main.
+ * `setEnabled(enabled)` turns blocking on or off; `state()` reads back the
+ * current {@link BlockingState} (enabled flag, list version, and blocked counts).
+ */
+export interface BlockingApi {
+  setEnabled(enabled: boolean): Promise<void>;
+  state(): Promise<BlockingState>;
+}
+
+/**
  * The full bridge surface exposed on `window.zeo` by the preload script.
  *
  * `onStateChange` registers a listener for main-pushed state updates and
@@ -217,6 +239,7 @@ export interface ZeoApi {
   profiles: ProfilesApi;
   commandBar: CommandBarApi;
   commands: CommandsApi;
+  blocking: BlockingApi;
   onStateChange(listener: (state: TabsState) => void): () => void;
   /** Registers a listener for main-pushed command-bar state updates and returns
    *  an unsubscribe function, mirroring onStateChange. */
@@ -264,5 +287,7 @@ export const IPC = {
   commandBarChange: "zeo:command-bar:change",
   commandsList: "zeo:commands:list",
   commandsRun: "zeo:commands:run",
+  blockingSetEnabled: "zeo:blocking:set-enabled",
+  blockingState: "zeo:blocking:state",
   stateChange: "zeo:state-change",
 } as const;
