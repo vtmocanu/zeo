@@ -100,6 +100,9 @@ importers:
       '@types/node':
         specifier: ^24.5.2
         version: 24.13.3
+      '@zeo/core':
+        specifier: workspace:*
+        version: link:../packages/core
       electron:
         specifier: 44.0.0
         version: 44.0.0

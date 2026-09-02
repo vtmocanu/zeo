@@ -1,11 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { commandBarBounds, COMMAND_BAR_HEIGHT, SIDEBAR_WIDTH } from "./layout.js";
+import {
+  commandBarBounds,
+  COMMAND_BAR_HEIGHT,
+  SUGGESTION_ROW_HEIGHT,
+  SIDEBAR_WIDTH,
+} from "./layout.js";
 
 describe("commandBarBounds", () => {
   it("centers a clamped bar over the page region", () => {
     // contentWidth 1280 → pageWidth 1040, width clamped to 640,
     // x = 240 + round((1040 - 640) / 2) = 440.
-    expect(commandBarBounds(1280, 800)).toEqual({
+    expect(commandBarBounds(1280, 800, 0)).toEqual({
       x: 440,
       y: Math.round(800 * 0.12),
       width: 640,
@@ -14,12 +19,12 @@ describe("commandBarBounds", () => {
   });
 
   it("clamps the width to 640 on a very wide window", () => {
-    expect(commandBarBounds(4000, 1000).width).toBe(640);
+    expect(commandBarBounds(4000, 1000, 0).width).toBe(640);
   });
 
   it("tracks a narrow page region (pageWidth 100 → width 52)", () => {
     // contentWidth 340 → pageWidth 100, width = min(640, 100 - 48) = 52.
-    const bounds = commandBarBounds(340, 900);
+    const bounds = commandBarBounds(340, 900, 0);
     expect(bounds.width).toBe(52);
     expect(bounds.x).toBe(SIDEBAR_WIDTH + Math.round((100 - 52) / 2));
     expect(bounds.height).toBe(COMMAND_BAR_HEIGHT);
@@ -27,13 +32,38 @@ describe("commandBarBounds", () => {
 
   it("returns an all-zero rect when the page region is non-positive", () => {
     // contentWidth 200 → pageWidth -40 → width floored to 0.
-    expect(commandBarBounds(200, 800)).toEqual({ x: 0, y: 0, width: 0, height: 0 });
+    expect(commandBarBounds(200, 800, 0)).toEqual({ x: 0, y: 0, width: 0, height: 0 });
   });
 
   it("yields no negative dimensions when contentWidth equals the sidebar width", () => {
-    const bounds = commandBarBounds(SIDEBAR_WIDTH, 800);
+    const bounds = commandBarBounds(SIDEBAR_WIDTH, 800, 0);
     expect(bounds).toEqual({ x: 0, y: 0, width: 0, height: 0 });
     expect(bounds.width).toBeGreaterThanOrEqual(0);
     expect(bounds.height).toBeGreaterThanOrEqual(0);
+  });
+
+  it("grows the height by one row height per suggestion row", () => {
+    const base = commandBarBounds(1280, 2000, 0).height;
+    expect(base).toBe(COMMAND_BAR_HEIGHT);
+    expect(commandBarBounds(1280, 2000, 1).height).toBe(
+      COMMAND_BAR_HEIGHT + SUGGESTION_ROW_HEIGHT,
+    );
+    expect(commandBarBounds(1280, 2000, 5).height).toBe(
+      COMMAND_BAR_HEIGHT + 5 * SUGGESTION_ROW_HEIGHT,
+    );
+  });
+
+  it("clamps the height so the bottom edge never passes a short window", () => {
+    // y = round(300 * 0.12) = 36; room = 300 - 36 = 264. A big row count would
+    // overflow, so height is clamped to the remaining room.
+    const bounds = commandBarBounds(1280, 300, 20);
+    const y = Math.round(300 * 0.12);
+    expect(bounds.height).toBe(300 - y);
+    expect(y + bounds.height).toBe(300);
+  });
+
+  it("returns an all-zero rect when the window cannot seat the input row", () => {
+    // y = round(60 * 0.12) = 7; room = 60 - 7 = 53 < COMMAND_BAR_HEIGHT (56).
+    expect(commandBarBounds(1280, 60, 0)).toEqual({ x: 0, y: 0, width: 0, height: 0 });
   });
 });

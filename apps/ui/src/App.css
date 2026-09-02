@@ -437,13 +437,17 @@ body {
 
 /* Command bar ------------------------------------------------------------- */
 
-/* The overlay WebContentsView is sized/positioned by main, so this container
-   fills it (100vh) and centers the single input row. Reuses the sidebar's
-   panel tokens — same surface, border, and text colors. */
+/* The overlay WebContentsView is sized/positioned by main to fit the input plus
+   its suggestion rows, so this container fills it (100vh) as a column with the
+   input at the top and the rows flowing below. Reuses the sidebar's panel
+   tokens — same surface, border, and text colors. Never scrolls (the row cap in
+   main bounds the list). */
 .command-bar {
   height: 100vh;
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
   padding: 8px;
   background: #1e1e28;
   color: #e6e6ee;
@@ -457,7 +461,7 @@ body {
    address row. No default outline; a clear accent border on focus. */
 .command-bar__input {
   appearance: none;
-  flex: 1;
+  flex: 0 0 auto;
   min-width: 0;
   border: 1px solid #3a3a4c;
   background: #14141c;
@@ -475,4 +479,61 @@ body {
 .command-bar__input:focus {
   outline: none;
   border-color: #6b6bff;
+}
+
+/* Suggestion rows flow directly under the input. No scroll — main caps the row
+   count and sizes the overlay to fit, so the column always fits. */
+.command-bar__list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 6px;
+}
+
+.command-bar__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: default;
+}
+
+.command-bar__row--selected {
+  background: #34344a;
+}
+
+.command-bar__row-icon {
+  flex: 0 0 auto;
+  width: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #a0a0b4;
+  font-size: 13px;
+  line-height: 1;
+}
+
+.command-bar__row-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.command-bar__row-primary {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #e6e6ee;
+  font-size: 13px;
+}
+
+.command-bar__row-secondary {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #7a7a90;
+  font-size: 11px;
 }

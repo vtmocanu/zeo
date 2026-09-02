@@ -9,6 +9,35 @@ milestone, a minor bump only for very large breakthroughs.
 
 ## [Unreleased]
 
+## [0.0.10] - 2026-09-02
+
+### Added
+
+- The command bar now shows a ranked list of suggestions as you type:
+  matching open tabs from every space, archived tabs, and spaces, navigable
+  with the arrow keys; Enter acts on the highlighted row.
+- Selecting a tab suggestion jumps to it even across spaces (switching the
+  active space); selecting an archived tab restores it; selecting a space
+  switches to it.
+- Opening the bar with nothing typed (Cmd+T) lists the most recently active
+  tabs.
+
+### Changed
+
+- Row 0 of the list is always the navigate/search action for the typed
+  text, so typing a url or search term and pressing Enter behaves exactly
+  as before.
+- The command-bar overlay now grows and shrinks to fit the suggestion list.
+
+### Fixed
+
+- Clicking a suggestion row is now bound to the exact list it was rendered
+  against: if the list changes as you keep typing, a click that arrives just
+  after is ignored instead of acting on whatever row now sits at that
+  position.
+- Resizing a window that was too short to show the command bar now returns
+  keyboard focus to the bar once it becomes visible again.
+
 ## [0.0.9] - 2026-09-02
 
 ### Added

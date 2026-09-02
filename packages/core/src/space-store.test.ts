@@ -691,3 +691,63 @@ describe("SpaceStore profile snapshots", () => {
     expect(snap.spaces[0].profileId).toBe("default");
   });
 });
+
+describe("SpaceStore.spaceOfTab", () => {
+  test("finds the owning space of an open tab", () => {
+    const store = makeStore();
+    const personalId = store.activeSpaceId;
+    const open = store.create({ url: "https://open.test" });
+
+    const work = store.createSpace("Work");
+    store.setActiveSpace(work.id);
+    const workTab = store.create({ url: "https://work.test" });
+
+    expect(store.spaceOfTab(open.id)).toBe(personalId);
+    expect(store.spaceOfTab(workTab.id)).toBe(work.id);
+  });
+
+  test("finds the owning space of an archived tab", () => {
+    const store = makeStore();
+    const personalId = store.activeSpaceId;
+    const gone = store.create({ url: "https://gone.test" });
+    store.archive(gone.id);
+
+    expect(store.spaceOfTab(gone.id)).toBe(personalId);
+  });
+
+  test("returns null for an unknown tab id", () => {
+    const store = makeStore();
+    store.create({ url: "https://a.test" });
+    expect(store.spaceOfTab("nope")).toBeNull();
+  });
+});
+
+describe("SpaceStore.allArchivedTabs", () => {
+  test("returns every space's archived tabs tagged with their owning space id", () => {
+    const store = makeStore();
+    const personalId = store.activeSpaceId;
+    const p1 = store.create({ url: "https://p1.test" });
+    const p2 = store.create({ url: "https://p2.test" });
+    store.archive(p1.id);
+
+    const work = store.createSpace("Work");
+    store.setActiveSpace(work.id);
+    const w1 = store.create({ url: "https://w1.test" });
+    const w2 = store.create({ url: "https://w2.test" });
+    store.archive(w1.id);
+
+    const all = store.allArchivedTabs();
+    expect(all.map(({ spaceId, tab }) => [spaceId, tab.id])).toEqual([
+      [personalId, p1.id],
+      [work.id, w1.id],
+    ]);
+    // Open tabs are excluded.
+    expect(all.some(({ tab }) => tab.id === p2.id || tab.id === w2.id)).toBe(false);
+  });
+
+  test("returns an empty list when no space has archived tabs", () => {
+    const store = makeStore();
+    store.create({ url: "https://a.test" });
+    expect(store.allArchivedTabs()).toEqual([]);
+  });
+});
