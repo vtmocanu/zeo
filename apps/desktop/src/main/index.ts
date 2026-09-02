@@ -340,7 +340,9 @@ function recomputeSuggestions(): void {
  * Opens the command bar in `mode`. A `"navigate"` request with no active tab
  * falls back to `"new-tab"`. `initialText` is the active tab's current stored url
  * in navigate mode (empty if it cannot be found) and empty in new-tab mode. Lays
- * out and shows the overlay, focuses it, and pushes the new state.
+ * out the overlay, showing and focusing it when the window has room for the bar
+ * (a collapsed window leaves it hidden until the next resize pass), and pushes
+ * the new state.
  */
 function openCommandBar(mode: CommandBarMode): void {
   const effectiveMode: CommandBarMode =
