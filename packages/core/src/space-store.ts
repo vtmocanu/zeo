@@ -418,6 +418,39 @@ export class SpaceStore {
     return result;
   }
 
+  /**
+   * The id of the space owning tab `id` — whether the tab is open or archived —
+   * or `null` when no space holds it. Used by the command-bar catalog builder
+   * and by the cross-space tab actions to route a suggestion to its space.
+   */
+  spaceOfTab(tabId: string): string | null {
+    for (const spaceId of this.order) {
+      const record = this.spacesById.get(spaceId)!;
+      if (
+        record.tabs.list().some((tab) => tab.id === tabId) ||
+        record.tabs.archived().some((tab) => tab.id === tabId)
+      ) {
+        return spaceId;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Every archived tab across all spaces, each tagged with its owning space id.
+   * Mirrors {@link allOpenTabs} over each space's archived set — the archived
+   * source for the command-bar catalog.
+   */
+  allArchivedTabs(): { spaceId: string; tab: Tab }[] {
+    const result: { spaceId: string; tab: Tab }[] = [];
+    for (const spaceId of this.order) {
+      for (const tab of this.spacesById.get(spaceId)!.tabs.archived()) {
+        result.push({ spaceId, tab });
+      }
+    }
+    return result;
+  }
+
   // --- Snapshots -----------------------------------------------------------
 
   /**

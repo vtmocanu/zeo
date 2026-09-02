@@ -166,6 +166,23 @@ export interface CommandBarApi {
   close(): Promise<void>;
   submit(text: string, mode?: CommandBarMode): Promise<void>;
   state(): Promise<CommandBarState>;
+  /**
+   * Stores `text`, recomputes `suggestions` from a fresh catalog, resets
+   * `selectedIndex` to 0 (or `-1` for an empty list), and pushes the state.
+   */
+  setQuery(text: string): Promise<void>;
+  /**
+   * Moves the selection by `delta`, wrapping at both ends, and pushes. With an
+   * empty list (`selectedIndex === -1`) both deltas keep `-1` and push nothing.
+   */
+  moveSelection(delta: 1 | -1): Promise<void>;
+  /**
+   * Performs one suggestion's action and closes the bar: the row at `index`
+   * when given (the clicked row), otherwise the row at `selectedIndex`. An
+   * index outside `0 .. suggestions.length - 1` rejects; with no index and
+   * `selectedIndex === -1` it behaves like {@link CommandBarApi.submit}.
+   */
+  accept(index?: number): Promise<void>;
 }
 
 /**
@@ -221,6 +238,9 @@ export const IPC = {
   commandBarClose: "zeo:command-bar:close",
   commandBarSubmit: "zeo:command-bar:submit",
   commandBarState: "zeo:command-bar:state",
+  commandBarSetQuery: "zeo:command-bar:set-query",
+  commandBarMove: "zeo:command-bar:move",
+  commandBarAccept: "zeo:command-bar:accept",
   commandBarChange: "zeo:command-bar:change",
   stateChange: "zeo:state-change",
 } as const;

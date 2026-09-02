@@ -1,3 +1,5 @@
+import type { Suggestion } from "./suggest.js";
+
 /**
  * Which action the command bar performs on submit.
  *
@@ -19,4 +21,10 @@ export interface CommandBarState {
   open: boolean;
   mode: CommandBarMode;
   initialText: string;
+  /** The current query text main has ranked `suggestions` from. */
+  query: string;
+  /** The ranked suggestion list for `query` (row 0 is the text action). */
+  suggestions: Suggestion[];
+  /** 0-based index into `suggestions`; `-1` when the list is empty. */
+  selectedIndex: number;
 }
