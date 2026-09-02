@@ -25,6 +25,7 @@ export type {
   SpacesApi,
   ProfilesApi,
   CommandBarApi,
+  CommandsApi,
   ZeoApi,
   TabContextMenuItem,
   TabContextMenuResult,
@@ -33,6 +34,8 @@ export type {
   SpaceMenuAction,
 } from "./ipc.js";
 export { IPC } from "./ipc.js";
+export { COMMANDS, isCommandEnabled, menuEntries, formatAccelerator } from "./commands.js";
+export type { CommandId, CommandDescriptor, CommandContext, MenuEntry } from "./commands.js";
 export { resolveInput, DEFAULT_SEARCH_ENGINE } from "./resolve-input.js";
 export type { NavigationTarget } from "./resolve-input.js";
 export type { CommandBarMode, CommandBarState } from "./command-bar.js";

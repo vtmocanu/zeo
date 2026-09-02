@@ -1,5 +1,6 @@
 import { resolveInput } from "./resolve-input.js";
 import type { CommandBarMode } from "./command-bar.js";
+import type { CommandId } from "./commands.js";
 
 /**
  * One row the command bar can show and act on. `navigate`/`search` are the
@@ -12,7 +13,8 @@ export type Suggestion =
   | { kind: "search"; url: string; label: string }
   | { kind: "tab"; tabId: string; spaceId: string; title: string; url: string; spaceName: string }
   | { kind: "archived-tab"; tabId: string; spaceId: string; title: string; url: string; spaceName: string }
-  | { kind: "space"; spaceId: string; name: string };
+  | { kind: "space"; spaceId: string; name: string }
+  | { kind: "command"; id: CommandId; title: string; accelerator: string | null };
 
 /**
  * The plain, store-free input {@link suggest} ranks over. Main builds this from
@@ -25,6 +27,7 @@ export interface SuggestCatalog {
   spaces: { id: string; name: string; active: boolean }[];
   tabs: { tabId: string; spaceId: string; title: string; url: string; spaceName: string; lastActiveAt: number }[];
   archived: { tabId: string; spaceId: string; title: string; url: string; spaceName: string; archivedAt: number }[];
+  commands: { id: CommandId; title: string; keywords: string[]; accelerator: string | null; enabled: boolean }[];
 }
 
 /**
@@ -108,7 +111,7 @@ interface Candidate {
   suggestion: Suggestion;
   /** Worst (largest) term tier — the candidate's score, ascending. */
   score: number;
-  /** Kind rank: open tab 0, space 1, archived tab 2. */
+  /** Kind rank: open tab 0, space 1, command 2, archived tab 3. */
   kindRank: number;
   /** 0 for a tab in the active space (and for every non-tab), 1 otherwise. */
   activeRank: number;
@@ -140,7 +143,7 @@ function matchesAll(haystack: string, terms: string[]): boolean {
  * recently active open tabs (excluding the active tab) in `new-tab` mode and
  * empty in `navigate` mode. Otherwise catalog rows whose haystack contains
  * every whitespace-separated term are scored (see {@link termTier}, worst tier
- * wins), sorted by score, then kind (open tab, space, archived tab), then
+ * wins), sorted by score, then kind (open tab, space, command, archived tab), then
  * active-space-first for tabs, then recency descending, then catalog order,
  * and capped at eight before row 0 is prepended. Pure — reads only its
  * arguments.
@@ -207,6 +210,30 @@ export function suggest(query: string, catalog: SuggestCatalog, options: Suggest
     }
   }
 
+  for (const command of catalog.commands) {
+    if (!command.enabled) {
+      continue;
+    }
+    const titleLower = command.title.toLowerCase();
+    const haystack = `${command.title} ${command.keywords.join(" ")}`.toLowerCase();
+    if (matchesAll(haystack, terms)) {
+      const score = Math.max(...terms.map((term) => termTier(term, titleLower, null)));
+      candidates.push({
+        suggestion: {
+          kind: "command",
+          id: command.id,
+          title: command.title,
+          accelerator: command.accelerator,
+        },
+        score,
+        kindRank: 2,
+        activeRank: 0,
+        recency: 0,
+        order: order++,
+      });
+    }
+  }
+
   for (const tab of catalog.archived) {
     if (tab.tabId === options.activeTabId) {
       continue;
@@ -219,7 +246,7 @@ export function suggest(query: string, catalog: SuggestCatalog, options: Suggest
       candidates.push({
         suggestion: archivedSuggestion(tab),
         score,
-        kindRank: 2,
+        kindRank: 3,
         activeRank: 0,
         recency: tab.archivedAt,
         order: order++,
