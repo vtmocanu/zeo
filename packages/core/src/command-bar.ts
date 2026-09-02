@@ -27,4 +27,11 @@ export interface CommandBarState {
   suggestions: Suggestion[];
   /** 0-based index into `suggestions`; `-1` when the list is empty. */
   selectedIndex: number;
+  /**
+   * Monotonic id of the current `suggestions` list, bumped whenever the list is
+   * recomputed or cleared. The renderer echoes the revision it rendered when it
+   * accepts a clicked row, so main can reject a click that raced a newer list
+   * (the clicked index would otherwise resolve against different rows).
+   */
+  revision: number;
 }

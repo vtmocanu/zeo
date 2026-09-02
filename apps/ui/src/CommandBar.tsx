@@ -90,6 +90,9 @@ export function CommandBar() {
   // stores what is pushed and never computes or reorders them.
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(-1);
+  // The revision of the suggestion list currently rendered. Echoed back to main
+  // on a row click so a click that raced a newer pushed list is rejected there.
+  const [revision, setRevision] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   // Tracks the previous `open` so we re-seed on each closed→open transition
   // rather than on every broadcast.
@@ -122,6 +125,7 @@ export function CommandBar() {
       // recomputes them on each keystroke), not only on open.
       setSuggestions(state.suggestions);
       setSelectedIndex(state.selectedIndex);
+      setRevision(state.revision);
       if (opening || modeChangedWhileOpen) {
         setValue(state.initialText);
         setOpenSeed((prev) => ({
@@ -176,18 +180,21 @@ export function CommandBar() {
   };
 
   /**
-   * Accepts the clicked row via `commandBar.accept(index)`. Uses `onMouseDown`
-   * with `preventDefault` rather than `onClick`: main closes the bar on the
-   * overlay's blur, and a plain click would first blur the input (firing that
-   * blur→close) before the accept ran. Preventing the default keeps focus on the
-   * input so the bar is still open when `accept` reaches main.
+   * Accepts the clicked row via `commandBar.accept(index, revision)`. Uses
+   * `onMouseDown` with `preventDefault` rather than `onClick`: main closes the
+   * bar on the overlay's blur, and a plain click would first blur the input
+   * (firing that blur→close) before the accept ran. Preventing the default keeps
+   * focus on the input so the bar is still open when `accept` reaches main. The
+   * rendered `revision` is passed so main rejects a click that raced a newer
+   * pushed suggestion list (the clicked index would otherwise resolve against
+   * different rows).
    */
   const onRowMouseDown = (
     event: ReactMouseEvent<HTMLDivElement>,
     index: number,
   ): void => {
     event.preventDefault();
-    void window.zeo?.commandBar.accept(index).catch(() => {});
+    void window.zeo?.commandBar.accept(index, revision).catch(() => {});
   };
 
   return (

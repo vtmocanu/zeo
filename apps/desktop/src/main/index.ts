@@ -87,7 +87,14 @@ let commandBar: CommandBarState = {
   query: "",
   suggestions: [],
   selectedIndex: -1,
+  revision: 0,
 };
+/**
+ * Monotonic source for {@link CommandBarState.revision}. Bumped whenever the
+ * suggestion list is recomputed or cleared, so an accept carrying a clicked
+ * row's rendered revision can be matched against the list currently in effect.
+ */
+let commandBarRevision = 0;
 /**
  * Per-tab navigation sequence counter for last-request-wins: each
  * {@link navigateTab} bumps its tab's number, and a settling `loadURL` only
@@ -334,6 +341,9 @@ function recomputeSuggestions(): void {
     activeTabId: store.activeTabId,
   });
   commandBar.selectedIndex = commandBar.suggestions.length > 0 ? 0 : -1;
+  // A fresh list gets a fresh revision so a click bound to a prior list is
+  // recognized as stale by acceptCommandBar.
+  commandBar.revision = ++commandBarRevision;
 }
 
 /**
@@ -359,6 +369,7 @@ function openCommandBar(mode: CommandBarMode): void {
     query: initialText,
     suggestions: [],
     selectedIndex: -1,
+    revision: commandBar.revision,
   };
   // Rank the initial suggestions BEFORE laying out so the overlay is sized to the
   // row count on open — a `Cmd+T` with empty text already shows the recent-tabs
@@ -387,6 +398,9 @@ function closeCommandBar(): void {
     query: "",
     suggestions: [],
     selectedIndex: -1,
+    // Clearing the list bumps the revision so a click that raced the close is
+    // rejected rather than resolved against the now-empty list.
+    revision: ++commandBarRevision,
   };
   overlay?.setVisible(false);
   pushCommandBar();
@@ -523,8 +537,18 @@ function performSuggestion(s: Suggestion): void {
  * (`navigate`/`search`) also route through {@link submitCommandBar} (which closes
  * the bar itself, so no extra close); every other kind runs
  * {@link performSuggestion} and then closes.
+ *
+ * `revision` is the {@link CommandBarState.revision} the renderer rendered the
+ * clicked row against. When an explicit `index` is paired with a `revision` that
+ * no longer matches the current list, the click raced a newer suggestion list;
+ * it is rejected (thrown, so the invoke rejects) with the bar left untouched,
+ * exactly like the out-of-range guard. The keyboard path passes no `revision`
+ * (it acts on `selectedIndex` against the current list), so the guard is skipped.
  */
-function acceptCommandBar(index?: number): void {
+function acceptCommandBar(index?: number, revision?: number): void {
+  if (index !== undefined && revision !== undefined && revision !== commandBar.revision) {
+    throw new Error(`accept revision stale: ${revision} !== ${commandBar.revision}`);
+  }
   if (index !== undefined && (index < 0 || index >= commandBar.suggestions.length)) {
     throw new Error(`accept index out of range: ${index}`);
   }
@@ -1000,7 +1024,15 @@ function createWindow(seed: boolean): void {
       views.get(active)?.view.setBounds(viewBounds());
     }
     if (commandBar.open) {
-      layoutOverlay();
+      // A resize that grows a too-short window can bring a previously collapsed
+      // (all-zero rect) overlay back into view. Focus is returned to the overlay
+      // only on that hidden→visible transition, so a resize of an already-shown
+      // bar never steals focus from the input mid-typing.
+      const wasVisible = overlay?.getVisible() ?? false;
+      const shown = layoutOverlay();
+      if (shown && !wasVisible) {
+        overlay?.webContents.focus();
+      }
     }
   });
 
@@ -1131,8 +1163,8 @@ ipcMain.handle(IPC.commandBarMove, (_event, delta: 1 | -1): void => {
 
 // acceptCommandBar throws on an out-of-range explicit index; the thrown Error
 // propagates out and rejects the renderer's invoke, leaving the bar untouched.
-ipcMain.handle(IPC.commandBarAccept, (_event, index?: number): void => {
-  acceptCommandBar(index);
+ipcMain.handle(IPC.commandBarAccept, (_event, index?: number, revision?: number): void => {
+  acceptCommandBar(index, revision);
 });
 
 ipcMain.handle(IPC.commandBarState, (): CommandBarState => commandBar);

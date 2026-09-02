@@ -181,8 +181,15 @@ export interface CommandBarApi {
    * when given (the clicked row), otherwise the row at `selectedIndex`. An
    * index outside `0 .. suggestions.length - 1` rejects; with no index and
    * `selectedIndex === -1` it behaves like {@link CommandBarApi.submit}.
+   *
+   * `revision` is the {@link CommandBarState.revision} the renderer had rendered
+   * when the row was clicked. When both `index` and `revision` are given and the
+   * revision no longer matches main's current one, the click raced a newer
+   * suggestion list and is rejected with the state left unchanged. The keyboard
+   * (no-index) path omits `revision`: it acts on `selectedIndex` against the
+   * current list and needs no guard.
    */
-  accept(index?: number): Promise<void>;
+  accept(index?: number, revision?: number): Promise<void>;
 }
 
 /**

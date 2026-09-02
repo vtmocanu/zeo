@@ -61,7 +61,8 @@ const api = {
     setQuery: (text: string): Promise<void> => ipcRenderer.invoke(IPC.commandBarSetQuery, text),
     moveSelection: (delta: 1 | -1): Promise<void> =>
       ipcRenderer.invoke(IPC.commandBarMove, delta),
-    accept: (index?: number): Promise<void> => ipcRenderer.invoke(IPC.commandBarAccept, index),
+    accept: (index?: number, revision?: number): Promise<void> =>
+      ipcRenderer.invoke(IPC.commandBarAccept, index, revision),
   },
   onStateChange: (listener: (state: TabsState) => void): (() => void) => {
     const handler = (_event: Electron.IpcRendererEvent, state: TabsState): void => listener(state);
