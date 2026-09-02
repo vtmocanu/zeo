@@ -29,6 +29,15 @@ milestone, a minor bump only for very large breakthroughs.
   as before.
 - The command-bar overlay now grows and shrinks to fit the suggestion list.
 
+### Fixed
+
+- Clicking a suggestion row is now bound to the exact list it was rendered
+  against: if the list changes as you keep typing, a click that arrives just
+  after is ignored instead of acting on whatever row now sits at that
+  position.
+- Resizing a window that was too short to show the command bar now returns
+  keyboard focus to the bar once it becomes visible again.
+
 ## [0.0.9] - 2026-09-02
 
 ### Added
