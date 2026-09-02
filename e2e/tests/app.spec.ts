@@ -604,7 +604,11 @@ test.describe("zeo desktop app", () => {
     // has no explicit spot-checks after it, unlike the Tabs test.
     expect(viewCommands.length).toBeGreaterThan(0);
     for (const command of viewCommands) {
-      expect(accelerators[command.title]).toBe(command.accelerator ?? undefined);
+      // A command with no accelerator surfaces as `null` on the native MenuItem
+      // and as `null` in the registry; normalize both to `undefined` so a
+      // no-accelerator View command (e.g. blocking.toggle) matches, while
+      // accelerator-bearing commands still compare their exact string.
+      expect(accelerators[command.title] ?? undefined).toBe(command.accelerator ?? undefined);
     }
   });
 
