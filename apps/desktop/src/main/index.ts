@@ -11,6 +11,8 @@ import {
   defaultSpaceName,
   commandBarBounds,
   resolveInput,
+  suggest,
+  nextSelectedIndex,
 } from "@zeo/core";
 import type {
   CommandBarMode,
@@ -19,6 +21,8 @@ import type {
   Space,
   SpaceContextMenuResult,
   SpacesState,
+  Suggestion,
+  SuggestCatalog,
   Tab,
   TabContextMenuResult,
   TabsState,
@@ -76,7 +80,14 @@ let overlay: WebContentsView | null = null;
  * {@link IPC.commandBarChange}. Toggled by {@link openCommandBar} /
  * {@link closeCommandBar} and read back by the `commandBarState` IPC handler.
  */
-let commandBar: CommandBarState = { open: false, mode: "navigate", initialText: "" };
+let commandBar: CommandBarState = {
+  open: false,
+  mode: "navigate",
+  initialText: "",
+  query: "",
+  suggestions: [],
+  selectedIndex: -1,
+};
 /**
  * Per-tab navigation sequence counter for last-request-wins: each
  * {@link navigateTab} bumps its tab's number, and a settling `loadURL` only
@@ -106,15 +117,29 @@ function viewBounds(): Electron.Rectangle {
 
 /**
  * Positions the command-bar overlay over the page region using the shared
- * {@link commandBarBounds} geometry. A no-op unless both the window and the
- * overlay exist. Called when the bar opens and on every resize while it is open.
+ * {@link commandBarBounds} geometry, sized to the current suggestion row count.
+ * A no-op unless both the window and the overlay exist. When the window is too
+ * short or too narrow the geometry collapses to an all-zero rect; the overlay is
+ * hidden in that case and left hidden until a later bounds pass yields a
+ * non-zero rectangle. Otherwise, while the bar is open, the overlay is (re-)shown
+ * — every state push while open re-applies bounds, so the overlay tracks the row
+ * count as the query changes. Called when the bar opens, on each state push, and
+ * on every resize while it is open.
  */
 function layoutOverlay(): void {
   if (win === null || overlay === null) {
     return;
   }
   const [width, height] = win.getContentSize();
-  overlay.setBounds(commandBarBounds(width, height));
+  const bounds = commandBarBounds(width, height, commandBar.suggestions.length);
+  if (bounds.width === 0) {
+    overlay.setVisible(false);
+    return;
+  }
+  overlay.setBounds(bounds);
+  if (commandBar.open) {
+    overlay.setVisible(true);
+  }
 }
 
 /**
@@ -264,6 +289,50 @@ function pushCommandBar(): void {
 }
 
 /**
+ * Snapshots the store into the plain, store-free {@link SuggestCatalog} that
+ * {@link suggest} ranks over: every space (flagged `active`), every open tab, and
+ * every archived tab, each carrying its owning space's id and name. Rebuilt on
+ * every keystroke so the ranked list always reflects the live store.
+ */
+function buildCatalog(): SuggestCatalog {
+  const spaceNameById = new Map(store.spaces().map((s) => [s.id, s.name]));
+  return {
+    spaces: store.spaces().map((s) => ({ id: s.id, name: s.name, active: s.id === store.activeSpaceId })),
+    tabs: store.allOpenTabs().map(({ spaceId, tab }) => ({
+      tabId: tab.id,
+      spaceId,
+      title: tab.title,
+      url: tab.url,
+      spaceName: spaceNameById.get(spaceId) ?? "",
+      lastActiveAt: tab.lastActiveAt,
+    })),
+    archived: store.allArchivedTabs().map(({ spaceId, tab }) => ({
+      tabId: tab.id,
+      spaceId,
+      title: tab.title,
+      url: tab.url,
+      spaceName: spaceNameById.get(spaceId) ?? "",
+      // archivedAt is `number | null` on Tab; an archived tab always carries a
+      // number, but coalesce to satisfy the catalog's `number` field.
+      archivedAt: tab.archivedAt ?? 0,
+    })),
+  };
+}
+
+/**
+ * Recomputes {@link commandBar}'s `suggestions` from the current `query` and a
+ * fresh {@link buildCatalog} snapshot, then resets `selectedIndex` to the first
+ * row (or `-1` for an empty list). Mutates state only — callers push and lay out.
+ */
+function recomputeSuggestions(): void {
+  commandBar.suggestions = suggest(commandBar.query, buildCatalog(), {
+    mode: commandBar.mode,
+    activeTabId: store.activeTabId,
+  });
+  commandBar.selectedIndex = commandBar.suggestions.length > 0 ? 0 : -1;
+}
+
+/**
  * Opens the command bar in `mode`. A `"navigate"` request with no active tab
  * falls back to `"new-tab"`. `initialText` is the active tab's current stored url
  * in navigate mode (empty if it cannot be found) and empty in new-tab mode. Lays
@@ -277,7 +346,18 @@ function openCommandBar(mode: CommandBarMode): void {
     const active = store.list().find((t) => t.id === store.activeTabId);
     initialText = active?.url ?? "";
   }
-  commandBar = { open: true, mode: effectiveMode, initialText };
+  commandBar = {
+    open: true,
+    mode: effectiveMode,
+    initialText,
+    query: initialText,
+    suggestions: [],
+    selectedIndex: -1,
+  };
+  // Rank the initial suggestions BEFORE laying out so the overlay is sized to the
+  // row count on open — a `Cmd+T` with empty text already shows the recent-tabs
+  // list at its full height.
+  recomputeSuggestions();
   layoutOverlay();
   overlay?.setVisible(true);
   overlay?.webContents.focus();
@@ -293,7 +373,14 @@ function closeCommandBar(): void {
   if (!commandBar.open) {
     return;
   }
-  commandBar = { open: false, mode: commandBar.mode, initialText: "" };
+  commandBar = {
+    open: false,
+    mode: commandBar.mode,
+    initialText: "",
+    query: "",
+    suggestions: [],
+    selectedIndex: -1,
+  };
   overlay?.setVisible(false);
   pushCommandBar();
   const activeTabId = store.activeTabId;
@@ -332,6 +419,120 @@ function submitCommandBar(text: string, mode?: CommandBarMode): void {
   if (wasOpen) {
     closeCommandBar();
   }
+}
+
+/**
+ * Sets the query, re-ranks the suggestion list from a fresh catalog, re-lays-out
+ * the overlay to the new row count, and pushes the state. The renderer drives
+ * this on every keystroke.
+ */
+function setQueryCommandBar(text: string): void {
+  commandBar.query = text;
+  recomputeSuggestions();
+  layoutOverlay();
+  pushCommandBar();
+}
+
+/**
+ * Moves the selection by `delta` (`+1`/`-1`), wrapping at both ends via
+ * {@link nextSelectedIndex}, and pushes. With an empty list (`selectedIndex ===
+ * -1`) it is a no-op — no wrap, no push.
+ */
+function moveSelectionCommandBar(delta: 1 | -1): void {
+  if (commandBar.selectedIndex === -1) {
+    return;
+  }
+  commandBar.selectedIndex = nextSelectedIndex(
+    commandBar.selectedIndex,
+    commandBar.suggestions.length,
+    delta,
+  );
+  pushCommandBar();
+}
+
+/**
+ * Performs a catalog suggestion's action WITHOUT closing the bar — the caller
+ * ({@link acceptCommandBar}) closes afterward. Only the catalog kinds
+ * (`tab`/`archived-tab`/`space`) are handled here; the text kinds
+ * (`navigate`/`search`) are dispatched by {@link acceptCommandBar} through
+ * {@link submitCommandBar} (which closes the bar itself) before this runs, so
+ * they must never reach here. A `tab` activates its owning space (if not already
+ * active) then the tab; an `archived-tab` switches space, restores + materializes
+ * the view (mirroring the tabsRestore handler), then activates; a `space` just
+ * switches the active space and reconciles the visible view.
+ */
+function performSuggestion(s: Suggestion): void {
+  switch (s.kind) {
+    case "tab": {
+      if (s.spaceId !== store.activeSpaceId) {
+        store.setActiveSpace(s.spaceId);
+      }
+      // activateTab does store.activate + view reconcile + setActive (the
+      // cross-space hide/show transition, since setActive hides every other
+      // space's views) + broadcast.
+      activateTab(s.tabId);
+      return;
+    }
+    case "archived-tab": {
+      if (s.spaceId !== store.activeSpaceId) {
+        store.setActiveSpace(s.spaceId);
+      }
+      // After the space switch, store.list()/store.restore act on the now-active
+      // owning space. Restore and materialize the view like the tabsRestore
+      // handler before activating it.
+      store.restore(s.tabId);
+      if (!views.has(s.tabId)) {
+        const tab = store.list().find((t) => t.id === s.tabId);
+        if (tab !== undefined) {
+          createViewFor(tab, store.activeSpaceId);
+        }
+      }
+      activateTab(s.tabId);
+      return;
+    }
+    case "space": {
+      store.setActiveSpace(s.spaceId);
+      ensureActiveView();
+      broadcast();
+      return;
+    }
+    case "navigate":
+    case "search": {
+      // Unreachable: acceptCommandBar routes the text kinds through
+      // submitCommandBar itself and never calls performSuggestion for them.
+      throw new Error(`performSuggestion received text kind "${s.kind}"`);
+    }
+  }
+}
+
+/**
+ * Accepts a suggestion and closes the bar. The target row is the explicit
+ * `index` (a clicked row) when given, else the current `selectedIndex`, resolved
+ * against the CURRENT `suggestions`. An explicit `index` outside
+ * `0 .. suggestions.length - 1` throws — the invoke rejects and the bar is left
+ * untouched (not closed, not mutated). With no index and an empty list
+ * (`selectedIndex === -1`) it submits the raw query like the Enter action
+ * ({@link submitCommandBar} closes the open bar). The text kinds
+ * (`navigate`/`search`) also route through {@link submitCommandBar} (which closes
+ * the bar itself, so no extra close); every other kind runs
+ * {@link performSuggestion} and then closes.
+ */
+function acceptCommandBar(index?: number): void {
+  if (index !== undefined && (index < 0 || index >= commandBar.suggestions.length)) {
+    throw new Error(`accept index out of range: ${index}`);
+  }
+  const idx = index ?? commandBar.selectedIndex;
+  if (idx === -1) {
+    submitCommandBar(commandBar.query);
+    return;
+  }
+  const s = commandBar.suggestions[idx]!;
+  if (s.kind === "navigate" || s.kind === "search") {
+    submitCommandBar(commandBar.query, commandBar.mode);
+    return;
+  }
+  performSuggestion(s);
+  closeCommandBar();
 }
 
 /** Full close lifecycle: store removal, view teardown, re-activation, broadcast. */
@@ -911,6 +1112,20 @@ ipcMain.handle(IPC.commandBarClose, (): void => {
 
 ipcMain.handle(IPC.commandBarSubmit, (_event, text: string, mode?: CommandBarMode): void => {
   submitCommandBar(text, mode);
+});
+
+ipcMain.handle(IPC.commandBarSetQuery, (_event, text: string): void => {
+  setQueryCommandBar(text);
+});
+
+ipcMain.handle(IPC.commandBarMove, (_event, delta: 1 | -1): void => {
+  moveSelectionCommandBar(delta);
+});
+
+// acceptCommandBar throws on an out-of-range explicit index; the thrown Error
+// propagates out and rejects the renderer's invoke, leaving the bar untouched.
+ipcMain.handle(IPC.commandBarAccept, (_event, index?: number): void => {
+  acceptCommandBar(index);
 });
 
 ipcMain.handle(IPC.commandBarState, (): CommandBarState => commandBar);
