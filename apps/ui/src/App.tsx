@@ -640,7 +640,7 @@ export function App() {
           type="button"
           className="sidebar__new-tab"
           data-testid="new-tab-button"
-          onClick={() => void window.zeo?.tabs.create().catch(() => {})}
+          onClick={() => void window.zeo?.commandBar.open("new-tab").catch(() => {})}
         >
           + New tab
         </button>
