@@ -98,17 +98,47 @@ interface ZeoBridge {
     rename(id: string, name: string): Promise<void>;
     delete(id: string): Promise<void>;
   };
-  // PRD 4.1 command-bar surface. `submit` forwards the raw text to main, which
-  // runs `resolveInput` and either navigates the active tab or opens a new one;
-  // `state()` is an invoke round trip (never cached) reading the current overlay
-  // state back. Redeclared structurally (like the rest of this bridge) so e2e
-  // stays import-free of @zeo/core.
+  // PRD 4.1 + 4.2 command-bar surface. `submit` forwards the raw text to main,
+  // which runs `resolveInput` and either navigates the active tab or opens a new
+  // one; `state()` is an invoke round trip (never cached) reading the current
+  // overlay state back. PRD 4.2 widens the surface into a tab switcher:
+  // `setQuery` re-ranks `suggestions` from a fresh catalog, `moveSelection` wraps
+  // the highlight, and `accept` performs the selected (or indexed) row's action
+  // and closes the bar. Redeclared structurally (like the rest of this bridge) so
+  // e2e stays import-free of @zeo/core; `CommandBarStateShape`/`BridgeSuggestion`
+  // mirror @zeo/core's widened `CommandBarState` and `Suggestion` union.
   commandBar: {
     open(mode: "navigate" | "new-tab"): Promise<void>;
     close(): Promise<void>;
     submit(text: string, mode?: "navigate" | "new-tab"): Promise<void>;
-    state(): Promise<{ open: boolean; mode: "navigate" | "new-tab"; initialText: string }>;
+    setQuery(text: string): Promise<void>;
+    moveSelection(delta: 1 | -1): Promise<void>;
+    accept(index?: number): Promise<void>;
+    state(): Promise<CommandBarStateShape>;
   };
+}
+// PRD 4.2 — one command-bar suggestion row, structurally the @zeo/core
+// `Suggestion` union (redeclared import-free like the rest of this file). Row 0
+// is always a `navigate`/`search` text action; `tab`/`archived-tab`/`space` are
+// catalog matches. The e2e specs key off `kind`, `tabId`, `spaceId`, `title`,
+// `url`, `spaceName`, and `name`.
+type BridgeSuggestion =
+  | { kind: "navigate"; url: string; label: string }
+  | { kind: "search"; url: string; label: string }
+  | { kind: "tab"; tabId: string; spaceId: string; title: string; url: string; spaceName: string }
+  | { kind: "archived-tab"; tabId: string; spaceId: string; title: string; url: string; spaceName: string }
+  | { kind: "space"; spaceId: string; name: string };
+// PRD 4.2 — the widened command-bar state main broadcasts. Additive over the
+// PRD 4.1 shape (`open`/`mode`/`initialText` are still present, so the existing
+// 4.1 tests that read only those still typecheck), gaining `query`, the ranked
+// `suggestions`, and the 0-based `selectedIndex` (`-1` for an empty list).
+interface CommandBarStateShape {
+  open: boolean;
+  mode: "navigate" | "new-tab";
+  initialText: string;
+  query: string;
+  suggestions: BridgeSuggestion[];
+  selectedIndex: number;
 }
 // Inside `page.evaluate` the callback runs in the renderer, where the real global
 // carries the bridge. We reach it via `globalThis` (not `window`) so it never
@@ -1875,5 +1905,426 @@ test.describe("zeo desktop app", () => {
         },
       )
       .toMatch(/example\.org/);
+  });
+
+  // --- PRD 4.2 — command bar suggestions: tabs, archived tabs, spaces (§5). ------
+  // These drive the widened command bar over the sidebar bridge (`window.zeo`)
+  // and assert on the BROADCAST STATE: `commandBar.state()` (open/mode/query/
+  // suggestions/selectedIndex), `tabs.list()`, and `spaces.list()` — all of
+  // which main mutates synchronously before resolving, so the assertions are
+  // network-INDEPENDENT. `expect.poll` settles the async state push after each
+  // `setQuery`/`accept`. Tabs use reserved `.example` hostnames (which never
+  // resolve, so a CI page load cannot overwrite the fallback hostname title),
+  // and assertions match titles/urls by substring/regex — a real load can only
+  // canonicalize a url (e.g. add a trailing slash), never change these.
+
+  // §5 bullet 1 — a tab in an INACTIVE space is suggested with its space name;
+  // accepting it switches the active space and activates the tab WITHOUT creating
+  // a new tab.
+  test("suggests a cross-space tab and accepting it switches space and activates it, creating no tab", async () => {
+    // Second space ("Research") holding a distinctly-titled tab; then switch back
+    // to Personal so Research (and its tab) is inactive at query time.
+    const setup = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      const before = await zeo.tabs.list();
+      const personalId = before.activeSpaceId;
+      const research = await zeo.spaces.create("Research");
+      await zeo.spaces.activate(research.id);
+      const tab = await zeo.tabs.create("zeobar.example");
+      await zeo.spaces.activate(personalId);
+      return { personalId, researchId: research.id, tabId: tab.id };
+    });
+
+    // Open in new-tab mode and type part of the cross-space tab's title.
+    await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.commandBar.open("new-tab");
+      await zeo.commandBar.setQuery("zeobar");
+    });
+
+    // Poll until the ranked list carries a `tab` row for it with the right space.
+    await expect
+      .poll(async () =>
+        sidebar.evaluate(async () => {
+          const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+          const st = await zeo.commandBar.state();
+          return st.suggestions.some(
+            (s) => s.kind === "tab" && /zeobar/.test(s.title) && s.spaceName === "Research",
+          );
+        }),
+      )
+      .toBe(true);
+
+    // Capture the tab row's index, and the pre-accept baselines we assert against.
+    const pre = await sidebar.evaluate(async (ctx) => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      const st = await zeo.commandBar.state();
+      const index = st.suggestions.findIndex(
+        (s) => s.kind === "tab" && s.tabId === ctx.tabId,
+      );
+      const row = st.suggestions[index];
+      const spaces = await zeo.spaces.list();
+      const active = await zeo.tabs.list();
+      return {
+        index,
+        rowUrl: row !== undefined && "url" in row ? row.url : null,
+        spaceCount: spaces.spaces.length,
+        activeSpaceId: spaces.activeSpaceId,
+        activeTabCount: active.tabs.length,
+      };
+    }, setup);
+    expect(pre.index).toBeGreaterThanOrEqual(0);
+    expect(pre.rowUrl).toMatch(/zeobar\.example/);
+    expect(pre.activeSpaceId).toBe(setup.personalId);
+
+    // Accept the tab row by index: main activates Research, then the tab.
+    await sidebar.evaluate(async (index) => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.commandBar.accept(index);
+    }, pre.index);
+
+    await expect
+      .poll(async () =>
+        sidebar.evaluate(async () => {
+          const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+          return (await zeo.commandBar.state()).open;
+        }),
+      )
+      .toBe(false);
+
+    const after = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      const spaces = await zeo.spaces.list();
+      const active = await zeo.tabs.list();
+      return {
+        activeSpaceId: spaces.activeSpaceId,
+        activeTabId: active.activeTabId,
+        tabCount: active.tabs.length,
+      };
+    });
+    // Active space switched to the tab's space; the tab is now active.
+    expect(after.activeSpaceId).toBe(setup.researchId);
+    expect(after.activeTabId).toBe(setup.tabId);
+    // No new tab was created: Research still holds exactly the one tab it had.
+    expect(after.tabCount).toBe(pre.activeTabCount);
+    expect(after.tabCount).toBe(1);
+  });
+
+  // §5 bullet 2 — an ARCHIVED tab is suggested; accepting the `archived-tab` row
+  // restores it (moves it out of `archived` into the open list) and activates it.
+  test("suggests an archived tab and accepting restores and activates it", async () => {
+    const setup = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      const tab = await zeo.tabs.create("archmy.example");
+      await zeo.tabs.archive(tab.id);
+      const s = await zeo.tabs.list();
+      return {
+        tabId: tab.id,
+        archivedContains: s.archived.some((t) => t.id === tab.id),
+        openContains: s.tabs.some((t) => t.id === tab.id),
+      };
+    });
+    expect(setup.archivedContains).toBe(true);
+    expect(setup.openContains).toBe(false);
+
+    await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.commandBar.open("new-tab");
+      await zeo.commandBar.setQuery("archmy");
+    });
+
+    await expect
+      .poll(async () =>
+        sidebar.evaluate(async () => {
+          const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+          const st = await zeo.commandBar.state();
+          return st.suggestions.some(
+            (s) => s.kind === "archived-tab" && /archmy/.test(s.title),
+          );
+        }),
+      )
+      .toBe(true);
+
+    const index = await sidebar.evaluate(async (tabId) => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      const st = await zeo.commandBar.state();
+      return st.suggestions.findIndex(
+        (s) => s.kind === "archived-tab" && s.tabId === tabId,
+      );
+    }, setup.tabId);
+    expect(index).toBeGreaterThanOrEqual(0);
+
+    await sidebar.evaluate(async (i) => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.commandBar.accept(i);
+    }, index);
+
+    await expect
+      .poll(async () =>
+        sidebar.evaluate(async (tabId) => {
+          const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+          const s = await zeo.tabs.list();
+          const st = await zeo.commandBar.state();
+          return {
+            open: st.open,
+            restored: s.tabs.some((t) => t.id === tabId),
+            stillArchived: s.archived.some((t) => t.id === tabId),
+            active: s.activeTabId,
+          };
+        }, setup.tabId),
+      )
+      .toEqual({ open: false, restored: true, stillArchived: false, active: setup.tabId });
+  });
+
+  // §5 bullet 3 — a SPACE is suggested by name; moving the selection onto its row
+  // and accepting (no index — acts on the selected row) switches the active space.
+  test("suggests a space and accepting the moved-to space row switches the active space", async () => {
+    const sundialId = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      // A name unlikely to be a substring of any tab title/url, so the only
+      // `space` match is this one and no `tab` rows are interleaved with it.
+      const space = await zeo.spaces.create("Sundial");
+      return space.id;
+    });
+
+    await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.commandBar.open("new-tab");
+      await zeo.commandBar.setQuery("Sundial");
+    });
+
+    await expect
+      .poll(async () =>
+        sidebar.evaluate(async (id) => {
+          const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+          const st = await zeo.commandBar.state();
+          return st.suggestions.some((s) => s.kind === "space" && s.spaceId === id);
+        }, sundialId),
+      )
+      .toBe(true);
+
+    // Selection resets to row 0 after setQuery; step it down onto the space row,
+    // then assert the state's selectedIndex actually points at that row.
+    const landed = await sidebar.evaluate(async (id) => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      const st = await zeo.commandBar.state();
+      const target = st.suggestions.findIndex(
+        (s) => s.kind === "space" && s.spaceId === id,
+      );
+      for (let i = 0; i < target; i++) {
+        await zeo.commandBar.moveSelection(1);
+      }
+      const next = await zeo.commandBar.state();
+      const selected = next.suggestions[next.selectedIndex];
+      return {
+        target,
+        selectedIndex: next.selectedIndex,
+        selectedKind: selected !== undefined ? selected.kind : null,
+      };
+    }, sundialId);
+    expect(landed.selectedIndex).toBe(landed.target);
+    expect(landed.selectedKind).toBe("space");
+
+    // Accept with NO index: main acts on the row at selectedIndex.
+    await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.commandBar.accept();
+    });
+
+    await expect
+      .poll(async () =>
+        sidebar.evaluate(async () => {
+          const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+          return (await zeo.spaces.list()).activeSpaceId;
+        }),
+      )
+      .toBe(sundialId);
+  });
+
+  // §5 bullet 4 — row 0 (the text action) stays selected when the arrows are not
+  // touched, even though the query ALSO matches an open tab: accepting creates a
+  // new tab for the resolved text rather than activating the matched tab.
+  test("row 0 remains the text action: accept without moving creates a tab instead of activating the match", async () => {
+    const setup = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      const match = await zeo.tabs.create("zebra.example");
+      const s = await zeo.tabs.list();
+      return { matchId: match.id, tabCount: s.tabs.length };
+    });
+
+    // "zebra" resolves to a SEARCH (no dot), so row 0 is a `search` action; it
+    // also substring-matches the zebra.example tab, so there is a tab row below.
+    const shape = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.commandBar.open("new-tab");
+      await zeo.commandBar.setQuery("zebra");
+      const st = await zeo.commandBar.state();
+      return {
+        selectedIndex: st.selectedIndex,
+        row0Kind: st.suggestions[0]?.kind ?? null,
+        hasTabRow: st.suggestions.some((s) => s.kind === "tab"),
+      };
+    });
+    expect(shape.selectedIndex).toBe(0);
+    expect(shape.row0Kind).toMatch(/navigate|search/);
+    expect(shape.hasTabRow).toBe(true);
+
+    // Accept WITHOUT moving the selection: row 0 wins.
+    await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.commandBar.accept();
+    });
+
+    const after = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      const s = await zeo.tabs.list();
+      const st = await zeo.commandBar.state();
+      return {
+        tabCount: s.tabs.length,
+        activeId: s.activeTabId,
+        activeUrl: s.tabs.find((t) => t.id === s.activeTabId)?.url ?? null,
+        open: st.open,
+      };
+    });
+    // A new tab was created for the resolved (search) url; the matched tab was
+    // NOT activated, and the bar closed.
+    expect(after.tabCount).toBe(setup.tabCount + 1);
+    expect(after.activeId).not.toBe(setup.matchId);
+    expect(after.activeUrl).toMatch(/duckduckgo\.com/);
+    expect(after.open).toBe(false);
+  });
+
+  // §5 bullet 5 — arrow selection wraps at both ends. With row 0 plus at least one
+  // match, `moveSelection(1)` past the last row wraps to 0 and `moveSelection(-1)`
+  // from 0 wraps to the last row.
+  test("arrow selection wraps at both ends of the suggestion list", async () => {
+    await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      // Two matches so the list is [row0, tab, tab] — at least one row past row 0.
+      await zeo.tabs.create("zebra.example");
+      await zeo.tabs.create("zebrafish.example");
+      await zeo.commandBar.open("new-tab");
+      await zeo.commandBar.setQuery("zebra");
+    });
+
+    await expect
+      .poll(async () =>
+        sidebar.evaluate(async () => {
+          const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+          return (await zeo.commandBar.state()).suggestions.length;
+        }),
+      )
+      .toBeGreaterThanOrEqual(2);
+
+    const result = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      const start = await zeo.commandBar.state();
+      const count = start.suggestions.length;
+      const last = count - 1;
+      // Step down to the last row.
+      for (let i = 0; i < last; i++) {
+        await zeo.commandBar.moveSelection(1);
+      }
+      const atLast = (await zeo.commandBar.state()).selectedIndex;
+      // One more wraps to row 0.
+      await zeo.commandBar.moveSelection(1);
+      const wrappedForward = (await zeo.commandBar.state()).selectedIndex;
+      // Up from row 0 wraps to the last row.
+      await zeo.commandBar.moveSelection(-1);
+      const wrappedBackward = (await zeo.commandBar.state()).selectedIndex;
+      return { start: start.selectedIndex, last, atLast, wrappedForward, wrappedBackward };
+    });
+    expect(result.start).toBe(0);
+    expect(result.atLast).toBe(result.last);
+    expect(result.wrappedForward).toBe(0);
+    expect(result.wrappedBackward).toBe(result.last);
+  });
+
+  // §5 bullet 6 — empty query in new-tab mode lists the recent open tabs: all
+  // `tab` rows (no row 0), most-recently-active first, the active tab excluded,
+  // capped at 8. Distinct 5ms gaps between creates give strictly increasing
+  // `lastActiveAt` so the recency order is deterministic (suggest tie-breaks equal
+  // timestamps only by catalog order, which is not recency).
+  test("empty query in new-tab mode lists recent tabs, most recent first, active excluded, capped at 8", async () => {
+    const setup = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      const before = await zeo.tabs.list();
+      const seededId = before.activeTabId;
+      const gap = (): Promise<void> =>
+        new Promise((resolve) => setTimeout(resolve, 5));
+      await gap();
+      const alpha = await zeo.tabs.create("alpha.example");
+      await gap();
+      const bravo = await zeo.tabs.create("bravo.example");
+      await gap();
+      const charlie = await zeo.tabs.create("charlie.example");
+      return {
+        seededId,
+        alphaId: alpha.id,
+        bravoId: bravo.id,
+        charlieId: charlie.id,
+      };
+    });
+
+    // charlie was created last, so it is active and must be EXCLUDED.
+    await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.commandBar.open("new-tab");
+      // Force a recompute of the empty-query recent list.
+      await zeo.commandBar.setQuery("");
+    });
+
+    const list = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      const st = await zeo.commandBar.state();
+      return {
+        kinds: st.suggestions.map((s) => s.kind),
+        tabIds: st.suggestions.map((s) => (s.kind === "tab" ? s.tabId : null)),
+      };
+    });
+    // Every row is a tab (no navigate/search row 0 on an empty query).
+    expect(list.kinds.every((k) => k === "tab")).toBe(true);
+    expect(list.kinds.length).toBeLessThanOrEqual(8);
+    // Active tab (charlie) is absent.
+    expect(list.tabIds).not.toContain(setup.charlieId);
+    // Most-recently-active first: bravo, then alpha, then the seeded tab.
+    expect(list.tabIds).toEqual([setup.bravoId, setup.alphaId, setup.seededId]);
+  });
+
+  // §5 bullet 7 — the overlay panel grows with the list and shrinks back when the
+  // query stops matching. The renderer cannot read its own WebContentsView bounds,
+  // so we assert on the OBSERVABLE PROXY: the number of `command-bar-suggestion`
+  // rows rendered in the overlay DOM (one row per suggestion, row 0 included). A
+  // matching query yields row 0 + the match; a non-matching but resolvable query
+  // leaves only row 0.
+  test("overlay row count grows when the query matches and shrinks back to row 0 when it does not", async () => {
+    await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.tabs.create("orchid.example");
+      await zeo.commandBar.open("new-tab");
+    });
+
+    const overlay = await commandBarWindow(app);
+    const rows = overlay.getByTestId("command-bar-suggestion");
+
+    // A query that matches the orchid tab: row 0 (search) + the tab row = 2 rows.
+    await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.commandBar.setQuery("orchid");
+    });
+    await expect(rows).toHaveCount(2);
+
+    // A resolvable-but-unmatched query: only row 0 (the text action) remains.
+    await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.commandBar.setQuery("qzxvwmklunlikely");
+    });
+    await expect(rows).toHaveCount(1);
+
+    // Hygiene: close the bar like the neighbouring tests do.
+    await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.commandBar.close();
+    });
   });
 });
