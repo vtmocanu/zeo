@@ -69,9 +69,12 @@ function secondaryText(suggestion: Suggestion): string {
  * WebContentsView (selected by `?view=command-bar` in {@link "./main.js"}).
  *
  * This is a thin renderer with no business logic — it holds only the input's
- * text and reaches main exclusively through `window.zeo`. Main owns the URL
- * resolution (`resolveInput`) and the navigate/new-tab decision; submitting just
- * forwards the raw text via `commandBar.submit`.
+ * text plus the pushed suggestion list/selection, and reaches main exclusively
+ * through `window.zeo`. Main owns the suggestion list, the ranking, and the
+ * URL/navigate decision. Enter calls `commandBar.accept()` (acting on the
+ * selected row, or falling back to submit-like behavior in main when the list is
+ * empty) and the arrows call `commandBar.moveSelection`; the renderer never
+ * resolves urls or reorders rows itself.
  *
  * The input is re-seeded from `initialText` on every closed→open transition (a
  * fresh open re-seeds even when the text is unchanged) and also when an

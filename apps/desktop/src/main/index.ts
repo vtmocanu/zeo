@@ -121,25 +121,29 @@ function viewBounds(): Electron.Rectangle {
  * A no-op unless both the window and the overlay exist. When the window is too
  * short or too narrow the geometry collapses to an all-zero rect; the overlay is
  * hidden in that case and left hidden until a later bounds pass yields a
- * non-zero rectangle. Otherwise, while the bar is open, the overlay is (re-)shown
- * — every state push while open re-applies bounds, so the overlay tracks the row
- * count as the query changes. Called when the bar opens, on each state push, and
- * on every resize while it is open.
+ * non-zero rectangle. Otherwise, while the bar is open, the overlay is (re-)shown.
+ * Returns whether it left the overlay shown, so callers can drive focus off that
+ * rather than force visibility. Bounds are re-applied whenever the row count can
+ * change — on open, on query change, and on window resize (a selection move
+ * pushes state but does not re-layout, which is fine since the row count is
+ * unchanged).
  */
-function layoutOverlay(): void {
+function layoutOverlay(): boolean {
   if (win === null || overlay === null) {
-    return;
+    return false;
   }
   const [width, height] = win.getContentSize();
   const bounds = commandBarBounds(width, height, commandBar.suggestions.length);
   if (bounds.width === 0) {
     overlay.setVisible(false);
-    return;
+    return false;
   }
   overlay.setBounds(bounds);
   if (commandBar.open) {
     overlay.setVisible(true);
+    return true;
   }
+  return false;
 }
 
 /**
@@ -358,9 +362,10 @@ function openCommandBar(mode: CommandBarMode): void {
   // row count on open — a `Cmd+T` with empty text already shows the recent-tabs
   // list at its full height.
   recomputeSuggestions();
-  layoutOverlay();
-  overlay?.setVisible(true);
-  overlay?.webContents.focus();
+  const shown = layoutOverlay();
+  if (shown) {
+    overlay?.webContents.focus();
+  }
   pushCommandBar();
 }
 
