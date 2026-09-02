@@ -39,6 +39,7 @@ export { IPC } from "./ipc.js";
 export type { BlockingState } from "./blocking.js";
 export {
   applyBlockedRequest,
+  applyUnattributedBlock,
   resetBlockedCount,
   dropBlockedTab,
   initialBlockingState,

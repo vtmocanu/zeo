@@ -35,6 +35,12 @@ importers:
 
   apps/desktop:
     dependencies:
+      '@ghostery/adblocker-electron':
+        specifier: ^2.11.3
+        version: 2.18.2(electron@44.0.0)
+      '@zeo/adblock':
+        specifier: workspace:*
+        version: link:../../packages/adblock
       '@zeo/core':
         specifier: workspace:*
         version: link:../../packages/core
@@ -63,6 +69,9 @@ importers:
       vite:
         specifier: ^8.0.0
         version: 8.2.2(@types/node@24.13.3)(esbuild@0.28.2)
+      vitest:
+        specifier: ^4.0.0
+        version: 4.1.11(@types/node@24.13.3)(vite@8.2.2(@types/node@24.13.3)(esbuild@0.28.2))
 
   apps/ui:
     dependencies:

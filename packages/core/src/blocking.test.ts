@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import {
   applyBlockedRequest,
+  applyUnattributedBlock,
   resetBlockedCount,
   dropBlockedTab,
   initialBlockingState,
@@ -39,6 +40,24 @@ describe("applyBlockedRequest", () => {
     expect(s1.blockedByTab).not.toBe(s0.blockedByTab);
     // input untouched
     expect(s0.blockedByTab).toEqual({});
+  });
+});
+
+describe("applyUnattributedBlock", () => {
+  test("increments blockedUnattributed from 0 to 1 to 2", () => {
+    const s0 = initialBlockingState(true, "v1");
+    const s1 = applyUnattributedBlock(s0);
+    expect(s1.blockedUnattributed).toBe(1);
+    const s2 = applyUnattributedBlock(s1);
+    expect(s2.blockedUnattributed).toBe(2);
+  });
+
+  test("does not mutate the input and leaves per-tab counts alone", () => {
+    const s0 = applyBlockedRequest(initialBlockingState(true, "v1"), "a");
+    const s1 = applyUnattributedBlock(s0);
+    expect(s1).not.toBe(s0);
+    expect(s0.blockedUnattributed).toBe(0);
+    expect(s1.blockedByTab).toEqual({ a: 1 });
   });
 });
 

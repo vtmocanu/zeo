@@ -7,9 +7,12 @@
   "scripts": {
     "build": "electron-vite build && node scripts/copy-renderer.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
     "dev": "ELECTRON_RENDERER_URL=http://localhost:5173 electron-vite dev"
   },
   "dependencies": {
+    "@ghostery/adblocker-electron": "^2.11.3",
+    "@zeo/adblock": "workspace:*",
     "@zeo/core": "workspace:*",
     "@zeo/ui": "workspace:*",
     "better-sqlite3": "^13.0.3"
@@ -20,6 +23,7 @@
     "electron": "^44.0.0",
     "electron-vite": "^5.0.0",
     "typescript": "^5.9.2",
-    "vite": "^8.0.0"
+    "vite": "^8.0.0",
+    "vitest": "^4.0.0"
   }
 }

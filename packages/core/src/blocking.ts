@@ -67,6 +67,15 @@ export function resetBlockedCount(
 }
 
 /**
+ * Returns a new state with `blockedUnattributed` incremented by one, used for a
+ * blocked request that could not be tied to a tab (a view already torn down, or
+ * a non-tab renderer). The input `state` is not mutated.
+ */
+export function applyUnattributedBlock(state: BlockingState): BlockingState {
+  return { ...state, blockedUnattributed: state.blockedUnattributed + 1 };
+}
+
+/**
  * Returns a new state with `tabId`'s entry dropped from `blockedByTab`, used
  * when a tab is removed. When the tab has no entry, the original `state` is
  * returned unchanged (same reference).

@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from "electron";
 import { IPC } from "@zeo/core";
 import type {
+  BlockingState,
   CommandBarMode,
   CommandBarState,
   CommandDescriptor,
@@ -69,6 +70,11 @@ const api = {
   commands: {
     list: (): Promise<CommandDescriptor[]> => ipcRenderer.invoke(IPC.commandsList),
     run: (id: CommandId): Promise<void> => ipcRenderer.invoke(IPC.commandsRun, id),
+  },
+  blocking: {
+    setEnabled: (enabled: boolean): Promise<void> =>
+      ipcRenderer.invoke(IPC.blockingSetEnabled, enabled),
+    state: (): Promise<BlockingState> => ipcRenderer.invoke(IPC.blockingState),
   },
   onStateChange: (listener: (state: TabsState) => void): (() => void) => {
     const handler = (_event: Electron.IpcRendererEvent, state: TabsState): void => listener(state);

@@ -55,9 +55,24 @@ CREATE TABLE tabs (
   archivedAt INTEGER, position INTEGER NOT NULL
 );
 CREATE TABLE meta (
-  id INTEGER PRIMARY KEY CHECK (id = 0), schemaVersion INTEGER NOT NULL, activeSpaceId TEXT
+  id INTEGER PRIMARY KEY CHECK (id = 0), schemaVersion INTEGER NOT NULL, activeSpaceId TEXT,
+  enabled INTEGER NOT NULL DEFAULT 1
 );
 `;
+
+/**
+ * The ordered, in-place upgrade steps keyed by the version they PRODUCE: the
+ * `v` entry is run to move a database from version `v-1` to `v`. {@link migrate}
+ * runs every step from the on-disk version + 1 up through {@link SCHEMA_VERSION},
+ * so a future 2→3 upgrade is added by appending a `3` entry here. Each step is a
+ * plain SQL blob run inside the migrate transaction; the step MUST leave
+ * `meta.schemaVersion` set to its own key.
+ */
+const MIGRATION_STEPS: Record<number, string> = {
+  2:
+    "ALTER TABLE meta ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1;" +
+    "UPDATE meta SET schemaVersion = 2 WHERE id = 0;",
+};
 
 /** The module-level database handle, `null` until {@link loadStore} opens it. */
 let db: DatabaseType | null = null;
@@ -76,11 +91,13 @@ function dbPath(): string {
 /**
  * Reads the schema version currently on disk and applies {@link migrationAction}:
  * `"abort"` throws {@link UnsupportedSchemaVersionError}, `"create"` builds the
- * fresh four-table schema and seeds the single meta row, `"noop"` leaves an
- * up-to-date database untouched. Absence of the `meta` table is treated as
- * version 0 (an empty/new file).
+ * fresh four-table schema and seeds the single meta row, `"migrate"` runs the
+ * ordered {@link MIGRATION_STEPS} from the on-disk version + 1 through
+ * {@link SCHEMA_VERSION} inside a single transaction (so a partially-applied
+ * upgrade never lands), and `"noop"` leaves an up-to-date database untouched.
+ * Absence of the `meta` table is treated as version 0 (an empty/new file).
  */
-function migrate(database: DatabaseType): void {
+export function migrate(database: DatabaseType): void {
   const hasMeta =
     database
       .prepare(
@@ -107,9 +124,59 @@ function migrate(database: DatabaseType): void {
         )
         .run(SCHEMA_VERSION);
       break;
+    case "migrate": {
+      // Run each ordered step from version+1 up to SCHEMA_VERSION in one
+      // transaction: an upgrade either lands whole or not at all. A missing step
+      // for a version in range is a programming error, surfaced immediately.
+      const runSteps = database.transaction((): void => {
+        for (let next = version + 1; next <= SCHEMA_VERSION; next++) {
+          const step = MIGRATION_STEPS[next];
+          if (step === undefined) {
+            throw new Error(`missing migration step for schema version ${next}`);
+          }
+          database.exec(step);
+        }
+      });
+      runSteps();
+      break;
+    }
     case "noop":
       break;
   }
+}
+
+/** Throws when the module-level database handle is not open. */
+function requireDb(): DatabaseType {
+  if (db === null) {
+    throw new Error("database is not open");
+  }
+  return db;
+}
+
+/**
+ * Reads the persisted content-blocking `enabled` flag from the meta row,
+ * mapping SQLite's integer to a boolean. Throws when the database is not open.
+ * This flag is managed ONLY here and by {@link writeBlockingEnabled}; it is
+ * deliberately kept out of the {@link writeState} full-state flush.
+ */
+export function readBlockingEnabled(): boolean {
+  const database = requireDb();
+  // SQLite-row boundary: .get() is typed `unknown`, cast to the known shape.
+  const row = database
+    .prepare("SELECT enabled FROM meta WHERE id=0")
+    .get() as { enabled: number } | undefined;
+  return (row?.enabled ?? 1) === 1;
+}
+
+/**
+ * Persists the content-blocking `enabled` flag to the meta row, mapping the
+ * boolean to SQLite's integer. Synchronous (better-sqlite3). Throws when the
+ * database is not open, so a caller's ordered set-enabled contract sees the
+ * failure before it changes anything else.
+ */
+export function writeBlockingEnabled(enabled: boolean): void {
+  const database = requireDb();
+  database.prepare("UPDATE meta SET enabled=? WHERE id=0").run(enabled ? 1 : 0);
 }
 
 /**
