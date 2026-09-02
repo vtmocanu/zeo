@@ -59,9 +59,13 @@ export interface Blocker {
   onBlocked(listener: (event: BlockedEvent) => void): () => void;
   /**
    * Rebuilds the engine from the configured lists off to the side (bounded by a
-   * 15s timeout) and swaps it in on success, resolving `true`; on any failure
-   * the current engine, sessions, listeners, and {@link Blocker.listVersion}
-   * are left untouched and it resolves `false`.
+   * 15s timeout) and swaps it in on success. A failed build — a fetch error, the
+   * 15s timeout, or a response exceeding the size guard — leaves the current
+   * engine, sessions, listeners, and {@link Blocker.listVersion} untouched and
+   * resolves `false`. A successful build swaps the engine and resolves `true`
+   * even if writing the on-disk cache then fails: the swap already succeeded, so
+   * the cache-write error is logged and ignored (the cache is only a
+   * startup optimization).
    */
   refresh(): Promise<boolean>;
   /**
@@ -73,8 +77,12 @@ export interface Blocker {
 
 /** Internal construction options for {@link BlockerImpl}. */
 interface BlockerInternals {
-  /** Builds a fresh engine from the remote lists; absent for the no-op variant. */
-  remoteBuild?: () => Promise<ElectronBlocker>;
+  /**
+   * Builds a fresh engine from the remote lists; absent for the no-op variant.
+   * Receives the refresh's {@link AbortController} so its fetches can be
+   * cancelled on timeout or a size-guard trip.
+   */
+  remoteBuild?: (controller: AbortController) => Promise<ElectronBlocker>;
   /** Cache path to serialize a refreshed engine to, when `fs` is also set. */
   cacheFile?: string;
   /** Filesystem seam used to persist the engine cache. */
@@ -85,15 +93,47 @@ interface BlockerInternals {
 const REFRESH_TIMEOUT_MS = 15_000;
 
 /**
- * Races `promise` against a timer that rejects after `ms`, clearing the timer
- * either way so a completed build never leaves a dangling handle.
+ * Cap on a remote list response's declared size (64 MiB). Defense-in-depth
+ * against a hostile/oversized list host: a response whose `content-length`
+ * exceeds this is refused before it is buffered.
  */
-function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+const MAX_LIST_BYTES = 64 * 1024 * 1024;
+
+/**
+ * Races `promise` against a timer that rejects after `ms`. On timeout the shared
+ * `controller` is aborted so any in-flight fetch is actually cancelled instead
+ * of downloading in the background after refresh has returned; the timer is
+ * cleared on both branches so a completed build never leaves a dangling handle.
+ */
+function withTimeout<T>(promise: Promise<T>, ms: number, controller: AbortController): Promise<T> {
   let timer: ReturnType<typeof setTimeout>;
   const timeout = new Promise<never>((_resolve, reject) => {
-    timer = setTimeout(() => reject(new Error("adblock refresh timed out")), ms);
+    timer = setTimeout(() => {
+      controller.abort();
+      reject(new Error("adblock refresh timed out"));
+    }, ms);
   });
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+/**
+ * Wraps `fetchImpl` so every request it issues (the library fetches each list
+ * URL and a `resources.json`) carries `controller.signal`, and rejects — after
+ * aborting the whole build — any response whose declared `content-length`
+ * exceeds {@link MAX_LIST_BYTES}. A lying `Content-Length` that streams under
+ * the cap and the refresh timeout is an accepted residual: this is a header
+ * guard, not full streaming byte-counting.
+ */
+function guardedFetch(fetchImpl: typeof fetch, controller: AbortController): typeof fetch {
+  return async (input, init) => {
+    const response = await fetchImpl(input, { ...init, signal: controller.signal });
+    const declared = response.headers.get("content-length");
+    if (declared !== null && Number(declared) > MAX_LIST_BYTES) {
+      controller.abort();
+      throw new Error(`adblock list response exceeds ${MAX_LIST_BYTES} bytes`);
+    }
+    return response;
+  };
 }
 
 /**
@@ -184,18 +224,24 @@ class BlockerImpl implements Blocker {
 
   /**
    * Rebuilds the engine from the remote lists and swaps it in atomically on
-   * success. Returns `false` immediately for blockers with no remote source, on
-   * a build/fetch error, or on the 15s timeout; on all failure paths the
-   * current engine, sessions, listeners, and `listVersion` are untouched.
+   * success. Returns `false` immediately for blockers with no remote source, and
+   * on a failed build — a fetch error, the 15s timeout (which aborts the
+   * in-flight fetch), or a response tripping the size guard — with the current
+   * engine, sessions, listeners, and `listVersion` left untouched. On a
+   * successful build it swaps the engine and resolves `true` even if writing the
+   * on-disk cache then fails: the swap already succeeded, so the write error is
+   * logged and ignored rather than rejecting (which would surface as an
+   * unhandledRejection in the un-awaited startup refresh).
    */
   public async refresh(): Promise<boolean> {
     const build = this.internals.remoteBuild;
     if (build === undefined) {
       return false;
     }
+    const controller = new AbortController();
     let newEngine: ElectronBlocker;
     try {
-      newEngine = await withTimeout(build(), REFRESH_TIMEOUT_MS);
+      newEngine = await withTimeout(build(controller), REFRESH_TIMEOUT_MS, controller);
     } catch {
       return false;
     }
@@ -207,7 +253,15 @@ class BlockerImpl implements Blocker {
     this.listVersion = "remote";
     const { cacheFile, fs } = this.internals;
     if (cacheFile !== undefined && fs !== undefined) {
-      await fs.writeFile(cacheFile, newEngine.serialize());
+      // The engine swap above already succeeded; the on-disk cache is only a
+      // startup optimization, so a serialize/write failure is logged and
+      // swallowed. Rethrowing here would reject the un-awaited startup refresh
+      // and become an unhandledRejection in the Electron main process.
+      try {
+        await fs.writeFile(cacheFile, newEngine.serialize());
+      } catch (err) {
+        console.warn("[adblock] failed to write engine cache:", err);
+      }
     }
     return true;
   }
@@ -261,10 +315,14 @@ export async function createBlocker(options: CreateBlockerOptions): Promise<Bloc
   }
 
   const lists = options.lists;
-  const remoteBuild = (): Promise<ElectronBlocker> =>
-    lists !== undefined
-      ? ElectronBlocker.fromLists(options.fetch, lists)
-      : ElectronBlocker.fromPrebuiltAdsAndTracking(options.fetch);
+  const remoteBuild = (controller: AbortController): Promise<ElectronBlocker> => {
+    // Every fetch the build issues carries the refresh's abort signal and the
+    // response size guard, so a timeout cancels in-flight downloads.
+    const fetch = guardedFetch(options.fetch, controller);
+    return lists !== undefined
+      ? ElectronBlocker.fromLists(fetch, lists)
+      : ElectronBlocker.fromPrebuiltAdsAndTracking(fetch);
+  };
 
   const blocker = new BlockerImpl(engine, listVersion, {
     remoteBuild,

@@ -173,6 +173,78 @@ describe("createBlocker", () => {
     expect(data.byteLength).toBeGreaterThan(0);
   });
 
+  test("resolves true and swaps in the engine even when the cache write fails", async () => {
+    // A rejecting writeFile must not reject refresh(): createBlocker starts the
+    // background refresh un-awaited, so a rejection would become an
+    // unhandledRejection in the Electron main process.
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown): void => {
+      unhandled.push(reason);
+    };
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      const fs: BlockerFs = {
+        readFile: async () => {
+          throw new Error("ENOENT");
+        },
+        writeFile: async () => {
+          throw new Error("EACCES");
+        },
+      };
+      const blocker = await createBlocker({
+        cacheFile: "engine.bin",
+        fetch: fetchReturning(AD_FILTER),
+        lists: ["https://example.test/list.txt"],
+        fs,
+      });
+
+      expect(await awaitReady(blocker)).toBe(true);
+      expect(blocker.listVersion).toBe("remote");
+      // The swapped-in engine still blocks the newly built filter's target.
+      const { session, state } = makeFakeSession();
+      blocker.attach(session);
+      expect(requestThrough(state.captured!, BLOCKED_URL)).toEqual({
+        cancel: true,
+      });
+
+      // Let any stray rejection surface on the microtask/macrotask queues.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+  });
+
+  test("fails the build when a list response's content-length exceeds the cap", async () => {
+    const oversizedFetch: typeof fetch = async (input) => {
+      const url = String(input);
+      if (url.endsWith("resources.json")) {
+        return new Response("{}");
+      }
+      return new Response(AD_FILTER, {
+        headers: { "content-length": String(65 * 1024 * 1024) },
+      });
+    };
+    const fs: BlockerFs = {
+      readFile: async () => {
+        throw new Error("ENOENT");
+      },
+      writeFile: vi.fn(),
+    };
+    const blocker = await createBlocker({
+      cacheFile: "engine.bin",
+      fetch: oversizedFetch,
+      lists: ["https://example.test/list.txt"],
+      fs,
+    });
+
+    // The oversized response aborts the build, so refresh fails and nothing is
+    // swapped in (the startup cache miss leaves listVersion at "none").
+    expect(await awaitReady(blocker)).toBe(false);
+    expect(blocker.listVersion).toBe("none");
+    expect(fs.writeFile).not.toHaveBeenCalled();
+  });
+
   test("keeps the old engine on a failed refresh", async () => {
     const cached = ElectronBlocker.parse(AD_FILTER).serialize();
     const fs: BlockerFs = {
