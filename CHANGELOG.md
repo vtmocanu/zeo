@@ -17,8 +17,8 @@ milestone, a minor bump only for very large breakthroughs.
   in a new `@zeo/adblock` engine attached to every profile's browsing session.
   The engine is cached under the app's data directory, so the second launch
   starts blocking immediately with no network, and it refreshes the lists in the
-  background while blocking is enabled (turning blocking off also stops the daily
-  list refresh, so nothing is downloaded).
+  background; the recurring daily list refresh is skipped while blocking is
+  turned off.
 - Per-tab blocked-request counts: each sidebar tab row shows a small shield with
   the number of requests blocked since the tab last navigated to a new site; the
   shield dims when blocking is turned off.
