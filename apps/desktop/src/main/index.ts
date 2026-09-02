@@ -142,6 +142,14 @@ let blocking: BlockingState = initialBlockingState(true, "none");
  */
 const webContentsToTab = new Map<number, string>();
 /**
+ * Forward index `tabId -> webContents.id`, the teardown counterpart to
+ * {@link webContentsToTab}. It lets {@link destroyView} drop the reverse-index
+ * entry by the id captured at creation, independent of whether the webContents is
+ * still alive (a destroyed webContents' `id` is inaccessible), so the reverse
+ * index never orphans an entry on teardown. Populated in {@link createViewFor}.
+ */
+const tabToWcId = new Map<string, number>();
+/**
  * Per-tab last committed top-level origin, for the navigation reset: a
  * `did-navigate` to a DIFFERENT origin resets that tab's blocked count.
  */
@@ -224,6 +232,13 @@ function attachBlockerToAllSessions(b: Blocker): void {
  * the flag still flips; the cap race's `then` then attaches per `blocking.enabled`.
  */
 async function setBlockingEnabled(enabled: boolean): Promise<void> {
+  // Reachable from the renderer over IPC.blockingSetEnabled with an untrusted
+  // payload: reject a non-boolean BEFORE any persistence or state change so a
+  // malformed payload can never persist/broadcast a non-boolean. The IPC handler
+  // returns this promise, so the rejection surfaces to the renderer's invoke.
+  if (typeof enabled !== "boolean") {
+    throw new TypeError("blocking.setEnabled expects a boolean");
+  }
   if (enabled === blocking.enabled) {
     return;
   }
@@ -318,8 +333,11 @@ function createViewFor(tab: Tab, spaceId: string, urlOverride?: string): void {
   });
   views.set(tab.id, { view, spaceId });
   // Reverse index for blocked-request attribution: this view's webContents id
-  // maps to its tab. Removed in destroyView.
+  // maps to its tab. Removed in destroyView. The parallel forward index records
+  // the same id keyed by tab so teardown can drop the reverse entry even after
+  // the webContents is destroyed (its id would then be inaccessible).
   webContentsToTab.set(view.webContents.id, tab.id);
+  tabToWcId.set(tab.id, view.webContents.id);
   win.contentView.addChildView(view);
   view.setBounds(viewBounds());
   view.setVisible(false);
@@ -909,13 +927,16 @@ function destroyView(id: string): void {
   const tracked = views.get(id);
   if (tracked !== undefined) {
     win?.contentView.removeChildView(tracked.view);
-    // Drop the reverse-index entry for this view's webContents (guard a
-    // destroyed contents whose id is inaccessible). NOT the blocked COUNT: a
-    // remap or activate-retry recreates the same tab, so the count survives a
-    // view teardown and is dropped only on real tab removal (close/remove/delete).
-    if (!tracked.view.webContents.isDestroyed()) {
-      webContentsToTab.delete(tracked.view.webContents.id);
+    // Drop the reverse-index entry via the forward index, so the entry is removed
+    // even when the webContents is already destroyed (its `id` would then be
+    // inaccessible). NOT the blocked COUNT: a remap or activate-retry recreates
+    // the same tab, so the count survives a view teardown and is dropped only on
+    // real tab removal (close/remove/delete).
+    const wcId = tabToWcId.get(id);
+    if (wcId !== undefined) {
+      webContentsToTab.delete(wcId);
     }
+    tabToWcId.delete(id);
     if (!tracked.view.webContents.isDestroyed()) {
       tracked.view.webContents.close();
     }
@@ -1701,78 +1722,94 @@ app.whenReady().then(async () => {
   }
 
   // --- Content-blocking startup gate (PRD 5.1 §3) --------------------------
-  // Read the persisted enabled flag (needs the store's open db handle) and seed
-  // the blocking slice before any window or tab view exists.
-  const enabled = readBlockingEnabled();
-  blocking = initialBlockingState(enabled, "none");
+  // The ENTIRE startup is wrapped so ANY failure — a bad ZEO_ADBLOCK_FILTERS
+  // path (readFileSync throws ENOENT), a cache/engine load error, a session
+  // attach failure — degrades gracefully to "blocking off" rather than aborting
+  // the whenReady handler before the window is ever created. buildMenu() and
+  // createWindow(...) below ALWAYS run afterward. `blocking` is left seeded so
+  // fullSnapshot() never dereferences undefined.
+  try {
+    // Read the persisted enabled flag (needs the store's open db handle) and seed
+    // the blocking slice before any window or tab view exists.
+    const enabled = readBlockingEnabled();
+    blocking = initialBlockingState(enabled, "none");
 
-  const filtersFile = process.env.ZEO_ADBLOCK_FILTERS;
-  if (filtersFile !== undefined && filtersFile !== "") {
-    // Test/e2e hook, checked FIRST: build the engine from a fixture list only —
-    // no cache read/write, no remote fetch, no daily refresh.
-    const text = readFileSync(filtersFile, "utf8");
-    blocker = createBlockerFromFilters(text, "fixture:" + basename(filtersFile));
-  } else {
-    // Kick off the real engine load and race it against a 3 s cap. createBlocker's
-    // promise covers only the fast local step (cache or empty engine); if the cap
-    // wins the window opens with an empty engine (blocker stays null) and the
-    // loaded engine swaps in when it arrives.
-    const p = createBlocker({
-      cacheFile: join(app.getPath("userData"), "adblock-engine.bin"),
-      fetch,
-    });
-    const capped = await Promise.race([
-      p.then((b) => ({ won: true as const, blocker: b })),
-      new Promise<{ won: false }>((resolve) =>
-        setTimeout(() => resolve({ won: false }), 3000),
-      ),
-    ]);
-    if (capped.won) {
-      blocker = capped.blocker;
+    const filtersFile = process.env.ZEO_ADBLOCK_FILTERS;
+    if (filtersFile !== undefined && filtersFile !== "") {
+      // Test/e2e hook, checked FIRST: build the engine from a fixture list only —
+      // no cache read/write, no remote fetch, no daily refresh. It is a test hook,
+      // so a bad path must degrade gracefully (logged in the catch) not brick the
+      // app.
+      const text = readFileSync(filtersFile, "utf8");
+      blocker = createBlockerFromFilters(text, "fixture:" + basename(filtersFile));
     } else {
-      // Cap won the race: leave blocker null (empty engine) for now and swap in
-      // the loaded engine when it arrives, attaching + wiring like the cap-winner
-      // path below.
-      void p
-        .then((b) => {
-          blocker = b;
-          if (blocking.enabled) {
-            attachBlockerToAllSessions(b);
-          }
-          wireOnBlocked(b);
-          scheduleBlockingBroadcast();
-        })
-        .catch(() => {});
-    }
-    // Refresh once a day while running. createBlocker already starts ONE
-    // background refresh on startup (§1), so this interval covers only the
-    // recurring "once a day" case. Because fullSnapshot derives listVersion LIVE
-    // off the blocker, the startup refresh's (and each daily refresh's) new
-    // version surfaces on the next push with no extra observation — so main does
-    // not separately gate on cache age (an intentional simplification vs. §3's
-    // "on launch when the cache is older than a day").
-    setInterval(
-      () => {
-        blocker
-          ?.refresh()
-          .then((ok) => {
-            if (ok) {
-              scheduleBlockingBroadcast();
+      // Kick off the real engine load and race it against a 3 s cap. createBlocker's
+      // promise covers only the fast local step (cache or empty engine); if the cap
+      // wins the window opens with an empty engine (blocker stays null) and the
+      // loaded engine swaps in when it arrives.
+      const p = createBlocker({
+        cacheFile: join(app.getPath("userData"), "adblock-engine.bin"),
+        fetch,
+      });
+      const capped = await Promise.race([
+        p.then((b) => ({ won: true as const, blocker: b })),
+        new Promise<{ won: false }>((resolve) =>
+          setTimeout(() => resolve({ won: false }), 3000),
+        ),
+      ]);
+      if (capped.won) {
+        blocker = capped.blocker;
+      } else {
+        // Cap won the race: leave blocker null (empty engine) for now and swap in
+        // the loaded engine when it arrives, attaching + wiring like the cap-winner
+        // path below.
+        void p
+          .then((b) => {
+            blocker = b;
+            if (blocking.enabled) {
+              attachBlockerToAllSessions(b);
             }
+            wireOnBlocked(b);
+            scheduleBlockingBroadcast();
           })
           .catch(() => {});
-      },
-      24 * 60 * 60 * 1000,
-    );
-  }
-  // After the blocker is set (fixture or cap-winner) attach it to every existing
-  // profile session when enabled, and wire the blocked-event listener. In the
-  // cap-lost case blocker is still null here; its p.then above does both.
-  if (enabled && blocker) {
-    attachBlockerToAllSessions(blocker);
-  }
-  if (blocker) {
-    wireOnBlocked(blocker);
+      }
+      // Refresh once a day while running. createBlocker already starts ONE
+      // background refresh on startup (§1), so this interval covers only the
+      // recurring "once a day" case. Because fullSnapshot derives listVersion LIVE
+      // off the blocker, the startup refresh's (and each daily refresh's) new
+      // version surfaces on the next push with no extra observation — so main does
+      // not separately gate on cache age (an intentional simplification vs. §3's
+      // "on launch when the cache is older than a day").
+      setInterval(
+        () => {
+          blocker
+            ?.refresh()
+            .then((ok) => {
+              if (ok) {
+                scheduleBlockingBroadcast();
+              }
+            })
+            .catch(() => {});
+        },
+        24 * 60 * 60 * 1000,
+      );
+    }
+    // After the blocker is set (fixture or cap-winner) attach it to every existing
+    // profile session when enabled, and wire the blocked-event listener. In the
+    // cap-lost case blocker is still null here; its p.then above does both.
+    if (enabled && blocker) {
+      attachBlockerToAllSessions(blocker);
+    }
+    if (blocker) {
+      wireOnBlocked(blocker);
+    }
+  } catch (err) {
+    console.error("[blocking] startup failed; continuing without content blocking:", err);
+    blocker = null;
+    // Keep the blocking slice seeded to a sane value even when readBlockingEnabled
+    // threw before it was set above, so fullSnapshot() never dereferences undefined.
+    blocking = initialBlockingState(blocking.enabled, "none");
   }
 
   buildMenu();
