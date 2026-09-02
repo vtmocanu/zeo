@@ -1626,6 +1626,46 @@ test.describe("zeo desktop app", () => {
     expect(after.open).toBe(false);
   });
 
+  // Regression (issue #72) — re-seed on mode change while the bar stays OPEN.
+  // Opening navigate (Cmd+L) then new-tab (Cmd+T) without closing must clear the
+  // seeded navigate url from the input; otherwise Enter would create a tab for the
+  // stale url instead of an empty new-tab entry. Asserts the renderer re-seeds when
+  // an already-open bar's mode changes, not only on a closed→open transition.
+  test("switching an open navigate bar to new-tab mode clears the seeded url", async () => {
+    // Open in navigate mode: main seeds initialText with the active tab's url.
+    const opened = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.commandBar.open("navigate");
+      return zeo.commandBar.state();
+    });
+    expect(opened.open).toBe(true);
+    expect(opened.mode).toBe("navigate");
+
+    // The overlay input reflects the seeded url (mirrors the navigate test's regex).
+    const overlay = await commandBarWindow(app);
+    await expect(overlay.getByTestId("command-bar-input")).toHaveValue(/example\.com/);
+
+    // WITHOUT closing, switch to new-tab mode. Main pushes fresh state with an
+    // empty initialText while the bar stays open.
+    const switched = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.commandBar.open("new-tab");
+      return zeo.commandBar.state();
+    });
+    expect(switched.open).toBe(true);
+    expect(switched.mode).toBe("new-tab");
+
+    // The input must re-seed to empty on the mode change (web-first matcher retries
+    // through the state push + re-render). This is the assertion the fix enables.
+    await expect(overlay.getByTestId("command-bar-input")).toHaveValue("");
+
+    // Hygiene: leave the bar closed like the neighbouring tests do.
+    await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.commandBar.close();
+    });
+  });
+
   // §5 bullet 3 — a bare word is a search: the active tab lands on the default
   // engine's query url carrying the percent-encoded term. Submit + read in ONE
   // evaluate so the synchronously-stored resolved url is captured before any
