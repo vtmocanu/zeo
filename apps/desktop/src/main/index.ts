@@ -13,10 +13,16 @@ import {
   resolveInput,
   suggest,
   nextSelectedIndex,
+  COMMANDS,
+  isCommandEnabled,
+  menuEntries,
 } from "@zeo/core";
 import type {
   CommandBarMode,
   CommandBarState,
+  CommandContext,
+  CommandDescriptor,
+  CommandId,
   Profile,
   Space,
   SpaceContextMenuResult,
@@ -204,6 +210,13 @@ function createViewFor(tab: Tab, spaceId: string, urlOverride?: string): void {
   view.webContents.on("did-navigate", onDidNavigate);
   view.webContents.on("did-navigate-in-page", onDidNavigate);
 
+  // History flags (canGoBack/canGoForward) settle only after a load finishes, so
+  // refresh the menu and the open bar's command enablement then. The
+  // did-navigate handlers above already broadcast, covering the url side.
+  view.webContents.on("did-finish-load", () => {
+    refreshCommandState();
+  });
+
   // Track load failure so activation can retry it; a later success clears it.
   view.webContents
     .loadURL(urlOverride ?? tab.url)
@@ -300,6 +313,99 @@ function pushCommandBar(): void {
 }
 
 /**
+ * Builds the current {@link CommandContext} from the store and the active view.
+ * `spaceCount` is the number of spaces; `activeTab` is `null` when no tab is
+ * active, otherwise the active tab's `pinned` flag plus its live navigation
+ * history flags read from the active view's non-deprecated `navigationHistory`
+ * API (both `false` when the view is missing, but `activeTab` is still non-null).
+ */
+function commandContextOf(): CommandContext {
+  const spaceCount = store.spaces().length;
+  const activeTabId = store.activeTabId;
+  if (activeTabId === null) {
+    return { activeTab: null, spaceCount };
+  }
+  const tab = store.list().find((t) => t.id === activeTabId);
+  const wc = views.get(activeTabId)?.view.webContents;
+  return {
+    activeTab: {
+      pinned: tab?.pinned ?? false,
+      canGoBack: wc?.navigationHistory.canGoBack() ?? false,
+      canGoForward: wc?.navigationHistory.canGoForward() ?? false,
+    },
+    spaceCount,
+  };
+}
+
+/**
+ * The one handler per {@link CommandId}, called only by {@link executeCommand}
+ * (which gates enablement first, so the `!`/no-op guards here never run on a
+ * disabled command). Each handler reuses the existing store/view helper for its
+ * action, so command dispatch and the old menu/context-menu paths stay in step.
+ */
+const commandHandlers: Record<CommandId, () => void> = {
+  "tab.new": () => openCommandBar("new-tab"),
+  "tab.close": () => closeTab(store.activeTabId!),
+  "tab.pin": () => pinTab(store.activeTabId!),
+  "tab.unpin": () => unpinTab(store.activeTabId!),
+  "tab.archive": () => archiveTab(store.activeTabId!),
+  "tab.copy-url": () => {
+    const tab = store.list().find((t) => t.id === store.activeTabId);
+    if (tab !== undefined) {
+      clipboard.writeText(tab.url);
+    }
+  },
+  "tab.reload": () => views.get(store.activeTabId!)?.view.webContents.reload(),
+  "tab.back": () => views.get(store.activeTabId!)?.view.webContents.navigationHistory.goBack(),
+  "tab.forward": () => views.get(store.activeTabId!)?.view.webContents.navigationHistory.goForward(),
+  "space.new": () => {
+    const space = store.createSpace(defaultSpaceName(store.spaces()));
+    store.setActiveSpace(space.id);
+    setActive(store.activeTabId);
+    broadcast();
+  },
+  "space.rename": () =>
+    win?.webContents.send(IPC.spaceMenuAction, { action: "rename", spaceId: store.activeSpaceId }),
+  "space.delete": () => deleteSpace(store.activeSpaceId),
+  "bar.open-location": () => openCommandBar("navigate"),
+};
+
+/**
+ * The single checked dispatch boundary. Builds the current context, throws for
+ * an unknown id or a command disabled in that context (rejecting a stale menu
+ * click, a stale accepted row, or a bad/disabled `commands.run`), and only then
+ * runs the handler. Every dispatch path goes through here.
+ */
+function executeCommand(id: CommandId): void {
+  const context = commandContextOf();
+  const handler = commandHandlers[id] as (() => void) | undefined;
+  if (handler === undefined || !COMMANDS.some((c) => c.id === id)) {
+    throw new Error(`unknown command: ${id}`);
+  }
+  if (!isCommandEnabled(id, context)) {
+    throw new Error(`command disabled in current context: ${id}`);
+  }
+  handler();
+}
+
+/**
+ * The single place that recomputes command context and refreshes both the
+ * application menu (a full {@link Menu.setApplicationMenu} rebuild, since the
+ * pin/unpin label and enabled flags change with context) and, when the bar is
+ * open, its suggestions/layout/state (so enablement like Go Back updates without
+ * retyping and the revision bumps to reject a stale click). Never calls
+ * {@link broadcast} — {@link broadcast} calls it — so there is no recursion.
+ */
+function refreshCommandState(): void {
+  buildMenu();
+  if (commandBar.open) {
+    recomputeSuggestions();
+    layoutOverlay();
+    pushCommandBar();
+  }
+}
+
+/**
  * Snapshots the store into the plain, store-free {@link SuggestCatalog} that
  * {@link suggest} ranks over: every space (flagged `active`), every open tab, and
  * every archived tab, each carrying its owning space's id and name. Rebuilt on
@@ -307,7 +413,16 @@ function pushCommandBar(): void {
  */
 function buildCatalog(): SuggestCatalog {
   const spaceNameById = new Map(store.spaces().map((s) => [s.id, s.name]));
+  // Compute the context once per call and reuse it for every command's enablement.
+  const context = commandContextOf();
   return {
+    commands: COMMANDS.map((c) => ({
+      id: c.id,
+      title: c.title,
+      keywords: c.keywords,
+      accelerator: c.accelerator,
+      enabled: isCommandEnabled(c.id, context),
+    })),
     spaces: store.spaces().map((s) => ({ id: s.id, name: s.name, active: s.id === store.activeSpaceId })),
     tabs: store.allOpenTabs().map(({ spaceId, tab }) => ({
       tabId: tab.id,
@@ -518,10 +633,12 @@ function performSuggestion(s: Suggestion): void {
       return;
     }
     case "navigate":
-    case "search": {
+    case "search":
+    case "command": {
       // Unreachable: acceptCommandBar routes the text kinds through
-      // submitCommandBar itself and never calls performSuggestion for them.
-      throw new Error(`performSuggestion received text kind "${s.kind}"`);
+      // submitCommandBar and command kinds through executeCommand itself, and
+      // never calls performSuggestion for any of them.
+      throw new Error(`performSuggestion received kind "${s.kind}"`);
     }
   }
 }
@@ -560,6 +677,18 @@ function acceptCommandBar(index?: number, revision?: number): void {
   const s = commandBar.suggestions[idx]!;
   if (s.kind === "navigate" || s.kind === "search") {
     submitCommandBar(commandBar.query, commandBar.mode);
+    return;
+  }
+  if (s.kind === "command") {
+    // executeCommand throws on a stale/disabled command; the throw propagates
+    // and the invoke rejects with the bar untouched (do not catch it).
+    executeCommand(s.id);
+    // bar.open-location and tab.new re-open the bar (openCommandBar sets
+    // open:true unconditionally), so closing here would immediately dismiss the
+    // just-opened bar. Every other command closes it.
+    if (s.id !== "bar.open-location" && s.id !== "tab.new") {
+      closeCommandBar();
+    }
     return;
   }
   performSuggestion(s);
@@ -740,6 +869,9 @@ function setActive(id: string | null): void {
 function broadcast(): void {
   win?.webContents.send(IPC.stateChange, store.snapshot());
   scheduleSave(store);
+  // Every active-tab/active-space/store change can change command enablement and
+  // the pin/unpin menu label, so refresh the menu (and the open bar) here.
+  refreshCommandState();
 }
 
 /**
@@ -1169,6 +1301,16 @@ ipcMain.handle(IPC.commandBarAccept, (_event, index?: number, revision?: number)
 
 ipcMain.handle(IPC.commandBarState, (): CommandBarState => commandBar);
 
+// --- Command registry ---------------------------------------------------------
+// list() returns the registry verbatim; run() dispatches through the single
+// checked boundary executeCommand, which throws (rejecting the invoke) on an
+// unknown id or a command disabled in the current context.
+ipcMain.handle(IPC.commandsList, (): CommandDescriptor[] => [...COMMANDS]);
+
+ipcMain.handle(IPC.commandsRun, (_event, id: CommandId): void => {
+  executeCommand(id);
+});
+
 // --- Space commands -----------------------------------------------------------
 // The renderer's single UI bridge drives these; tab WebContentsViews have no
 // bridge and cannot dispatch. A thrown Error (unknown/last space) propagates out
@@ -1261,34 +1403,24 @@ function buildMenu(): void {
     }),
   );
 
+  // Registry-generated menu items for a given submenu name: menuEntries collapses
+  // the pin/unpin accelerator pair into one entry and computes each entry's
+  // label/enabled from the current context; every item dispatches through the
+  // single checked boundary executeCommand.
+  const context = commandContextOf();
+  const registryItems = (name: "tabs" | "spaces" | "view"): MenuItemConstructorOptions[] =>
+    menuEntries(
+      COMMANDS.filter((c) => c.menu === name),
+      context,
+    ).map((entry): MenuItemConstructorOptions => ({
+      label: entry.label,
+      accelerator: entry.accelerator ?? undefined,
+      enabled: entry.enabled,
+      click: () => executeCommand(entry.id),
+    }));
+
   const tabsSubmenu: MenuItemConstructorOptions[] = [
-    {
-      label: "New Tab",
-      accelerator: "CmdOrCtrl+T",
-      // Open the command bar in new-tab mode instead of immediately creating a
-      // tab, so the user types the destination first.
-      click: () => {
-        openCommandBar("new-tab");
-      },
-    },
-    {
-      label: "Open Location",
-      accelerator: "CmdOrCtrl+L",
-      // Open the command bar in navigate mode, prefilled with the active tab's url.
-      click: () => {
-        openCommandBar("navigate");
-      },
-    },
-    {
-      label: "Close Tab",
-      accelerator: "CmdOrCtrl+W",
-      click: () => {
-        const id = store.activeTabId;
-        if (id !== null) {
-          closeTab(id);
-        }
-      },
-    },
+    ...registryItems("tabs"),
     { type: "separator" },
     ...activateItems,
   ];
@@ -1311,21 +1443,12 @@ function buildMenu(): void {
   );
 
   const spacesSubmenu: MenuItemConstructorOptions[] = [
-    {
-      label: "New Space",
-      accelerator: "CmdOrCtrl+Shift+N",
-      // Create a default-named space, make it active, then run the same
-      // hide/show transition as a space switch and broadcast the new snapshot.
-      click: () => {
-        const space = store.createSpace(defaultSpaceName(store.spaces()));
-        store.setActiveSpace(space.id);
-        setActive(store.activeTabId);
-        broadcast();
-      },
-    },
+    ...registryItems("spaces"),
     { type: "separator" },
     ...activateSpaceItems,
   ];
+
+  const viewSubmenu: MenuItemConstructorOptions[] = registryItems("view");
 
   const template: MenuItemConstructorOptions[] = [
     // macOS app menu (role: appMenu) provides the standard about/quit set;
@@ -1335,6 +1458,7 @@ function buildMenu(): void {
       : []),
     { label: "Tabs", submenu: tabsSubmenu },
     { label: "Spaces", submenu: spacesSubmenu },
+    { label: "View", submenu: viewSubmenu },
     // editMenu preserves undo/redo/cut/copy/paste/selectAll accelerators so web
     // contents keep Cmd/Ctrl+C/V/X/A.
     { role: "editMenu" },
