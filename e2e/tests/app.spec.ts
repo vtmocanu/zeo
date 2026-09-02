@@ -4,6 +4,11 @@ import { fileURLToPath } from "node:url";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+// PRD 4.2 / CodeRabbit 2c — the ONE @zeo/core import in this otherwise
+// import-free spec: the exact bounds math main applies to the overlay, so the
+// native-bounds assertion checks against the real formula (not a magic number)
+// and can never drift from the source of truth.
+import { commandBarBounds } from "@zeo/core";
 
 // Absolute path to the built Electron main entry, resolved from this test file
 // (e2e is ESM, so no __dirname). Layout: e2e/tests/app.spec.ts -> repo root is
@@ -105,15 +110,17 @@ interface ZeoBridge {
   // `setQuery` re-ranks `suggestions` from a fresh catalog, `moveSelection` wraps
   // the highlight, and `accept` performs the selected (or indexed) row's action
   // and closes the bar. Redeclared structurally (like the rest of this bridge) so
-  // e2e stays import-free of @zeo/core; `CommandBarStateShape`/`BridgeSuggestion`
-  // mirror @zeo/core's widened `CommandBarState` and `Suggestion` union.
+  // the bridge types stay decoupled from @zeo/core (the file imports only the
+  // pure `commandBarBounds` helper, nothing type-bearing across the IPC seam);
+  // `CommandBarStateShape`/`BridgeSuggestion` mirror @zeo/core's widened
+  // `CommandBarState` and `Suggestion` union.
   commandBar: {
     open(mode: "navigate" | "new-tab"): Promise<void>;
     close(): Promise<void>;
     submit(text: string, mode?: "navigate" | "new-tab"): Promise<void>;
     setQuery(text: string): Promise<void>;
     moveSelection(delta: 1 | -1): Promise<void>;
-    accept(index?: number): Promise<void>;
+    accept(index?: number, revision?: number): Promise<void>;
     state(): Promise<CommandBarStateShape>;
   };
 }
@@ -139,6 +146,9 @@ interface CommandBarStateShape {
   query: string;
   suggestions: BridgeSuggestion[];
   selectedIndex: number;
+  // PRD 4.2 / CodeRabbit 2a — monotonic id of the current suggestion list, echoed
+  // by the renderer on a row-click accept so main can reject a stale click.
+  revision: number;
 }
 // Inside `page.evaluate` the callback runs in the renderer, where the real global
 // carries the bridge. We reach it via `globalThis` (not `window`) so it never
@@ -240,6 +250,34 @@ async function commandBarWindow(app: ElectronApplication): Promise<Page> {
   }
 
   throw new Error('No renderer window exposing data-testid="command-bar" was found within 15s');
+}
+
+/**
+ * Read the NATIVE geometry the main process gave the command-bar overlay: the
+ * window's content size plus the overlay `WebContentsView`'s own bounds height.
+ * Runs in the MAIN process via `app.evaluate` (the renderer cannot read its own
+ * hosting view's bounds), locating the overlay among the window's child views by
+ * its `?view=command-bar` url. Returns `null` if the window or overlay is not
+ * found. Callers compare `overlayHeight` against `commandBarBounds(width, height,
+ * rowCount).height` from @zeo/core — the exact math main applies.
+ */
+async function overlayNativeBounds(
+  app: ElectronApplication,
+): Promise<{ width: number; height: number; overlayHeight: number } | null> {
+  return app.evaluate(({ BrowserWindow }) => {
+    const win = BrowserWindow.getAllWindows()[0];
+    if (win == null) {
+      return null;
+    }
+    const [width, height] = win.getContentSize();
+    for (const child of win.contentView.children) {
+      const wc = (child as { webContents?: { getURL(): string } }).webContents;
+      if (wc != null && wc.getURL().includes("view=command-bar")) {
+        return { width, height, overlayHeight: child.getBounds().height };
+      }
+    }
+    return null;
+  });
 }
 
 // --- SEAM: invoking the New Tab / Close Tab commands. ---------------------------
@@ -2148,6 +2186,10 @@ test.describe("zeo desktop app", () => {
     const setup = await sidebar.evaluate(async () => {
       const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
       const match = await zeo.tabs.create("zebra.example");
+      // A second, non-matching tab so zebra.example is no longer the ACTIVE tab:
+      // the active tab is excluded from suggestions (ranking contract, PRD §1),
+      // so without this "zebra" would surface only row 0 and never a tab row.
+      await zeo.tabs.create("other.example");
       const s = await zeo.tabs.list();
       return { matchId: match.id, tabCount: s.tabs.length };
     });
@@ -2292,15 +2334,18 @@ test.describe("zeo desktop app", () => {
   });
 
   // §5 bullet 7 — the overlay panel grows with the list and shrinks back when the
-  // query stops matching. The renderer cannot read its own WebContentsView bounds,
-  // so we assert on the OBSERVABLE PROXY: the number of `command-bar-suggestion`
-  // rows rendered in the overlay DOM (one row per suggestion, row 0 included). A
-  // matching query yields row 0 + the match; a non-matching but resolvable query
-  // leaves only row 0.
-  test("overlay row count grows when the query matches and shrinks back to row 0 when it does not", async () => {
+  // query stops matching. We assert BOTH the rendered DOM row count (one row per
+  // suggestion, row 0 included) AND the NATIVE overlay WebContentsView bounds
+  // height read from the main process, checked against commandBarBounds() from
+  // @zeo/core so the panel geometry — not just the DOM — actually tracks the list.
+  test("overlay row count and native bounds grow when the query matches and shrink back to row 0 when it does not", async () => {
     await sidebar.evaluate(async () => {
       const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
       await zeo.tabs.create("orchid.example");
+      // A second, non-matching tab so orchid.example is not the ACTIVE tab (the
+      // active tab is excluded from suggestions), letting "orchid" surface row 0
+      // plus the orchid tab row.
+      await zeo.tabs.create("daffodil.example");
       await zeo.commandBar.open("new-tab");
     });
 
@@ -2313,6 +2358,18 @@ test.describe("zeo desktop app", () => {
       await zeo.commandBar.setQuery("orchid");
     });
     await expect(rows).toHaveCount(2);
+    // Native overlay height matches the 2-row geometry main computes. Polled
+    // because the DOM row count and the native setBounds settle independently.
+    await expect
+      .poll(async () => {
+        const b = await overlayNativeBounds(app);
+        return b === null ? null : b.overlayHeight;
+      })
+      .toBe(
+        await overlayNativeBounds(app).then((b) =>
+          b === null ? null : commandBarBounds(b.width, b.height, 2).height,
+        ),
+      );
 
     // A resolvable-but-unmatched query: only row 0 (the text action) remains.
     await sidebar.evaluate(async () => {
@@ -2320,8 +2377,90 @@ test.describe("zeo desktop app", () => {
       await zeo.commandBar.setQuery("qzxvwmklunlikely");
     });
     await expect(rows).toHaveCount(1);
+    // Native overlay height shrinks back to the single-row (row 0 only) geometry.
+    await expect
+      .poll(async () => {
+        const b = await overlayNativeBounds(app);
+        return b === null ? null : b.overlayHeight;
+      })
+      .toBe(
+        await overlayNativeBounds(app).then((b) =>
+          b === null ? null : commandBarBounds(b.width, b.height, 1).height,
+        ),
+      );
 
     // Hygiene: close the bar like the neighbouring tests do.
+    await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.commandBar.close();
+    });
+  });
+
+  // CodeRabbit 2a — a row-click accept carries the revision of the list it was
+  // rendered against. If the suggestion list changes before the click reaches
+  // main (a click racing a newer pushed list), main rejects the stale accept and
+  // performs no action, rather than resolving the clicked index against the new
+  // (different) rows. Here the stale index is still IN RANGE for the new list but
+  // points at a DIFFERENT tab, so only the revision guard — not the range check —
+  // can prevent the wrong activation.
+  test("a row-click accept with a stale revision is rejected and performs no action", async () => {
+    const setup = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.tabs.create("tulip.example");
+      await zeo.tabs.create("rose.example");
+      // A third, non-matching tab so BOTH tulip and rose are non-active and thus
+      // eligible as suggestion rows.
+      await zeo.tabs.create("fern.example");
+      await zeo.commandBar.open("new-tab");
+      await zeo.commandBar.setQuery("tulip"); // list revision R: [search, tulip]
+      const st = await zeo.commandBar.state();
+      const s = await zeo.tabs.list();
+      const tabIndex = st.suggestions.findIndex((x) => x.kind === "tab");
+      return {
+        staleRevision: st.revision,
+        tabIndex,
+        tabCount: s.tabs.length,
+        activeId: s.activeTabId,
+      };
+    });
+    // The tulip tab is a real row below row 0.
+    expect(setup.tabIndex).toBe(1);
+
+    // Change the list to [search, rose]: bumps the revision, so setup.staleRevision
+    // is now stale while index 1 stays in range (but points at rose, not tulip).
+    await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.commandBar.setQuery("rose");
+    });
+
+    // Accept the OLD index with the STALE revision. Main rejects (throws), so the
+    // invoke rejects; without the guard this would activate the rose tab.
+    const rejected = await sidebar.evaluate(
+      async ({ index, revision }) => {
+        const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+        try {
+          await zeo.commandBar.accept(index, revision);
+          return false;
+        } catch {
+          return true;
+        }
+      },
+      { index: setup.tabIndex, revision: setup.staleRevision },
+    );
+    expect(rejected).toBe(true);
+
+    // The bar is untouched (still open) and no tab was activated or created.
+    const after = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      const st = await zeo.commandBar.state();
+      const s = await zeo.tabs.list();
+      return { open: st.open, tabCount: s.tabs.length, activeId: s.activeTabId };
+    });
+    expect(after.open).toBe(true);
+    expect(after.tabCount).toBe(setup.tabCount);
+    expect(after.activeId).toBe(setup.activeId);
+
+    // Hygiene: close the bar.
     await sidebar.evaluate(async () => {
       const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
       await zeo.commandBar.close();
