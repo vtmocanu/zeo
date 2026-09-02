@@ -5,6 +5,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
 } from "react";
+import { formatAccelerator } from "@zeo/core";
 import type { CommandBarMode, CommandBarState, Suggestion } from "@zeo/core";
 import "./App.css";
 
@@ -25,6 +26,8 @@ function iconFor(suggestion: Suggestion): string {
       return "→";
     case "search":
       return "🔍";
+    case "command":
+      return "⚡";
   }
 }
 
@@ -39,6 +42,8 @@ function primaryText(suggestion: Suggestion): string {
     case "navigate":
     case "search":
       return suggestion.label;
+    case "command":
+      return suggestion.title;
   }
 }
 
@@ -61,6 +66,8 @@ function secondaryText(suggestion: Suggestion): string {
     case "navigate":
     case "search":
       return "";
+    case "command":
+      return "Command";
   }
 }
 
@@ -245,6 +252,12 @@ export function CommandBar() {
                     <span className="command-bar__row-secondary">{secondary}</span>
                   )}
                 </span>
+                {suggestion.kind === "command" &&
+                  suggestion.accelerator !== null && (
+                    <span className="command-bar__row-accel">
+                      {formatAccelerator(suggestion.accelerator)}
+                    </span>
+                  )}
               </div>
             );
           })}
