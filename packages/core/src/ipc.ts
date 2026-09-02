@@ -1,6 +1,7 @@
 import type { Tab } from "./tab.js";
 import type { Space } from "./space.js";
 import type { Profile } from "./profile.js";
+import type { CommandBarMode, CommandBarState } from "./command-bar.js";
 
 /**
  * A single space's tab payload, in the pre-space shape. This is what
@@ -92,6 +93,14 @@ export type SpaceMenuAction =
  */
 export interface TabsApi {
   create(url?: string): Promise<Tab>;
+  /**
+   * Navigates the tab `id` to `url`. The stored url and its title fallback are
+   * updated synchronously and the new state broadcast, then the view's
+   * `loadURL` is kicked off; the promise resolves once the load is INITIATED,
+   * not once it settles. Rejects for an unknown id or an id outside the active
+   * space. Concurrent navigations are last-request-wins.
+   */
+  navigate(id: string, url: string): Promise<void>;
   close(id: string): Promise<void>;
   activate(id: string): Promise<void>;
   list(): Promise<TabsState>;
@@ -146,6 +155,20 @@ export interface ProfilesApi {
 }
 
 /**
+ * Command-bar commands the renderer invokes over IPC, handled in main against the
+ * single command-bar controller. `open` shows the bar in the given
+ * {@link CommandBarMode}; `close` hides it; `submit` resolves the text (defaulting
+ * to the currently-open mode when `mode` is omitted) and performs the navigate or
+ * new-tab action; `state` reads back the current {@link CommandBarState}.
+ */
+export interface CommandBarApi {
+  open(mode: CommandBarMode): Promise<void>;
+  close(): Promise<void>;
+  submit(text: string, mode?: CommandBarMode): Promise<void>;
+  state(): Promise<CommandBarState>;
+}
+
+/**
  * The full bridge surface exposed on `window.zeo` by the preload script.
  *
  * `onStateChange` registers a listener for main-pushed state updates and
@@ -156,7 +179,11 @@ export interface ZeoApi {
   tabs: TabsApi;
   spaces: SpacesApi;
   profiles: ProfilesApi;
+  commandBar: CommandBarApi;
   onStateChange(listener: (state: TabsState) => void): () => void;
+  /** Registers a listener for main-pushed command-bar state updates and returns
+   *  an unsubscribe function, mirroring onStateChange. */
+  onCommandBarChange(listener: (state: CommandBarState) => void): () => void;
   /** Registers a listener for main-pushed space-menu actions (Rename / New
    *  profile…) and returns an unsubscribe function, mirroring onStateChange. */
   onSpaceMenuAction(listener: (action: SpaceMenuAction) => void): () => void;
@@ -168,6 +195,7 @@ export interface ZeoApi {
  */
 export const IPC = {
   tabsCreate: "zeo:tabs:create",
+  tabsNavigate: "zeo:tabs:navigate",
   tabsClose: "zeo:tabs:close",
   tabsActivate: "zeo:tabs:activate",
   tabsList: "zeo:tabs:list",
@@ -189,5 +217,10 @@ export const IPC = {
   profilesCreate: "zeo:profiles:create",
   profilesRename: "zeo:profiles:rename",
   profilesDelete: "zeo:profiles:delete",
+  commandBarOpen: "zeo:command-bar:open",
+  commandBarClose: "zeo:command-bar:close",
+  commandBarSubmit: "zeo:command-bar:submit",
+  commandBarState: "zeo:command-bar:state",
+  commandBarChange: "zeo:command-bar:change",
   stateChange: "zeo:state-change",
 } as const;
