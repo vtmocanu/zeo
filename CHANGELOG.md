@@ -9,6 +9,28 @@ milestone, a minor bump only for very large breakthroughs.
 
 ## [Unreleased]
 
+## [0.0.9] - 2026-09-02
+
+### Added
+
+- Command bar: an overlay opened by Cmd+L (prefilled with the active tab's
+  current url, to navigate that tab) or Cmd+T / the sidebar new-tab button
+  (empty, creating a new tab on submit). Escape or clicking away dismisses
+  it.
+- Typed text resolves to either a URL or a DuckDuckGo search: an `http`/
+  `https` input, or a bare host/host:port (localhost, an IPv4 literal, or a
+  dotted hostname), navigates; anything else — including other schemes such
+  as `file:` or `about:` — becomes a search of the typed text.
+- The active tab's url is now tracked live: the sidebar label and the
+  Cmd+L prefill follow in-page navigation instead of only the tab's initial
+  url.
+
+### Changed
+
+- Cmd+T and the sidebar new-tab button now open the command bar in new-tab
+  mode instead of immediately creating a tab against a default url; the tab
+  is created when you submit.
+
 ## [0.0.8] - 2026-09-01
 
 ### Added
