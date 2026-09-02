@@ -81,6 +81,7 @@ interface ZeoBridge {
     restore(id: string): Promise<void>;
     remove(id: string): Promise<void>;
     list(): Promise<BridgeState>;
+    navigate(id: string, url: string): Promise<void>;
     showContextMenu(id: string, x: number, y: number): Promise<BridgeMenuResult>;
   };
   spaces: {
@@ -96,6 +97,17 @@ interface ZeoBridge {
     create(name: string): Promise<BridgeProfile>;
     rename(id: string, name: string): Promise<void>;
     delete(id: string): Promise<void>;
+  };
+  // PRD 4.1 command-bar surface. `submit` forwards the raw text to main, which
+  // runs `resolveInput` and either navigates the active tab or opens a new one;
+  // `state()` is an invoke round trip (never cached) reading the current overlay
+  // state back. Redeclared structurally (like the rest of this bridge) so e2e
+  // stays import-free of @zeo/core.
+  commandBar: {
+    open(mode: "navigate" | "new-tab"): Promise<void>;
+    close(): Promise<void>;
+    submit(text: string, mode?: "navigate" | "new-tab"): Promise<void>;
+    state(): Promise<{ open: boolean; mode: "navigate" | "new-tab"; initialText: string }>;
   };
 }
 // Inside `page.evaluate` the callback runs in the renderer, where the real global
@@ -148,7 +160,16 @@ async function tabViewWindow(app: ElectronApplication, sidebar: Page): Promise<P
         continue;
       }
       try {
-        if ((await w.getByTestId("sidebar").count()) === 0) {
+        // A real tab view is a window that is NEITHER the sidebar NOR the
+        // command-bar overlay. The overlay (PRD 4.1) is a separate
+        // WebContentsView loading the renderer with `?view=command-bar`; it
+        // carries data-testid="command-bar" (not "sidebar"), so the old
+        // sidebar-only check would wrongly return it here. Excluding both
+        // testids keeps this to an actual page's WebContentsView.
+        if (
+          (await w.getByTestId("sidebar").count()) === 0 &&
+          (await w.getByTestId("command-bar").count()) === 0
+        ) {
           return w;
         }
       } catch {
@@ -159,6 +180,36 @@ async function tabViewWindow(app: ElectronApplication, sidebar: Page): Promise<P
   }
 
   throw new Error("No tab WebContentsView window (non-sidebar) was found within 15s");
+}
+
+/**
+ * Return the renderer window that hosts the command-bar overlay (PRD 4.1).
+ *
+ * Like {@link sidebarWindow}, `firstWindow()` cannot be trusted: the overlay is
+ * one of several WebContentsViews that surface as windows. Poll every open
+ * window for the one exposing data-testid="command-bar", up to a deadline. The
+ * overlay page always renders (main drives visibility by showing/hiding the
+ * hosting view), so its DOM is queryable whether or not the bar is open.
+ */
+async function commandBarWindow(app: ElectronApplication): Promise<Page> {
+  await app.firstWindow();
+
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
+    for (const w of app.windows()) {
+      try {
+        if ((await w.getByTestId("command-bar").count()) > 0) {
+          return w;
+        }
+      } catch {
+        // A navigating WebContentsView can momentarily lose its execution
+        // context; skip any window we can't query this pass.
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+
+  throw new Error('No renderer window exposing data-testid="command-bar" was found within 15s');
 }
 
 // --- SEAM: invoking the New Tab / Close Tab commands. ---------------------------
@@ -256,7 +307,7 @@ test.describe("zeo desktop app", () => {
     }
   });
 
-  test("shows the seeded tab and adds one via the new-tab button", async () => {
+  test("shows the seeded tab; the new-tab button opens the command bar, and submitting adds a tab", async () => {
     await expect(sidebar.getByTestId("sidebar")).toBeVisible();
 
     const items = sidebar.getByTestId("tab-item");
@@ -264,7 +315,26 @@ test.describe("zeo desktop app", () => {
 
     await expect(items.first()).toContainText(/example/i);
 
+    // PRD 4.1 — the new-tab button now OPENS THE COMMAND BAR in new-tab mode
+    // instead of creating a tab directly; a tab is created only on submit.
     await sidebar.getByTestId("new-tab-button").click();
+    await expect
+      .poll(async () =>
+        sidebar.evaluate(async () => {
+          const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+          const st = await zeo.commandBar.state();
+          return { open: st.open, mode: st.mode };
+        }),
+      )
+      .toEqual({ open: true, mode: "new-tab" });
+    // Opening the bar alone did not create a tab.
+    await expect(items).toHaveCount(1);
+
+    // Submitting through the bar creates and renders the tab.
+    await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.commandBar.submit("example.org");
+    });
     await expect(items).toHaveCount(2);
   });
 
@@ -294,27 +364,50 @@ test.describe("zeo desktop app", () => {
     await expect(items).toHaveCount(before);
   });
 
-  // Case (b): the New Tab / Close Tab commands add and close a tab. The commands
-  // are invoked through the application menu in the MAIN process (see the SEAM
-  // note: real accelerator keychords can't be delivered headlessly), so this
-  // path is focus-independent by construction. We still run it twice, once with
-  // the sidebar frontmost and once with a tab's WebContentsView frontmost, to
-  // document that an application-menu command is not scoped to one webContents
-  // (unlike before-input-event) and that the sidebar reflects it either way; the
-  // literal keychord firing is a running-app acceptance criterion, not asserted
-  // here.
-  test("new-tab / close-tab commands add and close a tab, sidebar- and tab-view-frontmost", async () => {
+  // Case (b): the New Tab / Close Tab commands, invoked through the application
+  // menu in the MAIN process (see the SEAM note: real accelerator keychords can't
+  // be delivered headlessly), are focus-independent by construction. PRD 4.1
+  // changes New Tab: it now OPENS THE COMMAND BAR in new-tab mode rather than
+  // creating a tab directly — a tab is created only when the bar is submitted.
+  // Close Tab still closes the active tab directly. We run it twice, once with the
+  // sidebar frontmost and once with a tab's WebContentsView frontmost, to document
+  // that an application-menu command is not scoped to one webContents (unlike
+  // before-input-event) and that the sidebar reflects it either way; the literal
+  // keychord firing is a running-app acceptance criterion, not asserted here.
+  test("new-tab command opens the bar and submit adds a tab; close-tab closes it, sidebar- and tab-view-frontmost", async () => {
     const items = sidebar.getByTestId("tab-item");
+
+    // Drives the New Tab menu command, asserts it opened the command bar (no tab
+    // yet, focus-independent), submits to create the tab, then closes it with the
+    // Close Tab menu command — the shared body of both focus phases.
+    const runPhase = async (n: number): Promise<void> => {
+      await pressNewTab(app);
+      await expect
+        .poll(async () =>
+          sidebar.evaluate(async () => {
+            const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+            return (await zeo.commandBar.state()).open;
+          }),
+        )
+        .toBe(true);
+      // Opening the bar alone created no tab.
+      await expect(items).toHaveCount(n);
+      // Submitting through the bar creates the tab (and closes the bar).
+      await sidebar.evaluate(async () => {
+        const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+        await zeo.commandBar.submit("example.org");
+      });
+      await expect(items).toHaveCount(n + 1);
+      // Close Tab closes the now-active new tab directly.
+      await pressCloseTab(app);
+      await expect(items).toHaveCount(n);
+    };
 
     // Phase 1 — sidebar renderer frontmost/focused. Click a neutral element (the
     // header title has no click handler) so focus sits in the sidebar.
     await sidebar.bringToFront();
     await sidebar.locator(".sidebar__title").click();
-    const n1 = await items.count();
-    await pressNewTab(app);
-    await expect(items).toHaveCount(n1 + 1);
-    await pressCloseTab(app);
-    await expect(items).toHaveCount(n1);
+    await runPhase(await items.count());
 
     // Phase 2 — a tab's WebContentsView frontmost/focused. The command still runs
     // and the sidebar observes the count via the state broadcast even though a
@@ -327,11 +420,7 @@ test.describe("zeo desktop app", () => {
       .locator("body")
       .click()
       .catch(() => {});
-    const n2 = await items.count();
-    await pressNewTab(app);
-    await expect(items).toHaveCount(n2 + 1);
-    await pressCloseTab(app);
-    await expect(items).toHaveCount(n2);
+    await runPhase(await items.count());
   });
 
   // Guards the application-menu ACCELERATOR bindings. The command tests above
@@ -364,6 +453,10 @@ test.describe("zeo desktop app", () => {
     });
 
     expect(accelerators["New Tab"]).toBe("CmdOrCtrl+T");
+    // PRD 4.1 — Cmd+T now opens the command bar in new-tab mode (it no longer
+    // creates a tab directly), and Cmd+L opens it in navigate mode. Both remain
+    // bound on their menu items; a removed/altered binding fails here.
+    expect(accelerators["Open Location"]).toBe("CmdOrCtrl+L");
     expect(accelerators["Close Tab"]).toBe("CmdOrCtrl+W");
     for (let n = 1; n <= 9; n += 1) {
       expect(accelerators[`Activate Tab ${n}`]).toBe(`CmdOrCtrl+Alt+${n}`);
@@ -1420,5 +1513,367 @@ test.describe("zeo desktop app", () => {
     const deleteItem = withTabsDescriptor.items.find((i) => i.id === "delete");
     expect(deleteItem).toBeDefined();
     expect(deleteItem?.label).toMatch(/^Delete \(\d+ tabs?\)$/);
+  });
+
+  // --- PRD 4.1 — command bar shell and URL entry (deliverable §5). ---------------
+  // All of these drive the command bar over the sidebar bridge (`window.zeo`) and
+  // assert on the BROADCAST STATE — the stored url in `tabs.list()` and the
+  // `commandBar.state()` payload — which `submit`/`navigate` mutate synchronously
+  // in main before resolving, so they are network-INDEPENDENT: a real page load in
+  // the CI sidecar can only canonicalize the url (e.g. add a trailing slash), which
+  // the substring/regex assertions tolerate. The two exceptions (overlay input
+  // prefill, in-tab navigation) explicitly need a page's DOM/location and say so.
+
+  // §5 bullet 1 — navigate mode opens prefilled with the active tab's url; typing a
+  // url and submitting navigates the active tab and closes the bar (no new tab).
+  test("command bar opens in navigate mode prefilled with the active tab's url and submitting navigates it", async () => {
+    const before = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      return zeo.tabs.list();
+    });
+    expect(before.tabs).toHaveLength(1);
+    const activeId = before.activeTabId;
+    expect(activeId).not.toBeNull();
+
+    // Open in navigate mode. Main seeds initialText with the active tab's url.
+    const opened = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.commandBar.open("navigate");
+      return zeo.commandBar.state();
+    });
+    expect(opened.open).toBe(true);
+    expect(opened.mode).toBe("navigate");
+    expect(opened.initialText).toMatch(/example\.com/);
+
+    // The overlay page's input reflects the seeded url — proves the overlay's DOM
+    // is queryable and the renderer applied the pushed state. Web-first matcher
+    // auto-retries through the state push + re-render.
+    const overlay = await commandBarWindow(app);
+    await expect(overlay.getByTestId("command-bar-input")).toHaveValue(/example\.com/);
+
+    // Submit a bare host: resolveInput makes it https://example.org/. The active
+    // tab's stored url follows, no tab is added, and the bar closes.
+    await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.commandBar.submit("example.org");
+    });
+    await expect
+      .poll(async () =>
+        sidebar.evaluate(async (id) => {
+          const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+          const s = await zeo.tabs.list();
+          return s.tabs.find((t) => t.id === id)?.url ?? null;
+        }, activeId),
+      )
+      .toMatch(/example\.org/);
+
+    const after = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      const s = await zeo.tabs.list();
+      const st = await zeo.commandBar.state();
+      return { count: s.tabs.length, active: s.activeTabId, open: st.open };
+    });
+    expect(after.count).toBe(1);
+    expect(after.active).toBe(activeId);
+    expect(after.open).toBe(false);
+  });
+
+  // §5 bullet 2 — new-tab mode creates a tab ONLY on submit; opening alone does not.
+  test("command bar in new-tab mode creates a tab only on submit", async () => {
+    const before = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      return zeo.tabs.list();
+    });
+    const beforeCount = before.tabs.length;
+
+    // Opening the bar in new-tab mode must NOT create a tab.
+    const afterOpen = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.commandBar.open("new-tab");
+      const st = await zeo.commandBar.state();
+      const s = await zeo.tabs.list();
+      return { open: st.open, mode: st.mode, count: s.tabs.length };
+    });
+    expect(afterOpen.open).toBe(true);
+    expect(afterOpen.mode).toBe("new-tab");
+    expect(afterOpen.count).toBe(beforeCount);
+
+    // Submitting (bar open, new-tab mode) creates and activates a new tab.
+    await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.commandBar.submit("example.org");
+    });
+    await expect
+      .poll(async () =>
+        sidebar.evaluate(async () => {
+          const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+          return (await zeo.tabs.list()).tabs.length;
+        }),
+      )
+      .toBe(beforeCount + 1);
+
+    const after = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      const s = await zeo.tabs.list();
+      const st = await zeo.commandBar.state();
+      return {
+        active: s.tabs.find((t) => t.id === s.activeTabId) ?? null,
+        open: st.open,
+      };
+    });
+    expect(after.active).not.toBeNull();
+    expect(after.active?.url).toMatch(/example\.org/);
+    expect(after.open).toBe(false);
+  });
+
+  // Regression (issue #72) — re-seed on mode change while the bar stays OPEN.
+  // Opening navigate (Cmd+L) then new-tab (Cmd+T) without closing must clear the
+  // seeded navigate url from the input; otherwise Enter would create a tab for the
+  // stale url instead of an empty new-tab entry. Asserts the renderer re-seeds when
+  // an already-open bar's mode changes, not only on a closed→open transition.
+  test("switching an open navigate bar to new-tab mode clears the seeded url", async () => {
+    // Open in navigate mode: main seeds initialText with the active tab's url.
+    const opened = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.commandBar.open("navigate");
+      return zeo.commandBar.state();
+    });
+    expect(opened.open).toBe(true);
+    expect(opened.mode).toBe("navigate");
+
+    // The overlay input reflects the seeded url (mirrors the navigate test's regex).
+    const overlay = await commandBarWindow(app);
+    await expect(overlay.getByTestId("command-bar-input")).toHaveValue(/example\.com/);
+
+    // WITHOUT closing, switch to new-tab mode. Main pushes fresh state with an
+    // empty initialText while the bar stays open.
+    const switched = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.commandBar.open("new-tab");
+      return zeo.commandBar.state();
+    });
+    expect(switched.open).toBe(true);
+    expect(switched.mode).toBe("new-tab");
+
+    // The input must re-seed to empty on the mode change (web-first matcher retries
+    // through the state push + re-render). This is the assertion the fix enables.
+    await expect(overlay.getByTestId("command-bar-input")).toHaveValue("");
+
+    // Hygiene: leave the bar closed like the neighbouring tests do.
+    await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.commandBar.close();
+    });
+  });
+
+  // §5 bullet 3 — a bare word is a search: the active tab lands on the default
+  // engine's query url carrying the percent-encoded term. Submit + read in ONE
+  // evaluate so the synchronously-stored resolved url is captured before any
+  // did-navigate could rewrite it — fully network-independent.
+  test("submitting a bare word searches the default engine", async () => {
+    const url = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.commandBar.submit("hello world", "navigate");
+      const s = await zeo.tabs.list();
+      return s.tabs.find((t) => t.id === s.activeTabId)?.url ?? "";
+    });
+    // resolveInput uses encodeURIComponent, so a space becomes %20.
+    expect(url.startsWith("https://duckduckgo.com/?q=")).toBe(true);
+    expect(url).toContain("hello%20world");
+  });
+
+  // §5 bullet 4 — Escape (driven through the overlay renderer) closes the bar
+  // without navigating or creating a tab.
+  test("Escape closes the command bar without navigating or creating a tab", async () => {
+    const before = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      const s = await zeo.tabs.list();
+      return {
+        count: s.tabs.length,
+        active: s.activeTabId,
+        url: s.tabs.find((t) => t.id === s.activeTabId)?.url ?? null,
+      };
+    });
+
+    await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.commandBar.open("navigate");
+    });
+    expect(
+      await sidebar.evaluate(async () => {
+        const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+        return (await zeo.commandBar.state()).open;
+      }),
+    ).toBe(true);
+
+    // Drive Escape through the overlay input: the renderer's onKeyDown maps
+    // Escape -> commandBar.close (a real renderer key event, deliverable via CDP,
+    // unlike the OS-level menu accelerators the other tests document as unpressable).
+    const overlay = await commandBarWindow(app);
+    await overlay.getByTestId("command-bar-input").press("Escape");
+
+    await expect
+      .poll(async () =>
+        sidebar.evaluate(async () => {
+          const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+          return (await zeo.commandBar.state()).open;
+        }),
+      )
+      .toBe(false);
+
+    const after = await sidebar.evaluate(async (activeId) => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      const s = await zeo.tabs.list();
+      return {
+        count: s.tabs.length,
+        url: s.tabs.find((t) => t.id === activeId)?.url ?? null,
+      };
+    }, before.active);
+    expect(after.count).toBe(before.count);
+    expect(after.url).toBe(before.url);
+  });
+
+  // §5 bullet 5 — the headless seam: submit works with the bar CLOSED. Navigating,
+  // creating, and whitespace-only (no-op) are each exercised without opening.
+  test("submitting with the bar closed navigates, creates a tab, and ignores whitespace", async () => {
+    const before = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      return zeo.tabs.list();
+    });
+    const beforeCount = before.tabs.length;
+    const activeId = before.activeTabId;
+
+    // (a) submit while closed navigates the active tab and leaves the bar closed.
+    const r1 = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.commandBar.submit("example.net");
+      const s = await zeo.tabs.list();
+      const st = await zeo.commandBar.state();
+      return {
+        count: s.tabs.length,
+        active: s.activeTabId,
+        url: s.tabs.find((t) => t.id === s.activeTabId)?.url ?? null,
+        open: st.open,
+      };
+    });
+    expect(r1.open).toBe(false);
+    expect(r1.count).toBe(beforeCount);
+    expect(r1.active).toBe(activeId);
+    expect(r1.url).toMatch(/example\.net/);
+
+    // (b) submit with an explicit new-tab mode while closed creates a tab.
+    const r2 = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.commandBar.submit("example.org", "new-tab");
+      const s = await zeo.tabs.list();
+      return {
+        count: s.tabs.length,
+        url: s.tabs.find((t) => t.id === s.activeTabId)?.url ?? null,
+      };
+    });
+    expect(r2.count).toBe(beforeCount + 1);
+    expect(r2.url).toMatch(/example\.org/);
+
+    // (c) whitespace-only text resolves to null: nothing changes.
+    const r3 = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      const pre = await zeo.tabs.list();
+      await zeo.commandBar.submit("   ");
+      const s = await zeo.tabs.list();
+      return {
+        preCount: pre.tabs.length,
+        preUrl: pre.tabs.find((t) => t.id === pre.activeTabId)?.url ?? null,
+        postCount: s.tabs.length,
+        postUrl: s.tabs.find((t) => t.id === s.activeTabId)?.url ?? null,
+      };
+    });
+    expect(r3.postCount).toBe(r3.preCount);
+    expect(r3.postUrl).toBe(r3.preUrl);
+  });
+
+  // §5 bullet 6 — core-level scheme rejection surfaces end to end: a `file:` scheme
+  // is NOT a url, so the active tab lands on a search-engine url, never a file url.
+  test("submitting a file: scheme resolves to a search, never a file url", async () => {
+    const url = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.commandBar.submit("file:///etc/hosts");
+      const s = await zeo.tabs.list();
+      return s.tabs.find((t) => t.id === s.activeTabId)?.url ?? "";
+    });
+    expect(url.startsWith("https://duckduckgo.com/?q=")).toBe(true);
+    expect(url.startsWith("file:")).toBe(false);
+  });
+
+  // §5 bullet 8 — two rapid submits are last-request-wins. Fire the first WITHOUT
+  // awaiting it, then await the second; both navigate the active tab. The stored
+  // url ends on the SECOND target and stays there (the superseded first load is
+  // aborted and never reverts the url or marks the tab failed).
+  test("two rapid submits on the same tab are last-request-wins", async () => {
+    const activeId = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      return (await zeo.tabs.list()).activeTabId;
+    });
+
+    const url = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      // Do NOT await the first: the second supersedes it (main aborts the older
+      // loadURL). Both are navigate mode with the bar closed.
+      void zeo.commandBar.submit("example.net");
+      await zeo.commandBar.submit("example.org");
+      const s = await zeo.tabs.list();
+      return s.tabs.find((t) => t.id === s.activeTabId)?.url ?? null;
+    });
+    expect(url).toMatch(/example\.org/);
+
+    // The stored url stays on the second target: a late/aborted first load does
+    // not revert it (network run: did-navigate for the current sequence keeps it
+    // on example.org; never back to example.net).
+    await expect
+      .poll(
+        async () =>
+          sidebar.evaluate(async (id) => {
+            const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+            const s = await zeo.tabs.list();
+            return s.tabs.find((t) => t.id === id)?.url ?? null;
+          }, activeId),
+        { message: "expected the stored url to remain on the second target" },
+      )
+      .toMatch(/example\.org/);
+  });
+
+  // §5 bullet 9 — in-tab navigation mirrors the real url into the broadcast state.
+  // Network-DEPENDENT (drives a real page navigation), so it polls generously. Uses
+  // a host distinct from the seeded example.com so the assertion is unambiguous.
+  test("in-tab navigation updates the tab's url in the broadcast state", async () => {
+    const activeId = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      return (await zeo.tabs.list()).activeTabId;
+    });
+
+    // The seeded tab's own WebContentsView (overlay-safe lookup). Drive an in-page
+    // navigation; location.assign returns synchronously before the context tears
+    // down, but guard anyway.
+    const tabView = await tabViewWindow(app, sidebar);
+    await tabView
+      .evaluate(() => {
+        window.location.assign("https://example.org/");
+      })
+      .catch(() => {});
+
+    // did-navigate on the tab's webContents updates the stored url and broadcasts.
+    await expect
+      .poll(
+        async () =>
+          sidebar.evaluate(async (id) => {
+            const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+            const s = await zeo.tabs.list();
+            return s.tabs.find((t) => t.id === id)?.url ?? null;
+          }, activeId),
+        {
+          message: "expected did-navigate to mirror the real url into broadcast state",
+          timeout: 30_000,
+        },
+      )
+      .toMatch(/example\.org/);
   });
 });

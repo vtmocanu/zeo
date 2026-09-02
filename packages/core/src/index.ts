@@ -24,6 +24,7 @@ export type {
   TabsApi,
   SpacesApi,
   ProfilesApi,
+  CommandBarApi,
   ZeoApi,
   TabContextMenuItem,
   TabContextMenuResult,
@@ -32,9 +33,12 @@ export type {
   SpaceMenuAction,
 } from "./ipc.js";
 export { IPC } from "./ipc.js";
+export { resolveInput, DEFAULT_SEARCH_ENGINE } from "./resolve-input.js";
+export type { NavigationTarget } from "./resolve-input.js";
+export type { CommandBarMode, CommandBarState } from "./command-bar.js";
 export { defaultSpaceName } from "./space-name.js";
 export { buildSpaceContextMenu } from "./space-menu.js";
 export type { SpaceContextMenuInput } from "./space-menu.js";
 export { titleForUrl } from "./tab-title.js";
 export { formatRelativeArchived } from "./relative-time.js";
-export { SIDEBAR_WIDTH } from "./layout.js";
+export { SIDEBAR_WIDTH, COMMAND_BAR_HEIGHT, commandBarBounds } from "./layout.js";

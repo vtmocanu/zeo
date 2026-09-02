@@ -368,7 +368,10 @@ export class SpaceStore {
    * scoped to the active space. `TabStore.updateMeta` is a silent no-op on an
    * unknown id, so fanning the call to every space updates only the owner.
    */
-  updateMeta(id: string, meta: { title?: string; faviconUrl?: string | null }): void {
+  updateMeta(
+    id: string,
+    meta: { title?: string; faviconUrl?: string | null; url?: string },
+  ): void {
     for (const spaceId of this.order) {
       this.spacesById.get(spaceId)!.tabs.updateMeta(id, meta);
     }

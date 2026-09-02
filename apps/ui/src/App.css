@@ -434,3 +434,45 @@ body {
   background: #45455c;
   color: #fff;
 }
+
+/* Command bar ------------------------------------------------------------- */
+
+/* The overlay WebContentsView is sized/positioned by main, so this container
+   fills it (100vh) and centers the single input row. Reuses the sidebar's
+   panel tokens — same surface, border, and text colors. */
+.command-bar {
+  height: 100vh;
+  display: flex;
+  align-items: center;
+  padding: 8px;
+  background: #1e1e28;
+  color: #e6e6ee;
+  border: 1px solid #2c2c3a;
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+}
+
+/* Full-width input matching the sidebar's inline-edit field, sized up for the
+   address row. No default outline; a clear accent border on focus. */
+.command-bar__input {
+  appearance: none;
+  flex: 1;
+  min-width: 0;
+  border: 1px solid #3a3a4c;
+  background: #14141c;
+  color: #e6e6ee;
+  border-radius: 6px;
+  padding: 10px 12px;
+  font-size: 14px;
+  font-family: inherit;
+}
+
+.command-bar__input::placeholder {
+  color: #7a7a90;
+}
+
+.command-bar__input:focus {
+  outline: none;
+  border-color: #6b6bff;
+}

@@ -898,4 +898,20 @@ describe("TabStore.updateMeta", () => {
     expect(tab?.title).toBe("X");
     expect(tab?.faviconUrl).toBe("https://e.test/f.ico");
   });
+
+  test("url update replaces the record's url", () => {
+    const store = makeStore();
+    store.create({ url: "https://a.test" }); // t1
+
+    store.updateMeta("t1", { url: "https://b.test/page" });
+    expect(store.list().find((t) => t.id === "t1")?.url).toBe("https://b.test/page");
+  });
+
+  test("url update on an unknown id is a no-op and does not throw", () => {
+    const store = makeStore();
+    store.create({ url: "https://a.test" }); // t1
+
+    expect(() => store.updateMeta("nonexistent", { url: "https://b.test" })).not.toThrow();
+    expect(store.list().find((t) => t.id === "t1")?.url).toBe("https://a.test");
+  });
 });
