@@ -4,11 +4,14 @@ import { fileURLToPath } from "node:url";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-// PRD 4.2 / CodeRabbit 2c — the ONE @zeo/core import in this otherwise
-// import-free spec: the exact bounds math main applies to the overlay, so the
-// native-bounds assertion checks against the real formula (not a magic number)
-// and can never drift from the source of truth.
-import { commandBarBounds } from "@zeo/core";
+// PRD 4.2 / CodeRabbit 2c — the @zeo/core value imports in this otherwise
+// import-free spec. `commandBarBounds` is the exact bounds math main applies to
+// the overlay, so the native-bounds assertion checks against the real formula
+// (not a magic number) and can never drift from the source of truth. PRD 4.3 §5
+// adds `COMMANDS`: the accelerator/menu assertions derive their expectations from
+// the registry itself rather than hard-coded literals, so a registry edit that
+// changes a shortcut or a command's menu is caught here without touching the test.
+import { commandBarBounds, COMMANDS } from "@zeo/core";
 
 // Absolute path to the built Electron main entry, resolved from this test file
 // (e2e is ESM, so no __dirname). Layout: e2e/tests/app.spec.ts -> repo root is
@@ -123,6 +126,17 @@ interface ZeoBridge {
     accept(index?: number, revision?: number): Promise<void>;
     state(): Promise<CommandBarStateShape>;
   };
+  // PRD 4.3 — the command registry bridge. `list` returns every registry entry
+  // (its CommandDescriptor fields verbatim); `run` dispatches through main's
+  // single checked boundary executeCommand and REJECTS for an unknown id or a
+  // command disabled in the current context. Redeclared structurally, like the
+  // rest of this bridge, mirroring @zeo/core's CommandsApi.
+  commands: {
+    list(): Promise<
+      { id: string; title: string; keywords: string[]; accelerator: string | null; menu: string | null }[]
+    >;
+    run(id: string): Promise<void>;
+  };
 }
 // PRD 4.2 — one command-bar suggestion row, structurally the @zeo/core
 // `Suggestion` union (redeclared import-free like the rest of this file). Row 0
@@ -134,7 +148,11 @@ type BridgeSuggestion =
   | { kind: "search"; url: string; label: string }
   | { kind: "tab"; tabId: string; spaceId: string; title: string; url: string; spaceName: string }
   | { kind: "archived-tab"; tabId: string; spaceId: string; title: string; url: string; spaceName: string }
-  | { kind: "space"; spaceId: string; name: string };
+  | { kind: "space"; spaceId: string; name: string }
+  // PRD 4.3 — a command match: its CommandId (`id`), title, and accelerator (or
+  // null). Mirrors @zeo/core's widened Suggestion union; `id` keys the e2e
+  // assertions (e.g. `tab.pin`/`space.delete`).
+  | { kind: "command"; id: string; title: string; accelerator: string | null };
 // PRD 4.2 — the widened command-bar state main broadcasts. Additive over the
 // PRD 4.1 shape (`open`/`mode`/`initialText` are still present, so the existing
 // 4.1 tests that read only those still typecheck), gaining `query`, the ranked
@@ -520,14 +538,59 @@ test.describe("zeo desktop app", () => {
       return map;
     });
 
+    // PRD 4.3 §5 — the Tabs submenu is generated from COMMANDS, so the registry
+    // is the source of truth. Every tabs command with a non-null accelerator must
+    // be bound on SOME Tabs submenu item. The pin/unpin pair shares
+    // CmdOrCtrl+Shift+P and collapses to a SINGLE item (menuEntries), so we assert
+    // each expected accelerator is PRESENT among the submenu items rather than
+    // keyed by title — only one of "Pin Tab"/"Unpin Tab" is shown at a time.
+    const present = new Set(Object.values(accelerators));
+    for (const command of COMMANDS.filter(
+      (c) => c.menu === "tabs" && c.accelerator !== null,
+    )) {
+      expect(present.has(command.accelerator)).toBe(true);
+    }
+
+    // Spot-check the two unshared bindings by title (New Tab still opens the bar
+    // in new-tab mode; Close Tab closes the active tab directly), and confirm
+    // Open Location is NO LONGER a Tabs item — PRD 4.3 moved it to the View menu.
     expect(accelerators["New Tab"]).toBe("CmdOrCtrl+T");
-    // PRD 4.1 — Cmd+T now opens the command bar in new-tab mode (it no longer
-    // creates a tab directly), and Cmd+L opens it in navigate mode. Both remain
-    // bound on their menu items; a removed/altered binding fails here.
-    expect(accelerators["Open Location"]).toBe("CmdOrCtrl+L");
     expect(accelerators["Close Tab"]).toBe("CmdOrCtrl+W");
+    expect(accelerators["Open Location"]).toBeUndefined();
+
     for (let n = 1; n <= 9; n += 1) {
       expect(accelerators[`Activate Tab ${n}`]).toBe(`CmdOrCtrl+Alt+${n}`);
+    }
+  });
+
+  // PRD 4.3 §5 — the NEW "View" application-menu submenu binds its registry
+  // accelerators. Generated from COMMANDS filtered by menu==="view" (Reload Page
+  // CmdOrCtrl+R, Go Back CmdOrCtrl+[, Go Forward CmdOrCtrl+], Open Location
+  // CmdOrCtrl+L), so — like the Tabs test — we read the `.accelerator` strings
+  // from the main process and derive the expectations from the registry. None of
+  // the View commands shares an accelerator, so each is keyed by its title.
+  test("the View menu binds the expected accelerators", async () => {
+    const accelerators = await app.evaluate(({ Menu }) => {
+      const menu = Menu.getApplicationMenu();
+      if (menu === null) {
+        throw new Error("no application menu installed");
+      }
+      const viewMenu = menu.items.find((item) => item.label === "View");
+      if (viewMenu?.submenu == null) {
+        throw new Error('no "View" submenu');
+      }
+      const map: Record<string, string | null | undefined> = {};
+      for (const item of viewMenu.submenu.items) {
+        if (!item.label) {
+          continue;
+        }
+        map[item.label] = item.accelerator;
+      }
+      return map;
+    });
+
+    for (const command of COMMANDS.filter((c) => c.menu === "view")) {
+      expect(accelerators[command.title]).toBe(command.accelerator ?? undefined);
     }
   });
 
@@ -555,7 +618,12 @@ test.describe("zeo desktop app", () => {
       return map;
     });
 
-    expect(accelerators["New Space"]).toBe("CmdOrCtrl+Shift+N");
+    // PRD 4.3 §5 — derive New Space's accelerator from the registry rather than a
+    // literal. space.rename / space.delete have null accelerators (nothing to
+    // assert); only New Space carries one in the Spaces menu.
+    const newSpace = COMMANDS.find((c) => c.id === "space.new");
+    expect(newSpace?.accelerator).toBe("CmdOrCtrl+Shift+N");
+    expect(accelerators["New Space"]).toBe(newSpace?.accelerator);
     for (let n = 1; n <= 9; n += 1) {
       expect(accelerators[`Activate Space ${n}`]).toBe(`CmdOrCtrl+${n}`);
     }
@@ -2465,5 +2533,474 @@ test.describe("zeo desktop app", () => {
       const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
       await zeo.commandBar.close();
     });
+  });
+
+  // --- PRD 4.3 — command registry and action suggestions (§5). -------------------
+  // These drive the command bar / bridge over the sidebar bridge (`window.zeo`)
+  // and assert on the BROADCAST STATE — `commandBar.state()` (open/query/
+  // suggestions/revision), `tabs.list()`, `spaces.list()`, and the application
+  // menu read from the MAIN process — which main mutates synchronously before
+  // resolving, so the enablement/toggle assertions are network-INDEPENDENT.
+  // `expect.poll` settles the async state push after each accept/navigate, and
+  // the two history/reload tests that genuinely need a real page load say so and
+  // poll generously (CI has network). Menu accelerator KEYCHORDS cannot be fired
+  // headlessly (see the SEAM note above), so command dispatch is driven through
+  // the bar/bridge and the menu is only READ, never key-pressed.
+
+  // §5 bullet 1 — a `command` row pins the active tab; re-querying then offers the
+  // tab.unpin row (tab.pin is disabled/absent once the tab is pinned).
+  test("a command row pins the active tab, then the bar offers unpin", async () => {
+    const activeId = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      return (await zeo.tabs.list()).activeTabId;
+    });
+    expect(activeId).not.toBeNull();
+
+    // Open the bar and query "pin"; the tab.pin command row must surface.
+    await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.commandBar.open("new-tab");
+      await zeo.commandBar.setQuery("pin");
+    });
+    await expect
+      .poll(async () =>
+        sidebar.evaluate(async () => {
+          const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+          const st = await zeo.commandBar.state();
+          return st.suggestions.some((s) => s.kind === "command" && s.id === "tab.pin");
+        }),
+      )
+      .toBe(true);
+
+    // Accept the tab.pin row by its index: main runs the handler and closes the bar.
+    const pinIndex = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      const st = await zeo.commandBar.state();
+      return st.suggestions.findIndex((s) => s.kind === "command" && s.id === "tab.pin");
+    });
+    expect(pinIndex).toBeGreaterThanOrEqual(0);
+    await sidebar.evaluate(async (i) => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.commandBar.accept(i);
+    }, pinIndex);
+
+    // The active tab is now pinned.
+    await expect
+      .poll(async () =>
+        sidebar.evaluate(async (id) => {
+          const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+          const s = await zeo.tabs.list();
+          return s.tabs.find((t) => t.id === id)?.pinned ?? null;
+        }, activeId),
+      )
+      .toBe(true);
+
+    // Re-open and query "pin" again: tab.pin is gone (disabled — the tab is
+    // pinned) and the row is now tab.unpin.
+    await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.commandBar.open("new-tab");
+      await zeo.commandBar.setQuery("pin");
+    });
+    await expect
+      .poll(async () =>
+        sidebar.evaluate(async () => {
+          const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+          const st = await zeo.commandBar.state();
+          return {
+            hasUnpin: st.suggestions.some((s) => s.kind === "command" && s.id === "tab.unpin"),
+            hasPin: st.suggestions.some((s) => s.kind === "command" && s.id === "tab.pin"),
+          };
+        }),
+      )
+      .toEqual({ hasUnpin: true, hasPin: false });
+
+    // Hygiene: close the bar.
+    await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.commandBar.close();
+    });
+  });
+
+  // §5 bullet 2 — a `command` row creates a new space and activates it.
+  test("a command row creates a new space and makes it active", async () => {
+    const before = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      return zeo.spaces.list();
+    });
+    const beforeCount = before.spaces.length;
+    const beforeIds = new Set(before.spaces.map((s) => s.id));
+
+    await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.commandBar.open("new-tab");
+      await zeo.commandBar.setQuery("new space");
+    });
+    await expect
+      .poll(async () =>
+        sidebar.evaluate(async () => {
+          const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+          const st = await zeo.commandBar.state();
+          return st.suggestions.some((s) => s.kind === "command" && s.id === "space.new");
+        }),
+      )
+      .toBe(true);
+
+    const idx = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      const st = await zeo.commandBar.state();
+      return st.suggestions.findIndex((s) => s.kind === "command" && s.id === "space.new");
+    });
+    await sidebar.evaluate(async (i) => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.commandBar.accept(i);
+    }, idx);
+
+    // The space count grew by one and the newly created space is the active one.
+    await expect
+      .poll(async () =>
+        sidebar.evaluate(async () => {
+          const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+          return (await zeo.spaces.list()).spaces.length;
+        }),
+      )
+      .toBe(beforeCount + 1);
+
+    const after = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      return zeo.spaces.list();
+    });
+    expect(after.spaces.length).toBe(beforeCount + 1);
+    // The active space is the new one (not any that existed before).
+    expect(beforeIds.has(after.activeSpaceId)).toBe(false);
+    expect(after.spaces.some((s) => s.id === after.activeSpaceId)).toBe(true);
+  });
+
+  // §5 bullet 3 — with a single space, space.delete is disabled and therefore
+  // excluded from suggestions: no `command` row for it exists.
+  test("no delete-space command row is offered with a single space", async () => {
+    // Fresh launch has exactly one space.
+    const spaceCount = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      return (await zeo.spaces.list()).spaces.length;
+    });
+    expect(spaceCount).toBe(1);
+
+    // Open, query "delete space", read the authoritative main state directly
+    // (setQuery resolves after main recomputes suggestions synchronously).
+    const result = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.commandBar.open("new-tab");
+      await zeo.commandBar.setQuery("delete space");
+      const st = await zeo.commandBar.state();
+      return {
+        query: st.query,
+        hasDelete: st.suggestions.some(
+          (s) => s.kind === "command" && s.id === "space.delete",
+        ),
+      };
+    });
+    expect(result.query).toBe("delete space");
+    expect(result.hasDelete).toBe(false);
+
+    // Hygiene: close the bar.
+    await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.commandBar.close();
+    });
+  });
+
+  // §5 bullet 4 — the commands bridge: `run("tab.close")` closes the active tab;
+  // `run("tab.back")` on a fresh tab with no history REJECTS (disabled in context).
+  test("commands.run closes the active tab and rejects a command disabled in context", async () => {
+    const setup = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      // A second tab so the active one can be closed while a fresh, history-less
+      // tab remains for the tab.back rejection.
+      const created = await zeo.tabs.create("example.net");
+      const s = await zeo.tabs.list();
+      return { createdId: created.id, count: s.tabs.length, activeId: s.activeTabId };
+    });
+    // create activates the new tab, so it is the one tab.close will close.
+    expect(setup.count).toBe(2);
+    expect(setup.activeId).toBe(setup.createdId);
+
+    await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.commands.run("tab.close");
+    });
+    await expect
+      .poll(async () =>
+        sidebar.evaluate(async () => {
+          const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+          return (await zeo.tabs.list()).tabs.length;
+        }),
+      )
+      .toBe(1);
+    const afterClose = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      return zeo.tabs.list();
+    });
+    expect(afterClose.tabs.some((t) => t.id === setup.createdId)).toBe(false);
+
+    // The remaining (seeded) tab has no back-history, so tab.back is disabled and
+    // the invoke must REJECT.
+    const rejected = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      try {
+        await zeo.commands.run("tab.back");
+        return false;
+      } catch {
+        return true;
+      }
+    });
+    expect(rejected).toBe(true);
+  });
+
+  // §5 bullet 5 — history refresh without retyping. With the bar open and "back"
+  // typed, a fresh tab has no tab.back row and the View menu's Go Back item is
+  // disabled. Navigating the tab IN PLACE creates back-history; refreshCommandState
+  // (firing on did-navigate / did-finish-load while the bar is open) makes the
+  // tab.back row appear AND the menu item enable WITHOUT retyping. Network-
+  // dependent (a real navigation must load), so it polls generously.
+  test("the Go Back row and menu item enable without retyping after an in-place navigation", async () => {
+    const activeId = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      const s = await zeo.tabs.list();
+      return s.activeTabId ?? s.tabs[0].id;
+    });
+
+    // Open the bar and type "back". On a fresh tab there is no back-history.
+    await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.commandBar.open("new-tab");
+      await zeo.commandBar.setQuery("back");
+    });
+    const initialHasBack = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      const st = await zeo.commandBar.state();
+      return st.suggestions.some((s) => s.kind === "command" && s.id === "tab.back");
+    });
+    expect(initialHasBack).toBe(false);
+
+    // Reads the View menu's "Go Back" item enabled flag from the main process.
+    const goBackEnabled = (): Promise<boolean | null> =>
+      app.evaluate(({ Menu }) => {
+        const menu = Menu.getApplicationMenu();
+        if (menu === null) {
+          return null;
+        }
+        const viewMenu = menu.items.find((i) => i.label === "View");
+        if (viewMenu?.submenu == null) {
+          return null;
+        }
+        return viewMenu.submenu.items.find((i) => i.label === "Go Back")?.enabled ?? null;
+      });
+    expect(await goBackEnabled()).toBe(false);
+
+    // Navigate the active tab IN PLACE (same webContents) so a back entry exists.
+    await sidebar.evaluate(async (id) => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.tabs.navigate(id, "example.org");
+    }, activeId);
+
+    // WITHOUT retyping, the tab.back row appears (refreshCommandState re-ran the
+    // bar's suggestions on the navigation event).
+    await expect
+      .poll(
+        async () =>
+          sidebar.evaluate(async () => {
+            const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+            const st = await zeo.commandBar.state();
+            return st.suggestions.some((s) => s.kind === "command" && s.id === "tab.back");
+          }),
+        { message: "expected the tab.back row to appear without retyping", timeout: 30_000 },
+      )
+      .toBe(true);
+
+    // And the View menu's Go Back item is now enabled.
+    await expect
+      .poll(goBackEnabled, {
+        message: "expected the View menu Go Back item to become enabled",
+        timeout: 30_000,
+      })
+      .toBe(true);
+
+    // Hygiene: close the bar.
+    await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.commandBar.close();
+    });
+  });
+
+  // §5 bullet 6 — stale dispatch. With two spaces, open the bar and query
+  // "delete space", capturing the space.delete row index and the list revision.
+  // Deleting the OTHER space over the bridge bumps the revision (and drops the
+  // context to one space), so accepting the captured row with the STALE revision
+  // is rejected by the revision guard (and executeCommand's re-check); the
+  // remaining space survives.
+  test("a stale space.delete accept is rejected and the remaining space survives", async () => {
+    const setup = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      const before = await zeo.spaces.list();
+      const activeId = before.activeSpaceId;
+      // create does not steal focus, so `activeId` stays active and "Doomed" is
+      // the non-active space we delete out from under the captured row.
+      const other = await zeo.spaces.create("Doomed");
+      return { activeId, otherId: other.id };
+    });
+
+    const captured = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.commandBar.open("new-tab");
+      await zeo.commandBar.setQuery("delete space");
+      const st = await zeo.commandBar.state();
+      return {
+        index: st.suggestions.findIndex(
+          (s) => s.kind === "command" && s.id === "space.delete",
+        ),
+        revision: st.revision,
+      };
+    });
+    // With two spaces, space.delete is enabled, so its row exists.
+    expect(captured.index).toBeGreaterThanOrEqual(0);
+
+    // Delete the OTHER (non-active) space over the bridge: mutates the store and
+    // (bar open) bumps the revision, so `captured.revision` is now stale.
+    await sidebar.evaluate(async (id) => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.spaces.delete(id);
+    }, setup.otherId);
+
+    // Accept the captured row with the STALE revision: main rejects (throws), so
+    // the invoke rejects and no delete runs.
+    const rejected = await sidebar.evaluate(
+      async ({ index, revision }) => {
+        const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+        try {
+          await zeo.commandBar.accept(index, revision);
+          return false;
+        } catch {
+          return true;
+        }
+      },
+      captured,
+    );
+    expect(rejected).toBe(true);
+
+    // The remaining (active) space survives: exactly one space left, and it is the
+    // one that was active.
+    const after = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      return zeo.spaces.list();
+    });
+    expect(after.spaces.length).toBe(1);
+    expect(after.spaces[0].id).toBe(setup.activeId);
+
+    // Hygiene: close the bar.
+    await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.commandBar.close();
+    });
+  });
+
+  // §5 bullet 7 — the pin/unpin pair collapses to exactly ONE Tabs submenu item
+  // carrying CmdOrCtrl+Shift+P; its label follows the enabled member: "Pin Tab"
+  // on a fresh (unpinned) active tab, "Unpin Tab" after pinning. Reads the menu
+  // from the main process (label + accelerator), never a keychord.
+  test("the Tabs menu has exactly one Cmd+Shift+P item whose label follows the pin state", async () => {
+    const activeId = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      const s = await zeo.tabs.list();
+      return s.activeTabId ?? s.tabs[0].id;
+    });
+
+    // Reads { count, label } for the CmdOrCtrl+Shift+P Tabs items from main.
+    const pinItem = (): Promise<{ count: number; label: string | null }> =>
+      app.evaluate(({ Menu }) => {
+        const menu = Menu.getApplicationMenu();
+        if (menu === null) {
+          throw new Error("no application menu installed");
+        }
+        const tabsMenu = menu.items.find((i) => i.label === "Tabs");
+        if (tabsMenu?.submenu == null) {
+          throw new Error('no "Tabs" submenu');
+        }
+        const matches = tabsMenu.submenu.items.filter(
+          (i) => i.accelerator === "CmdOrCtrl+Shift+P",
+        );
+        return { count: matches.length, label: matches[0]?.label ?? null };
+      });
+
+    // Fresh unpinned active tab: one item, "Pin Tab".
+    expect(await pinItem()).toEqual({ count: 1, label: "Pin Tab" });
+
+    // Pin the active tab; the menu rebuilds (refreshCommandState) and the single
+    // Cmd+Shift+P item relabels to "Unpin Tab".
+    await sidebar.evaluate(async (id) => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.tabs.pin(id);
+    }, activeId);
+    await expect.poll(pinItem).toEqual({ count: 1, label: "Unpin Tab" });
+  });
+
+  // §5 bullet 8 — reload via the bar. Set a page-side marker on the active view,
+  // accept the tab.reload command row, then poll (re-acquiring the tab view, since
+  // reload tears down and recreates the page context) until the marker is gone —
+  // proving the active view actually reloaded. Network-dependent, so it polls
+  // generously.
+  test("a command row reloads the active view", async () => {
+    const tabView = await tabViewWindow(app, sidebar);
+    // Set a distinctive page-side marker; confirm it took.
+    await tabView.evaluate(() => {
+      (window as unknown as { __zeoReloadMarker?: boolean }).__zeoReloadMarker = true;
+    });
+    const markerSet = await tabView.evaluate(
+      () => (window as unknown as { __zeoReloadMarker?: boolean }).__zeoReloadMarker === true,
+    );
+    expect(markerSet).toBe(true);
+
+    // Open the bar, query "reload", accept the tab.reload command row.
+    await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.commandBar.open("new-tab");
+      await zeo.commandBar.setQuery("reload");
+    });
+    await expect
+      .poll(async () =>
+        sidebar.evaluate(async () => {
+          const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+          const st = await zeo.commandBar.state();
+          return st.suggestions.some((s) => s.kind === "command" && s.id === "tab.reload");
+        }),
+      )
+      .toBe(true);
+    const reloadIndex = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      const st = await zeo.commandBar.state();
+      return st.suggestions.findIndex((s) => s.kind === "command" && s.id === "tab.reload");
+    });
+    await sidebar.evaluate(async (i) => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.commandBar.accept(i);
+    }, reloadIndex);
+
+    // Reload destroys/recreates the page context, so re-acquire the tab view each
+    // pass and poll until the marker is gone.
+    await expect
+      .poll(
+        async () => {
+          const view = await tabViewWindow(app, sidebar);
+          return view
+            .evaluate(
+              () =>
+                (window as unknown as { __zeoReloadMarker?: boolean }).__zeoReloadMarker ===
+                undefined,
+            )
+            .catch(() => false);
+        },
+        { message: "expected the active view to reload and clear the marker", timeout: 30_000 },
+      )
+      .toBe(true);
   });
 });

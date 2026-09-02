@@ -9,6 +9,26 @@ milestone, a minor bump only for very large breakthroughs.
 
 ## [Unreleased]
 
+## [0.0.11] - 2026-09-02
+
+### Added
+
+- A command registry: actions like New Tab, Pin/Unpin Tab, Archive Tab, Copy
+  URL, Reload, Go Back/Forward, New/Rename/Delete Space, and Open Location are
+  now defined in one place with their titles, keywords, and shortcuts.
+- The command bar suggests matching commands as you type, showing each one's
+  keyboard shortcut, and Enter runs it; disabled commands (e.g. Go Back with no
+  history) are hidden.
+- The Tabs, Spaces, and a new View application menu are generated from the
+  command registry, so every command appears in its menu with the same
+  shortcut. Pin Tab / Unpin Tab share one menu item that follows the active
+  tab.
+
+### Changed
+
+- Menu items and command suggestions enable and disable live as the active tab,
+  its navigation history, and the current spaces change.
+
 ## [0.0.10] - 2026-09-02
 
 ### Added
