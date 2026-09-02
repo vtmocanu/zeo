@@ -539,21 +539,27 @@ test.describe("zeo desktop app", () => {
     });
 
     // PRD 4.3 §5 — the Tabs submenu is generated from COMMANDS, so the registry
-    // is the source of truth. Every tabs command with a non-null accelerator must
-    // be bound on SOME Tabs submenu item. The pin/unpin pair shares
-    // CmdOrCtrl+Shift+P and collapses to a SINGLE item (menuEntries), so we assert
-    // each expected accelerator is PRESENT among the submenu items rather than
-    // keyed by title — only one of "Pin Tab"/"Unpin Tab" is shown at a time.
-    const present = new Set(Object.values(accelerators));
+    // is the source of truth. Every NON-SHARED tabs command is keyed by its title
+    // to its exact accelerator, so a regression that swapped two bindings (e.g.
+    // Archive Tab <-> Copy URL) fails here rather than passing a presence-only
+    // check. The pin/unpin pair shares CmdOrCtrl+Shift+P and collapses to a
+    // SINGLE item (menuEntries) whose label follows the enabled member, so only
+    // its PRESENCE is asserted here (the single-item + label invariant is covered
+    // by the dedicated Cmd+Shift+P test below).
     for (const command of COMMANDS.filter(
-      (c) => c.menu === "tabs" && c.accelerator !== null,
+      (c) =>
+        c.menu === "tabs" &&
+        c.accelerator !== null &&
+        c.id !== "tab.pin" &&
+        c.id !== "tab.unpin",
     )) {
-      expect(present.has(command.accelerator)).toBe(true);
+      expect(accelerators[command.title]).toBe(command.accelerator);
     }
+    expect(Object.values(accelerators)).toContain("CmdOrCtrl+Shift+P");
 
-    // Spot-check the two unshared bindings by title (New Tab still opens the bar
-    // in new-tab mode; Close Tab closes the active tab directly), and confirm
-    // Open Location is NO LONGER a Tabs item — PRD 4.3 moved it to the View menu.
+    // Explicit spot-checks: New Tab opens the bar in new-tab mode; Close Tab
+    // closes the active tab directly; and Open Location is NO LONGER a Tabs item —
+    // PRD 4.3 moved it to the View menu.
     expect(accelerators["New Tab"]).toBe("CmdOrCtrl+T");
     expect(accelerators["Close Tab"]).toBe("CmdOrCtrl+W");
     expect(accelerators["Open Location"]).toBeUndefined();
@@ -2764,11 +2770,13 @@ test.describe("zeo desktop app", () => {
   // tab.back row appear AND the menu item enable WITHOUT retyping. Network-
   // dependent (a real navigation must load), so it polls generously.
   test("the Go Back row and menu item enable without retyping after an in-place navigation", async () => {
-    const activeId = await sidebar.evaluate(async () => {
-      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
-      const s = await zeo.tabs.list();
-      return s.activeTabId ?? s.tabs[0].id;
-    });
+    // Fully load the seeded page (example.com) BEFORE opening the bar. The overlay
+    // closes on ANY focus loss (its blur handler), and a page finishing load can
+    // steal focus; doing the load now means the ONLY thing that happens with the
+    // bar open is the focus-neutral hash change below, so the bar stays open.
+    const tabView = await tabViewWindow(app, sidebar);
+    await expect.poll(() => tabView.url(), { timeout: 30_000 }).toContain("example.com");
+    await tabView.waitForLoadState("load").catch(() => {});
 
     // Open the bar and type "back". On a fresh tab there is no back-history.
     await sidebar.evaluate(async () => {
@@ -2798,11 +2806,16 @@ test.describe("zeo desktop app", () => {
       });
     expect(await goBackEnabled()).toBe(false);
 
-    // Navigate the active tab IN PLACE (same webContents) so a back entry exists.
-    await sidebar.evaluate(async (id) => {
-      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
-      await zeo.tabs.navigate(id, "example.org");
-    }, activeId);
+    // Navigate the active tab IN PLACE via a same-document hash change, run in
+    // the tab view's own context. This is deliberately NOT a full `tabs.navigate`
+    // reload: a fresh page load focuses the tab's WebContentsView, which would blur
+    // and close the overlay — so the row could never appear while the bar is shut.
+    // A hash change instead adds a real back-history entry (canGoBack → true) and
+    // fires `did-navigate-in-page` WITHOUT reloading or refocusing the view, so the
+    // overlay stays open and refreshCommandState re-ranks its suggestions live.
+    await tabView.evaluate(() => {
+      window.location.hash = "#zeo-back";
+    });
 
     // WITHOUT retyping, the tab.back row appears (refreshCommandState re-ran the
     // bar's suggestions on the navigation event).
