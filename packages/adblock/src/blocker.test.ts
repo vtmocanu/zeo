@@ -328,4 +328,37 @@ describe("createBlocker", () => {
       url: BLOCKED_URL,
     });
   });
+
+  test("detach clears the session hook and drops the session", () => {
+    const blocker = createBlockerFromFilters(AD_FILTER);
+    const { session, state } = makeFakeSession();
+    blocker.attach(session);
+    expect(state.captured).toBeDefined();
+    expect(blocker.attachedSessions()).toEqual([session]);
+
+    blocker.detach(session);
+
+    // makeFakeSession's onBeforeRequest(null) path clears the captured listener.
+    expect(state.captured).toBeUndefined();
+    expect(blocker.attachedSessions()).toEqual([]);
+  });
+
+  test("onBlocked unsubscribe stops delivery for only that listener", async () => {
+    const blocker = createBlockerFromFilters(AD_FILTER);
+    const { session, state } = makeFakeSession();
+    blocker.attach(session);
+    const kept = vi.fn();
+    const removed = vi.fn();
+    blocker.onBlocked(kept);
+    const unsubscribe = blocker.onBlocked(removed);
+
+    unsubscribe();
+    requestThrough(state.captured!, BLOCKED_URL);
+    // The library dispatches 'request-blocked' on a microtask; let it drain.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(removed).not.toHaveBeenCalled();
+    expect(kept).toHaveBeenCalledTimes(1);
+    expect(kept).toHaveBeenCalledWith({ webContentsId: 42, url: BLOCKED_URL });
+  });
 });

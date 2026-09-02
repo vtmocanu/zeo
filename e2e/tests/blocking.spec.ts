@@ -156,7 +156,10 @@ async function startFixtureServer(): Promise<FixtureServer> {
       return;
     }
     if (pathname === "/allowed/ok.png" || pathname === "/blocked/pixel.png") {
-      res.writeHead(200, { "content-type": "image/png" });
+      // no-store so a reload of the same URL always re-fetches (the toggle-off
+      // and re-enable scenarios below rely on repeated loads reaching here
+      // rather than Chromium's HTTP cache).
+      res.writeHead(200, { "content-type": "image/png", "cache-control": "no-store" });
       res.end(png);
       return;
     }

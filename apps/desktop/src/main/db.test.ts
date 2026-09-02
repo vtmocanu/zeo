@@ -20,6 +20,7 @@ import {
   loadStore,
   readBlockingEnabled,
   writeBlockingEnabled,
+  closeDb,
 } from "./db.js";
 
 /** The pre-migration (schema v1) DDL: the four tables WITHOUT `meta.enabled`. */
@@ -96,6 +97,9 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // Release the module-level handle loadStore may have opened before deleting
+  // the temp dir, so no database file stays open across tests.
+  closeDb();
   rmSync(tempDir, { recursive: true, force: true });
 });
 

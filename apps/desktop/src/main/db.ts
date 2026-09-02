@@ -437,3 +437,20 @@ export function flush(store: SpaceStore): void {
     console.error("flush save failed:", err);
   }
 }
+
+/**
+ * Closes the module-level database handle and cancels any pending debounced
+ * save. Safe no-op when no database is open. Callers that mutate the on-disk
+ * file afterwards (e.g. tests deleting the temp dir) must call this first so the
+ * handle is released.
+ */
+export function closeDb(): void {
+  if (saveTimer !== null) {
+    clearTimeout(saveTimer);
+    saveTimer = null;
+  }
+  if (db !== null) {
+    db.close();
+    db = null;
+  }
+}

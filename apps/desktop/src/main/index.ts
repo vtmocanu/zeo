@@ -1783,6 +1783,12 @@ app.whenReady().then(async () => {
       // "on launch when the cache is older than a day").
       setInterval(
         () => {
+          // Skip the recurring refresh while blocking is disabled: a user who
+          // turned content blocking off must not trigger a remote filter-list
+          // download every 24h.
+          if (!blocking.enabled) {
+            return;
+          }
           blocker
             ?.refresh()
             .then((ok) => {
@@ -1806,6 +1812,14 @@ app.whenReady().then(async () => {
     }
   } catch (err) {
     console.error("[blocking] startup failed; continuing without content blocking:", err);
+    // Detach any sessions attached before the failure so no session hook is
+    // left pointing at a blocker we are about to drop the reference to (a
+    // partial attachBlockerToAllSessions above could leave some attached).
+    if (blocker) {
+      for (const s of blocker.attachedSessions()) {
+        blocker.detach(s);
+      }
+    }
     blocker = null;
     // Keep the blocking slice seeded to a sane value even when readBlockingEnabled
     // threw before it was set above, so fullSnapshot() never dereferences undefined.

@@ -332,6 +332,7 @@ function TabRow({
             "tab-item__shield" +
             (blockingEnabled ? "" : " tab-item__shield--disabled")
           }
+          role="img"
           data-testid="tab-shield"
           data-blocked-count={blockedCount}
           title={`${blockedCount} request${blockedCount === 1 ? "" : "s"} blocked`}
