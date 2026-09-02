@@ -255,19 +255,27 @@ function useTabDrag(pinned: Tab[], unpinned: Tab[]) {
   };
 }
 
-// A single tab row. Thin: renders `tab` + active state and dispatches to the
-// injected `window.zeo` bridge. No business logic, no Node/Electron imports.
+/**
+ * A single tab row. Thin: renders `tab` + active state and dispatches to the
+ * injected `window.zeo` bridge. No business logic, no Node/Electron imports.
+ * Shows a blocked-count shield when `blockedCount > 0`, dimmed when blocking
+ * is disabled.
+ */
 function TabRow({
   tab,
   isActive,
   pinned,
   dragging,
+  blockedCount,
+  blockingEnabled,
   onPointerDown,
 }: {
   tab: Tab;
   isActive: boolean;
   pinned: boolean;
   dragging: boolean;
+  blockedCount: number;
+  blockingEnabled: boolean;
   onPointerDown: (event: ReactPointerEvent<HTMLLIElement>) => void;
 }) {
   const hasFavicon =
@@ -318,6 +326,21 @@ function TabRow({
       >
         {tab.title}
       </button>
+      {blockedCount > 0 ? (
+        <span
+          className={
+            "tab-item__shield" +
+            (blockingEnabled ? "" : " tab-item__shield--disabled")
+          }
+          data-testid="tab-shield"
+          data-blocked-count={blockedCount}
+          title={`${blockedCount} request${blockedCount === 1 ? "" : "s"} blocked`}
+          aria-label={`${blockedCount} request${blockedCount === 1 ? "" : "s"} blocked`}
+        >
+          <span aria-hidden="true">🛡</span>
+          <span className="tab-item__shield-count">{blockedCount}</span>
+        </span>
+      ) : null}
       <button
         type="button"
         className="tab-item__close"
@@ -436,6 +459,12 @@ export function App() {
     tabs: [],
     activeTabId: null,
     archived: [],
+    blocking: {
+      enabled: true,
+      listVersion: "none",
+      blockedByTab: {},
+      blockedUnattributed: 0,
+    },
   });
   const [showArchived, setShowArchived] = useState(false);
   const [now, setNow] = useState(() => Date.now());
@@ -607,6 +636,8 @@ export function App() {
             isActive={tab.id === state.activeTabId}
             pinned={section === "pinned"}
             dragging={tab.id === draggingId}
+            blockedCount={state.blocking.blockedByTab[tab.id] ?? 0}
+            blockingEnabled={state.blocking.enabled}
             onPointerDown={(event) =>
               onRowPointerDown(event, tab, section === "pinned")
             }
