@@ -393,8 +393,9 @@ function executeCommand(id: CommandId): void {
  * application menu (a full {@link Menu.setApplicationMenu} rebuild, since the
  * pin/unpin label and enabled flags change with context) and, when the bar is
  * open, its suggestions/layout/state (so enablement like Go Back updates without
- * retyping and the revision bumps to reject a stale click). Never calls
- * {@link broadcast} — {@link broadcast} calls it — so there is no recursion.
+ * retyping; the revision bumps to reject a stale click only when the re-ranked
+ * list actually changes). Never calls {@link broadcast} — {@link broadcast}
+ * calls it — so there is no recursion.
  */
 function refreshCommandState(): void {
   buildMenu();
