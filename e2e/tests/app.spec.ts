@@ -546,13 +546,17 @@ test.describe("zeo desktop app", () => {
     // SINGLE item (menuEntries) whose label follows the enabled member, so only
     // its PRESENCE is asserted here (the single-item + label invariant is covered
     // by the dedicated Cmd+Shift+P test below).
-    for (const command of COMMANDS.filter(
+    const tabsCommands = COMMANDS.filter(
       (c) =>
         c.menu === "tabs" &&
         c.accelerator !== null &&
         c.id !== "tab.pin" &&
         c.id !== "tab.unpin",
-    )) {
+    );
+    // Anchor the loop so an empty filter (e.g. a registry edit dropping every
+    // keyed tabs command) fails here rather than asserting nothing.
+    expect(tabsCommands.length).toBeGreaterThan(0);
+    for (const command of tabsCommands) {
       expect(accelerators[command.title]).toBe(command.accelerator);
     }
     expect(Object.values(accelerators)).toContain("CmdOrCtrl+Shift+P");
@@ -595,7 +599,11 @@ test.describe("zeo desktop app", () => {
       return map;
     });
 
-    for (const command of COMMANDS.filter((c) => c.menu === "view")) {
+    const viewCommands = COMMANDS.filter((c) => c.menu === "view");
+    // Anchor the loop so an empty filter cannot pass vacuously — the View loop
+    // has no explicit spot-checks after it, unlike the Tabs test.
+    expect(viewCommands.length).toBeGreaterThan(0);
+    for (const command of viewCommands) {
       expect(accelerators[command.title]).toBe(command.accelerator ?? undefined);
     }
   });

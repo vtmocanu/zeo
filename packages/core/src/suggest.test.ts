@@ -325,14 +325,16 @@ describe("suggest — command rows", () => {
     const rows = suggest(
       "pin",
       catalog({
-        commands: [command({ id: "tab.pin", title: "Pin Tab", keywords: ["pin", "tab", "favorite"], accelerator: "CmdOrCtrl+Shift+P" })],
+        // Title deliberately omits "pin" so the query can only match via the
+        // keywords — this test fails if keyword matching regresses.
+        commands: [command({ id: "tab.pin", title: "Favorite Tab", keywords: ["pin", "tab", "favorite"], accelerator: "CmdOrCtrl+Shift+P" })],
       }),
       options(),
     );
     expect(rows[1]).toEqual({
       kind: "command",
       id: "tab.pin",
-      title: "Pin Tab",
+      title: "Favorite Tab",
       accelerator: "CmdOrCtrl+Shift+P",
     });
   });

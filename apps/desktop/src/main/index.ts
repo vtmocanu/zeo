@@ -451,14 +451,19 @@ function buildCatalog(): SuggestCatalog {
  * row (or `-1` for an empty list). Mutates state only — callers push and lay out.
  */
 function recomputeSuggestions(): void {
+  const previous = commandBar.suggestions;
   commandBar.suggestions = suggest(commandBar.query, buildCatalog(), {
     mode: commandBar.mode,
     activeTabId: store.activeTabId,
   });
   commandBar.selectedIndex = commandBar.suggestions.length > 0 ? 0 : -1;
-  // A fresh list gets a fresh revision so a click bound to a prior list is
-  // recognized as stale by acceptCommandBar.
-  commandBar.revision = ++commandBarRevision;
+  // A CHANGED list gets a fresh revision so a click bound to a prior list is
+  // recognized as stale by acceptCommandBar. An identical list keeps its
+  // revision, so an unrelated broadcast (title/favicon/navigation) that re-ranks
+  // to the same suggestions never invalidates a pending row click.
+  if (JSON.stringify(previous) !== JSON.stringify(commandBar.suggestions)) {
+    commandBar.revision = ++commandBarRevision;
+  }
 }
 
 /**
