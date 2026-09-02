@@ -3,9 +3,66 @@ import {
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
 } from "react";
-import type { CommandBarMode, CommandBarState } from "@zeo/core";
+import type { CommandBarMode, CommandBarState, Suggestion } from "@zeo/core";
 import "./App.css";
+
+/**
+ * A per-kind glyph placeholder for a suggestion row. The {@link Suggestion} type
+ * carries no favicon url, so every kind (tabs included) uses a text/emoji glyph
+ * rather than a fetched favicon.
+ */
+function iconFor(suggestion: Suggestion): string {
+  switch (suggestion.kind) {
+    case "tab":
+      return "🌐";
+    case "archived-tab":
+      return "🗄";
+    case "space":
+      return "▦";
+    case "navigate":
+      return "→";
+    case "search":
+      return "🔍";
+  }
+}
+
+/** The primary (main) text for a suggestion row, by kind. */
+function primaryText(suggestion: Suggestion): string {
+  switch (suggestion.kind) {
+    case "tab":
+    case "archived-tab":
+      return suggestion.title;
+    case "space":
+      return suggestion.name;
+    case "navigate":
+    case "search":
+      return suggestion.label;
+  }
+}
+
+/**
+ * The muted secondary text for a suggestion row, or `""` when the kind has none.
+ * For `tab` this is the host of its url (raw url when it does not parse).
+ */
+function secondaryText(suggestion: Suggestion): string {
+  switch (suggestion.kind) {
+    case "tab":
+      try {
+        return new URL(suggestion.url).host;
+      } catch {
+        return suggestion.url;
+      }
+    case "archived-tab":
+      return `Archived · ${suggestion.spaceName}`;
+    case "space":
+      return "Space";
+    case "navigate":
+    case "search":
+      return "";
+  }
+}
 
 /**
  * The command-bar overlay: a single-input panel mounted in its own
@@ -26,6 +83,10 @@ import "./App.css";
  */
 export function CommandBar() {
   const [value, setValue] = useState("");
+  // Main owns the suggestion list and the selected row; the renderer only
+  // stores what is pushed and never computes or reorders them.
+  const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
+  const [selectedIndex, setSelectedIndex] = useState(-1);
   const inputRef = useRef<HTMLInputElement>(null);
   // Tracks the previous `open` so we re-seed on each closed→open transition
   // rather than on every broadcast.
@@ -54,6 +115,10 @@ export function CommandBar() {
         state.open && prevOpenRef.current && state.mode !== prevModeRef.current;
       prevOpenRef.current = state.open;
       prevModeRef.current = state.mode;
+      // The suggestions and selection are pushed on every broadcast (main
+      // recomputes them on each keystroke), not only on open.
+      setSuggestions(state.suggestions);
+      setSelectedIndex(state.selectedIndex);
       if (opening || modeChangedWhileOpen) {
         setValue(state.initialText);
         setOpenSeed((prev) => ({
@@ -84,16 +149,42 @@ export function CommandBar() {
     }
   }, [openSeed]);
 
-  /** Handles Enter (submit the raw text) and Escape (close), both routed to
-   *  main and guarded so a missing bridge or rejected call is a no-op. */
+  /**
+   * Routes the input's keys to main and guards each call so a missing bridge or
+   * rejected promise is a no-op. Enter/Arrows go through the new suggestion API:
+   * `accept` (no index) acts on the selected row and falls back to submitting the
+   * query when the list is empty, so row-0 / empty-list behavior is preserved;
+   * the arrows ask main to move the selection.
+   */
   const onKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>): void => {
     if (event.key === "Enter") {
       event.preventDefault();
-      void window.zeo?.commandBar.submit(value).catch(() => {});
+      void window.zeo?.commandBar.accept().catch(() => {});
     } else if (event.key === "Escape") {
       event.preventDefault();
       void window.zeo?.commandBar.close().catch(() => {});
+    } else if (event.key === "ArrowDown") {
+      event.preventDefault();
+      void window.zeo?.commandBar.moveSelection(1).catch(() => {});
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      void window.zeo?.commandBar.moveSelection(-1).catch(() => {});
     }
+  };
+
+  /**
+   * Accepts the clicked row via `commandBar.accept(index)`. Uses `onMouseDown`
+   * with `preventDefault` rather than `onClick`: main closes the bar on the
+   * overlay's blur, and a plain click would first blur the input (firing that
+   * blur→close) before the accept ran. Preventing the default keeps focus on the
+   * input so the bar is still open when `accept` reaches main.
+   */
+  const onRowMouseDown = (
+    event: ReactMouseEvent<HTMLDivElement>,
+    index: number,
+  ): void => {
+    event.preventDefault();
+    void window.zeo?.commandBar.accept(index).catch(() => {});
   };
 
   return (
@@ -107,9 +198,48 @@ export function CommandBar() {
         placeholder="Search or enter address"
         spellCheck={false}
         autoComplete="off"
-        onChange={(event) => setValue(event.target.value)}
+        onChange={(event) => {
+          setValue(event.target.value);
+          // Ask main to recompute suggestions on every change.
+          void window.zeo?.commandBar.setQuery(event.target.value).catch(() => {});
+        }}
         onKeyDown={onKeyDown}
       />
+      {suggestions.length > 0 && (
+        <div className="command-bar__list" role="listbox">
+          {suggestions.map((suggestion, index) => {
+            const selected = index === selectedIndex;
+            const secondary = secondaryText(suggestion);
+            return (
+              <div
+                key={index}
+                className={
+                  selected
+                    ? "command-bar__row command-bar__row--selected"
+                    : "command-bar__row"
+                }
+                data-testid="command-bar-suggestion"
+                data-kind={suggestion.kind}
+                role="option"
+                aria-selected={selected}
+                onMouseDown={(event) => onRowMouseDown(event, index)}
+              >
+                <span className="command-bar__row-icon" aria-hidden="true">
+                  {iconFor(suggestion)}
+                </span>
+                <span className="command-bar__row-text">
+                  <span className="command-bar__row-primary">
+                    {primaryText(suggestion)}
+                  </span>
+                  {secondary !== "" && (
+                    <span className="command-bar__row-secondary">{secondary}</span>
+                  )}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
