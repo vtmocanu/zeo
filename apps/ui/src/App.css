@@ -537,3 +537,20 @@ body {
   color: #7a7a90;
   font-size: 11px;
 }
+
+/* The command accelerator, pushed to the row's right edge (the row is a flex
+   container). Muted like the secondary text; monospace keeps the macOS glyphs
+   crisp and evenly aligned across rows. */
+.command-bar__row-accel {
+  flex: 0 0 auto;
+  margin-left: auto;
+  padding-left: 8px;
+  white-space: nowrap;
+  color: #7a7a90;
+  font-size: 12px;
+  font-family:
+    ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+}

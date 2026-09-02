@@ -2,6 +2,7 @@ import type { Tab } from "./tab.js";
 import type { Space } from "./space.js";
 import type { Profile } from "./profile.js";
 import type { CommandBarMode, CommandBarState } from "./command-bar.js";
+import type { CommandDescriptor, CommandId } from "./commands.js";
 
 /**
  * A single space's tab payload, in the pre-space shape. This is what
@@ -193,6 +194,17 @@ export interface CommandBarApi {
 }
 
 /**
+ * Command-registry commands the renderer invokes over IPC, handled in main. `list()`
+ * returns every registry {@link CommandDescriptor} in registry order; `run(id)`
+ * dispatches command `id` through main's checked boundary. `run` rejects for an
+ * unknown id or a command disabled in the current {@link CommandContext}.
+ */
+export interface CommandsApi {
+  list(): Promise<CommandDescriptor[]>;
+  run(id: CommandId): Promise<void>;
+}
+
+/**
  * The full bridge surface exposed on `window.zeo` by the preload script.
  *
  * `onStateChange` registers a listener for main-pushed state updates and
@@ -204,6 +216,7 @@ export interface ZeoApi {
   spaces: SpacesApi;
   profiles: ProfilesApi;
   commandBar: CommandBarApi;
+  commands: CommandsApi;
   onStateChange(listener: (state: TabsState) => void): () => void;
   /** Registers a listener for main-pushed command-bar state updates and returns
    *  an unsubscribe function, mirroring onStateChange. */
@@ -249,5 +262,7 @@ export const IPC = {
   commandBarMove: "zeo:command-bar:move",
   commandBarAccept: "zeo:command-bar:accept",
   commandBarChange: "zeo:command-bar:change",
+  commandsList: "zeo:commands:list",
+  commandsRun: "zeo:commands:run",
   stateChange: "zeo:state-change",
 } as const;

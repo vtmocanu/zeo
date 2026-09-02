@@ -3,6 +3,8 @@ import { IPC } from "@zeo/core";
 import type {
   CommandBarMode,
   CommandBarState,
+  CommandDescriptor,
+  CommandId,
   Profile,
   Space,
   SpaceContextMenuResult,
@@ -63,6 +65,10 @@ const api = {
       ipcRenderer.invoke(IPC.commandBarMove, delta),
     accept: (index?: number, revision?: number): Promise<void> =>
       ipcRenderer.invoke(IPC.commandBarAccept, index, revision),
+  },
+  commands: {
+    list: (): Promise<CommandDescriptor[]> => ipcRenderer.invoke(IPC.commandsList),
+    run: (id: CommandId): Promise<void> => ipcRenderer.invoke(IPC.commandsRun, id),
   },
   onStateChange: (listener: (state: TabsState) => void): (() => void) => {
     const handler = (_event: Electron.IpcRendererEvent, state: TabsState): void => listener(state);

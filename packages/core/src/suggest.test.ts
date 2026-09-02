@@ -8,6 +8,20 @@ function catalog(partial: Partial<SuggestCatalog>): SuggestCatalog {
     spaces: partial.spaces ?? [],
     tabs: partial.tabs ?? [],
     archived: partial.archived ?? [],
+    commands: partial.commands ?? [],
+  };
+}
+
+/** A minimal command catalog entry with sensible defaults (enabled). */
+function command(
+  over: Partial<SuggestCatalog["commands"][number]> & { id: SuggestCatalog["commands"][number]["id"] },
+): SuggestCatalog["commands"][number] {
+  return {
+    title: "",
+    keywords: [],
+    accelerator: null,
+    enabled: true,
+    ...over,
   };
 }
 
@@ -303,6 +317,66 @@ describe("suggest — cap on a non-empty query", () => {
     expect(rows).toHaveLength(9); // row 0 + 8 matches.
     expect(rows[0].kind).toBe("search");
     expect(rows.slice(1)).toHaveLength(8);
+  });
+});
+
+describe("suggest — command rows", () => {
+  test("a command matches on a keyword and surfaces when enabled", () => {
+    const rows = suggest(
+      "pin",
+      catalog({
+        // Title deliberately omits "pin" so the query can only match via the
+        // keywords — this test fails if keyword matching regresses.
+        commands: [command({ id: "tab.pin", title: "Favorite Tab", keywords: ["pin", "tab", "favorite"], accelerator: "CmdOrCtrl+Shift+P" })],
+      }),
+      options(),
+    );
+    expect(rows[1]).toEqual({
+      kind: "command",
+      id: "tab.pin",
+      title: "Favorite Tab",
+      accelerator: "CmdOrCtrl+Shift+P",
+    });
+  });
+
+  test("a disabled command never appears in results", () => {
+    const rows = suggest(
+      "pin",
+      catalog({
+        commands: [command({ id: "tab.pin", title: "Pin Tab", keywords: ["pin"], enabled: false })],
+      }),
+      options(),
+    );
+    expect(rows.slice(1)).toEqual([]);
+  });
+
+  test("kind order at equal score: space, then command, then archived tab", () => {
+    const rows = suggest(
+      "focus",
+      catalog({
+        spaces: [{ id: "sp", name: "Focus", active: false }],
+        commands: [command({ id: "tab.new", title: "Focus", keywords: [] })],
+        archived: [archivedTab({ tabId: "arch", title: "Focus", url: "https://arch.test/" })],
+      }),
+      options(),
+    );
+    expect(rows.slice(1).map((r) => r.kind)).toEqual(["space", "command", "archived-tab"]);
+  });
+
+  test("a command row carries the catalog entry's accelerator, including null", () => {
+    const rows = suggest(
+      "rename",
+      catalog({
+        commands: [command({ id: "space.rename", title: "Rename Space", keywords: ["rename", "space"], accelerator: null })],
+      }),
+      options(),
+    );
+    expect(rows[1]).toEqual({
+      kind: "command",
+      id: "space.rename",
+      title: "Rename Space",
+      accelerator: null,
+    });
   });
 });
 
