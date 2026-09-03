@@ -21,6 +21,7 @@ const ALL_IDS: CommandId[] = [
   "space.rename",
   "space.delete",
   "bar.open-location",
+  "bar.open-commands",
   "blocking.toggle",
 ];
 
@@ -72,8 +73,8 @@ describe("COMMANDS registry", () => {
 });
 
 describe("isCommandEnabled — always-enabled commands", () => {
-  test("tab.new, space.new, space.rename, bar.open-location, blocking.toggle are enabled with no active tab", () => {
-    for (const id of ["tab.new", "space.new", "space.rename", "bar.open-location", "blocking.toggle"] as const) {
+  test("tab.new, space.new, space.rename, bar.open-location, bar.open-commands, blocking.toggle are enabled with no active tab", () => {
+    for (const id of ["tab.new", "space.new", "space.rename", "bar.open-location", "bar.open-commands", "blocking.toggle"] as const) {
       expect(isCommandEnabled(id, context({ activeTab: null }))).toBe(true);
     }
   });
@@ -152,15 +153,15 @@ describe("isCommandEnabled — no active tab yields exactly the expected set", (
     return ALL_IDS.filter((id) => isCommandEnabled(id, ctx)).sort();
   }
 
-  test("with one space: only the five always-enabled commands", () => {
+  test("with one space: only the six always-enabled commands", () => {
     expect(enabledIds(context({ activeTab: null, spaceCount: 1 }))).toEqual(
-      ["bar.open-location", "blocking.toggle", "space.new", "space.rename", "tab.new"].sort(),
+      ["bar.open-commands", "bar.open-location", "blocking.toggle", "space.new", "space.rename", "tab.new"].sort(),
     );
   });
 
-  test("with more than one space: the five plus space.delete", () => {
+  test("with more than one space: the six plus space.delete", () => {
     expect(enabledIds(context({ activeTab: null, spaceCount: 2 }))).toEqual(
-      ["bar.open-location", "blocking.toggle", "space.delete", "space.new", "space.rename", "tab.new"].sort(),
+      ["bar.open-commands", "bar.open-location", "blocking.toggle", "space.delete", "space.new", "space.rename", "tab.new"].sort(),
     );
   });
 });

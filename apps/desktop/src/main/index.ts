@@ -551,6 +551,13 @@ const commandHandlers: Record<CommandId, () => void> = {
     win?.webContents.send(IPC.spaceMenuAction, { action: "rename", spaceId: store.activeSpaceId }),
   "space.delete": () => deleteSpace(store.activeSpaceId),
   "bar.open-location": () => openCommandBar("navigate"),
+  "bar.open-commands": () => {
+    if (commandBar.open && commandBar.mode === "commands") {
+      closeCommandBar();
+    } else {
+      openCommandBar("commands");
+    }
+  },
   "blocking.toggle": () => {
     setBlockingEnabled(!blocking.enabled).catch((err) => {
       console.error("[blocking] toggle failed:", err);
