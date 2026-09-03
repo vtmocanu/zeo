@@ -100,6 +100,9 @@ export function CommandBar() {
   // The revision of the suggestion list currently rendered. Echoed back to main
   // on a row click so a click that raced a newer pushed list is rejected there.
   const [revision, setRevision] = useState(0);
+  // The bar's current mode, kept in React state (not just `prevModeRef`) so the
+  // input placeholder re-renders when an already-open bar switches modes.
+  const [mode, setMode] = useState<CommandBarMode>("navigate");
   const inputRef = useRef<HTMLInputElement>(null);
   // Tracks the previous `open` so we re-seed on each closed→open transition
   // rather than on every broadcast.
@@ -133,6 +136,7 @@ export function CommandBar() {
       setSuggestions(state.suggestions);
       setSelectedIndex(state.selectedIndex);
       setRevision(state.revision);
+      setMode(state.mode);
       if (opening || modeChangedWhileOpen) {
         setValue(state.initialText);
         setOpenSeed((prev) => ({
@@ -212,7 +216,9 @@ export function CommandBar() {
         data-testid="command-bar-input"
         type="text"
         value={value}
-        placeholder="Search or enter address"
+        placeholder={
+          mode === "commands" ? "Run a command" : "Search or enter address"
+        }
         spellCheck={false}
         autoComplete="off"
         onChange={(event) => {

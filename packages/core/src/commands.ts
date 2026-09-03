@@ -21,6 +21,7 @@ export type CommandId =
   | "space.rename"
   | "space.delete"
   | "bar.open-location"
+  | "bar.open-commands"
   | "blocking.toggle";
 
 /**
@@ -66,13 +67,14 @@ export const COMMANDS: readonly CommandDescriptor[] = [
   { id: "space.rename", title: "Rename Space", keywords: ["rename", "space", "workspace"], accelerator: null, menu: "spaces" },
   { id: "space.delete", title: "Delete Space", keywords: ["delete", "remove", "space", "workspace"], accelerator: null, menu: "spaces" },
   { id: "bar.open-location", title: "Open Location", keywords: ["open", "location", "url", "address", "go"], accelerator: "CmdOrCtrl+L", menu: "view" },
+  { id: "bar.open-commands", title: "Run Command", keywords: ["run", "command", "palette", "actions"], accelerator: "CmdOrCtrl+K", menu: "view" },
   { id: "blocking.toggle", title: "Toggle Content Blocking", keywords: ["block", "ads", "tracking", "adblock"], accelerator: null, menu: "view" },
 ];
 
 /**
  * Whether command `id` is enabled in `context`, pure. Always enabled:
  * `tab.new`, `space.new`, `space.rename`, `bar.open-location`,
- * `blocking.toggle`. Every other
+ * `bar.open-commands`, `blocking.toggle`. Every other
  * `tab.*` needs an active tab; on top of that `tab.pin` needs it unpinned,
  * `tab.unpin` pinned, `tab.archive` unpinned, and `tab.back` / `tab.forward`
  * the matching history flag. `space.delete` needs more than one space.
@@ -83,6 +85,7 @@ export function isCommandEnabled(id: CommandId, context: CommandContext): boolea
     case "space.new":
     case "space.rename":
     case "bar.open-location":
+    case "bar.open-commands":
     case "blocking.toggle":
       return true;
     case "space.delete":

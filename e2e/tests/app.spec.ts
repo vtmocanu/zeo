@@ -4,6 +4,9 @@ import { fileURLToPath } from "node:url";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createServer } from "node:http";
+import type { Server } from "node:http";
+import type { AddressInfo } from "node:net";
 // PRD 4.2 / CodeRabbit 2c — the @zeo/core value imports in this otherwise
 // import-free spec. `commandBarBounds` is the exact bounds math main applies to
 // the overlay, so the native-bounds assertion checks against the real formula
@@ -88,6 +91,7 @@ interface ZeoBridge {
     archive(id: string): Promise<void>;
     restore(id: string): Promise<void>;
     remove(id: string): Promise<void>;
+    activate(id: string): Promise<void>;
     list(): Promise<BridgeState>;
     navigate(id: string, url: string): Promise<void>;
     showContextMenu(id: string, x: number, y: number): Promise<BridgeMenuResult>;
@@ -118,9 +122,9 @@ interface ZeoBridge {
   // `CommandBarStateShape`/`BridgeSuggestion` mirror @zeo/core's widened
   // `CommandBarState` and `Suggestion` union.
   commandBar: {
-    open(mode: "navigate" | "new-tab"): Promise<void>;
+    open(mode: "navigate" | "new-tab" | "commands"): Promise<void>;
     close(): Promise<void>;
-    submit(text: string, mode?: "navigate" | "new-tab"): Promise<void>;
+    submit(text: string, mode?: "navigate" | "new-tab" | "commands"): Promise<void>;
     setQuery(text: string): Promise<void>;
     moveSelection(delta: 1 | -1): Promise<void>;
     accept(index?: number, revision?: number): Promise<void>;
@@ -159,7 +163,7 @@ type BridgeSuggestion =
 // `suggestions`, and the 0-based `selectedIndex` (`-1` for an empty list).
 interface CommandBarStateShape {
   open: boolean;
-  mode: "navigate" | "new-tab";
+  mode: "navigate" | "new-tab" | "commands";
   initialText: string;
   query: string;
   suggestions: BridgeSuggestion[];
@@ -341,6 +345,47 @@ async function pressNewTab(app: ElectronApplication): Promise<void> {
 }
 async function pressCloseTab(app: ElectronApplication): Promise<void> {
   await clickTabsMenuItem(app, "Close Tab");
+}
+
+/** A running loopback page server plus a promisified close. */
+interface LocalPageServer {
+  base: string;
+  close: () => Promise<void>;
+}
+
+/**
+ * Start a minimal loopback HTTP server that serves a trivial HTML page at
+ * `/page.html`. Mirrors the fixture-server pattern in blocking.spec.ts: bind to
+ * an ephemeral port on 127.0.0.1 so a tab pointed at it commits deterministically
+ * and OFFLINE — no external network, no page-load timing to swallow. Used by the
+ * commands-mode enablement-refresh test so its setup cannot flake on network.
+ */
+async function startLocalPageServer(): Promise<LocalPageServer> {
+  const server: Server = createServer((req, res) => {
+    const pathname = (req.url ?? "").split("?")[0];
+    if (pathname === "/page.html") {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      res.end("<!doctype html><meta charset=utf-8><title>zeo-e2e-local</title>");
+      return;
+    }
+    res.writeHead(404);
+    res.end();
+  });
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  if (address === null || typeof address === "string") {
+    throw new Error("local page server did not bind to an inet address");
+  }
+  const port = (address as AddressInfo).port;
+  return {
+    base: `http://127.0.0.1:${port}`,
+    close: () =>
+      new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      }),
+  };
 }
 
 test.describe("zeo desktop app", () => {
@@ -3032,5 +3077,459 @@ test.describe("zeo desktop app", () => {
         { message: "expected the active view to reload and clear the marker", timeout: 30_000 },
       )
       .toBe(true);
+  });
+
+  // --- PRD 4.4 — command mode (the third bar mode, Cmd+K). ------------------------
+  // These drive the `commands` bar mode over the sidebar bridge and assert on the
+  // BROADCAST STATE (`commandBar.state()`, `tabs.list()`) exactly like the PRD 4.3
+  // command tests above. In a fresh launch (one seeded open tab, one space
+  // "Personal", tab unpinned, no history) the EXACT set of commands that are both
+  // enabled AND not `bar.open-commands`, in registry order, is this list. The
+  // COMMANDS-order cross-check inside the first test locks the ORDER to the registry
+  // itself so a registry reorder is caught here without hand-maintaining this array.
+  const EXPECTED_COMMANDS_MODE_IDS = [
+    "tab.new",
+    "tab.close",
+    "tab.pin",
+    "tab.archive",
+    "tab.copy-url",
+    "tab.reload",
+    "space.new",
+    "space.rename",
+    "bar.open-location",
+    "blocking.toggle",
+  ];
+
+  // §5 bullet 1 — commands mode opens empty, lists only enabled command rows in
+  // registry order (no navigate/search/tab/space rows, and never bar.open-commands),
+  // and the overlay input shows the "Run a command" placeholder with an empty value.
+  test("commands mode lists only enabled commands in registry order, empty with the Run a command placeholder", async () => {
+    const st = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.commandBar.open("commands");
+      return zeo.commandBar.state();
+    });
+    expect(st.open).toBe(true);
+    expect(st.mode).toBe("commands");
+    expect(st.query).toBe("");
+    expect(st.initialText).toBe("");
+
+    // Every row is a `command` row; no address/search/tab/space/archived-tab row.
+    expect(st.suggestions.every((s) => s.kind === "command")).toBe(true);
+    expect(
+      st.suggestions.some((s) =>
+        ["navigate", "search", "tab", "space", "archived-tab"].includes(s.kind),
+      ),
+    ).toBe(false);
+
+    // The ids are exactly the expected enabled set in registry order, and equal the
+    // registry-derived cross-check (so this cannot drift from COMMANDS' order).
+    const ids = st.suggestions.map((s) => (s.kind === "command" ? s.id : ""));
+    expect(ids).toEqual(EXPECTED_COMMANDS_MODE_IDS);
+    expect(ids).toEqual(
+      COMMANDS.map((c) => c.id).filter((id) => EXPECTED_COMMANDS_MODE_IDS.includes(id)),
+    );
+    expect(ids).not.toContain("bar.open-commands");
+
+    // The overlay input reflects the commands-mode placeholder and stays empty
+    // (web-first matchers retry through the state push + re-render).
+    const overlay = await commandBarWindow(app);
+    await expect(overlay.getByTestId("command-bar-input")).toHaveAttribute(
+      "placeholder",
+      "Run a command",
+    );
+    await expect(overlay.getByTestId("command-bar-input")).toHaveValue("");
+
+    // Hygiene: close the bar.
+    await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.commandBar.close();
+    });
+  });
+
+  // §5 bullet 2 — typing "pin" in commands mode yields EXACTLY the tab.pin command
+  // row (no tab row, no disabled tab.unpin); accepting it pins the active tab and
+  // closes the bar.
+  test("typing pin in commands mode yields exactly the tab.pin command row, and accepting pins the active tab and closes the bar", async () => {
+    const activeId = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      return (await zeo.tabs.list()).activeTabId;
+    });
+    expect(activeId).not.toBeNull();
+
+    await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.commandBar.open("commands");
+      await zeo.commandBar.setQuery("pin");
+    });
+    await expect
+      .poll(async () =>
+        sidebar.evaluate(async () => {
+          const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+          const st = await zeo.commandBar.state();
+          return st.suggestions.some((s) => s.kind === "command" && s.id === "tab.pin");
+        }),
+      )
+      .toBe(true);
+
+    // Exactly one row, the tab.pin command — no tab row despite the seeded tab, and
+    // no tab.unpin (disabled while unpinned).
+    const rows = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      const st = await zeo.commandBar.state();
+      return st.suggestions.map((s) => ({ kind: s.kind, id: s.kind === "command" ? s.id : null }));
+    });
+    expect(rows).toEqual([{ kind: "command", id: "tab.pin" }]);
+
+    const pinIndex = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      const st = await zeo.commandBar.state();
+      return st.suggestions.findIndex((s) => s.kind === "command" && s.id === "tab.pin");
+    });
+    expect(pinIndex).toBeGreaterThanOrEqual(0);
+    await sidebar.evaluate(async (i) => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.commandBar.accept(i);
+    }, pinIndex);
+
+    // The active tab is now pinned.
+    await expect
+      .poll(async () =>
+        sidebar.evaluate(async (id) => {
+          const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+          const s = await zeo.tabs.list();
+          return s.tabs.find((t) => t.id === id)?.pinned ?? null;
+        }, activeId),
+      )
+      .toBe(true);
+
+    // Accepting a command row in commands mode closes the bar.
+    const open = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      return (await zeo.commandBar.state()).open;
+    });
+    expect(open).toBe(false);
+  });
+
+  // §5 bullet 3 — modes stay independent. A non-active tab titled "pinboard" matches
+  // "pin", but commands mode never shows a tab row; new-tab mode still does.
+  test("commands mode never shows a tab row even when a tab title matches, but new-tab mode does", async () => {
+    const pb = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      const seededId = (await zeo.tabs.list()).activeTabId;
+      // create activates the new tab; re-activate the seeded tab so the pinboard tab
+      // is NOT active (the active tab is excluded from suggestions).
+      const created = await zeo.tabs.create("pinboard.example");
+      if (seededId !== null) {
+        await zeo.tabs.activate(seededId);
+      }
+      return { id: created.id, seededId };
+    });
+    expect(pb.seededId).not.toBeNull();
+
+    // commands mode: querying "pin" surfaces command rows only — never a tab row,
+    // even though the "pinboard" tab title matches.
+    const commandsKinds = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.commandBar.open("commands");
+      await zeo.commandBar.setQuery("pin");
+      const st = await zeo.commandBar.state();
+      return st.suggestions.map((s) => s.kind);
+    });
+    expect(commandsKinds).not.toContain("tab");
+
+    // new-tab mode: the same query brings the tab row back (modes are independent).
+    await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.commandBar.open("new-tab");
+      await zeo.commandBar.setQuery("pin");
+    });
+    await expect
+      .poll(async () =>
+        sidebar.evaluate(async (pbId) => {
+          const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+          const st = await zeo.commandBar.state();
+          return st.suggestions.some((s) => s.kind === "tab" && s.tabId === pbId);
+        }, pb.id),
+      )
+      .toBe(true);
+
+    // Hygiene: close the bar.
+    await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.commandBar.close();
+    });
+  });
+
+  // §5 bullet 4 — Cmd+K toggles the palette (bar.open-commands): a run opens it in
+  // commands mode, a second run closes it, and a run while the bar is open in
+  // navigate mode switches it into commands with an empty query.
+  test("commands.run(bar.open-commands) toggles the palette and switches into it from navigate mode", async () => {
+    const opened = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.commands.run("bar.open-commands");
+      return zeo.commandBar.state();
+    });
+    expect(opened.open).toBe(true);
+    expect(opened.mode).toBe("commands");
+
+    const closed = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.commands.run("bar.open-commands");
+      return zeo.commandBar.state();
+    });
+    expect(closed.open).toBe(false);
+
+    // Open in navigate mode (prefilled with the active tab url), then toggle: the
+    // handler switches an open navigate bar into commands with a reset query.
+    const nav = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.commandBar.open("navigate");
+      return zeo.commandBar.state();
+    });
+    expect(nav.open).toBe(true);
+    expect(nav.mode).toBe("navigate");
+    expect(nav.query.length).toBeGreaterThan(0);
+
+    const switched = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.commands.run("bar.open-commands");
+      return zeo.commandBar.state();
+    });
+    expect(switched.open).toBe(true);
+    expect(switched.mode).toBe("commands");
+    expect(switched.query).toBe("");
+
+    // Hygiene: close the bar.
+    await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.commandBar.close();
+    });
+  });
+
+  // §5 bullet 5 — accepting the bar.open-commands row from new-tab and navigate modes
+  // runs its handler, which leaves the bar OPEN switched into commands mode with an
+  // empty query and the full command list (it joins tab.new/bar.open-location as an
+  // accept exception).
+  test("accepting the bar.open-commands row from new-tab and navigate modes leaves the bar open in commands mode", async () => {
+    for (const mode of ["new-tab", "navigate"] as const) {
+      await sidebar.evaluate(async (m) => {
+        const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+        await zeo.commandBar.open(m);
+        await zeo.commandBar.setQuery("command");
+      }, mode);
+      await expect
+        .poll(async () =>
+          sidebar.evaluate(async () => {
+            const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+            const st = await zeo.commandBar.state();
+            return st.suggestions.some((s) => s.kind === "command" && s.id === "bar.open-commands");
+          }),
+        )
+        .toBe(true);
+
+      const idx = await sidebar.evaluate(async () => {
+        const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+        const st = await zeo.commandBar.state();
+        return st.suggestions.findIndex(
+          (s) => s.kind === "command" && s.id === "bar.open-commands",
+        );
+      });
+      expect(idx).toBeGreaterThanOrEqual(0);
+      await sidebar.evaluate(async (i) => {
+        const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+        await zeo.commandBar.accept(i);
+      }, idx);
+
+      const after = await sidebar.evaluate(async () => {
+        const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+        const st = await zeo.commandBar.state();
+        return {
+          open: st.open,
+          mode: st.mode,
+          query: st.query,
+          ids: st.suggestions.map((s) => (s.kind === "command" ? s.id : "")),
+        };
+      });
+      expect(after.open).toBe(true);
+      expect(after.mode).toBe("commands");
+      expect(after.query).toBe("");
+      expect(after.ids).toEqual(EXPECTED_COMMANDS_MODE_IDS);
+
+      // Hygiene between iterations: close the bar before the next mode.
+      await sidebar.evaluate(async () => {
+        const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+        await zeo.commandBar.close();
+      });
+    }
+  });
+
+  // §5 bullet 6 — commands mode has no text action: submit REJECTS and changes
+  // nothing, both with an explicit "commands" mode argument and with no argument
+  // while the bar is open in commands mode.
+  test("submit rejects in commands mode and leaves the bar unchanged", async () => {
+    const before = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.commandBar.open("commands");
+      return zeo.commandBar.state();
+    });
+    expect(before.open).toBe(true);
+    expect(before.mode).toBe("commands");
+
+    // Explicit "commands" mode argument rejects; state is unchanged.
+    const rejectedExplicit = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      try {
+        await zeo.commandBar.submit("example.org", "commands");
+        return false;
+      } catch {
+        return true;
+      }
+    });
+    expect(rejectedExplicit).toBe(true);
+    const afterExplicit = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      return zeo.commandBar.state();
+    });
+    expect(afterExplicit).toEqual(before);
+
+    // No mode argument (bar open in commands mode) rejects the same way, unchanged.
+    const rejectedImplicit = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      try {
+        await zeo.commandBar.submit("example.org");
+        return false;
+      } catch {
+        return true;
+      }
+    });
+    expect(rejectedImplicit).toBe(true);
+    const afterImplicit = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      return zeo.commandBar.state();
+    });
+    expect(afterImplicit).toEqual(before);
+
+    // Hygiene: close the bar.
+    await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.commandBar.close();
+    });
+  });
+
+  // §5 bullet 7 — enablement refresh in commands mode without retyping. With the bar
+  // open in commands mode and "back" typed, a fresh tab has no tab.back row. An
+  // IN-PLACE hash navigation (focus-neutral, keeps the overlay open) adds back-history
+  // and refreshCommandState re-ranks the live suggestions, so the tab.back row appears
+  // WITHOUT retyping. Setup is fully deterministic and OFFLINE: a fresh tab is pointed
+  // at a loopback page (no external network, no swallowed page-load failure), and the
+  // hash change is driven in the tab's own context from the main process.
+  test("commands mode refreshes enablement without retyping: the Go Back row appears after an in-place navigation", async () => {
+    const server = await startLocalPageServer();
+    try {
+      // A unique token in the query string identifies exactly this tab's view when
+      // looking it up by URL from the main process below.
+      const token = "zeo-cmdback-probe";
+      const pageUrl = `${server.base}/page.html?probe=${token}`;
+
+      // Create a FRESH tab at the loopback page: createTab activates it, and a
+      // single-entry tab has canGoBack === false. No external page, no 30s network
+      // poll, no swallowed waitForLoadState.
+      await sidebar.evaluate(async (url) => {
+        const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+        await zeo.tabs.create(url);
+      }, pageUrl);
+
+      // Wait until the fresh tab's view has committed the loopback page. The lookup
+      // is by URL token in the main process (network-free); on a loopback origin the
+      // commit is effectively immediate.
+      await expect
+        .poll(
+          async () =>
+            app.evaluate(
+              ({ webContents }, tok) =>
+                webContents.getAllWebContents().some((w) => w.getURL().includes(tok)),
+              token,
+            ),
+          { message: "expected the fresh tab to commit the loopback page" },
+        )
+        .toBe(true);
+
+      // Open commands mode. Anchor the setup BEFORE the negative assertion so the
+      // latter cannot pass vacuously: the empty-query commands list is every enabled
+      // command (bar.open-commands aside), which proves the bar is genuinely open in
+      // commands mode with a live, non-empty suggestion pipeline — not a closed bar,
+      // a wrong mode, or a dead pipeline that would also make tab.back "absent".
+      const openedState = await sidebar.evaluate(async () => {
+        const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+        await zeo.commandBar.open("commands");
+        return zeo.commandBar.state();
+      });
+      expect(openedState.open).toBe(true);
+      expect(openedState.mode).toBe("commands");
+      expect(openedState.suggestions.length).toBeGreaterThan(0);
+      expect(openedState.suggestions.every((s) => s.kind === "command")).toBe(true);
+
+      // Type "back". Anchor that the query took effect and the bar is still open in
+      // commands mode, so the empty "back"-filtered list below can only mean tab.back
+      // is disabled — not that the bar closed or the query never applied. The
+      // "back"-filtered list is empty BY DESIGN here: tab.back is the only command
+      // whose keywords contain "back", and it is disabled on this fresh single-entry
+      // tab (canGoBack === false), so a `suggestions.length > 0` anchor cannot come
+      // from this query — it comes from the empty-query list asserted above.
+      const queriedState = await sidebar.evaluate(async () => {
+        const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+        await zeo.commandBar.setQuery("back");
+        return zeo.commandBar.state();
+      });
+      expect(queriedState.open).toBe(true);
+      expect(queriedState.mode).toBe("commands");
+      expect(queriedState.query).toBe("back");
+      expect(
+        queriedState.suggestions.some((s) => s.kind === "command" && s.id === "tab.back"),
+      ).toBe(false);
+
+      // Navigate the active tab IN PLACE via a same-document hash change in the tab's
+      // OWN context, driven from the main process: adds a real back-history entry
+      // (canGoBack → true) and fires did-navigate-in-page WITHOUT reloading or
+      // refocusing the view, so the overlay stays open and refreshCommandState
+      // re-ranks its suggestions live. A missing view throws — setup failures reject
+      // rather than being swallowed.
+      await app.evaluate(async ({ webContents }, tok) => {
+        const wc = webContents.getAllWebContents().find((w) => w.getURL().includes(tok));
+        if (wc === undefined) {
+          throw new Error("tab view for the hash navigation was not found");
+        }
+        // userGesture=true is REQUIRED: a script-driven fragment change with no
+        // user activation is treated by Chromium as a history REPLACE, leaving
+        // canGoBack false; simulating the gesture makes it PUSH a back entry so
+        // tab.back becomes enabled.
+        await wc.executeJavaScript("window.location.hash = '#zeo-cmdback';", true);
+      }, token);
+
+      // WITHOUT retyping, the tab.back row appears.
+      await expect
+        .poll(
+          async () =>
+            sidebar.evaluate(async () => {
+              const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+              const st = await zeo.commandBar.state();
+              return st.suggestions.some((s) => s.kind === "command" && s.id === "tab.back");
+            }),
+          {
+            message: "expected the tab.back row to appear in commands mode without retyping",
+            timeout: 10_000,
+          },
+        )
+        .toBe(true);
+
+      // Hygiene: close the bar.
+      await sidebar.evaluate(async () => {
+        const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+        await zeo.commandBar.close();
+      });
+    } finally {
+      await server.close();
+    }
   });
 });

@@ -551,6 +551,13 @@ const commandHandlers: Record<CommandId, () => void> = {
     win?.webContents.send(IPC.spaceMenuAction, { action: "rename", spaceId: store.activeSpaceId }),
   "space.delete": () => deleteSpace(store.activeSpaceId),
   "bar.open-location": () => openCommandBar("navigate"),
+  "bar.open-commands": () => {
+    if (commandBar.open && commandBar.mode === "commands") {
+      closeCommandBar();
+    } else {
+      openCommandBar("commands");
+    }
+  },
   "blocking.toggle": () => {
     setBlockingEnabled(!blocking.enabled).catch((err) => {
       console.error("[blocking] toggle failed:", err);
@@ -657,11 +664,12 @@ function recomputeSuggestions(): void {
 
 /**
  * Opens the command bar in `mode`. A `"navigate"` request with no active tab
- * falls back to `"new-tab"`. `initialText` is the active tab's current stored url
- * in navigate mode (empty if it cannot be found) and empty in new-tab mode. Lays
- * out the overlay, showing and focusing it when the window has room for the bar
- * (a collapsed window leaves it hidden until the next resize pass), and pushes
- * the new state.
+ * falls back to `"new-tab"`; `"commands"` never falls back to another mode.
+ * `initialText` is the active tab's current stored url in navigate mode (empty if
+ * it cannot be found) and empty in both new-tab and commands mode (commands mode
+ * also opens with an empty `query`). Lays out the overlay, showing and focusing it
+ * when the window has room for the bar (a collapsed window leaves it hidden until
+ * the next resize pass), and pushes the new state.
  */
 function openCommandBar(mode: CommandBarMode): void {
   const effectiveMode: CommandBarMode =
@@ -722,13 +730,19 @@ function closeCommandBar(): void {
 }
 
 /**
- * Resolves `text` and performs the command-bar action. A null resolution (empty
- * or whitespace-only input) closes the bar without navigating. Otherwise the
- * effective mode (the passed `mode`, else the open bar's mode, else `"navigate"`,
- * downgraded to `"new-tab"` when there is no active tab) either navigates the
- * active tab or creates a new tab, then closes the bar if it was open.
+ * Resolves `text` and performs the command-bar action. A `commands` effective
+ * mode (the passed `mode`, else the open bar's mode, else `"navigate"`) rejects
+ * (throws) and changes nothing — commands mode has no text action and the bar
+ * stays open. Otherwise a null resolution (empty or whitespace-only input) closes
+ * the bar without navigating, and a resolved target either navigates the active
+ * tab or creates a new tab (the effective mode downgraded to `"new-tab"` when
+ * there is no active tab), then closes the bar if it was open.
  */
 function submitCommandBar(text: string, mode?: CommandBarMode): void {
+  const requestedMode: CommandBarMode = mode ?? (commandBar.open ? commandBar.mode : "navigate");
+  if (requestedMode === "commands") {
+    throw new Error("submit is not valid in commands mode");
+  }
   const target = resolveInput(text);
   if (target === null) {
     if (commandBar.open) {
@@ -844,9 +858,13 @@ function performSuggestion(s: Suggestion): void {
  * `0 .. suggestions.length - 1` throws — the invoke rejects and the bar is left
  * untouched (not closed, not mutated). With no index and an empty list
  * (`selectedIndex === -1`) it submits the raw query like the Enter action
- * ({@link submitCommandBar} closes the open bar). The text kinds
- * (`navigate`/`search`) also route through {@link submitCommandBar} (which closes
- * the bar itself, so no extra close); every other kind runs
+ * ({@link submitCommandBar} closes the open bar) — except in `commands` mode,
+ * which has no text action: it is a no-op there, leaving the bar open (submit
+ * rejects in commands mode). The text kinds (`navigate`/`search`) also route
+ * through {@link submitCommandBar} (which closes the bar itself, so no extra
+ * close); a `command` kind runs {@link executeCommand} and then closes, except
+ * `tab.new`, `bar.open-location`, and `bar.open-commands`, whose handlers
+ * re-open or switch the bar and so are left open; every other kind runs
  * {@link performSuggestion} and then closes.
  *
  * `revision` is the {@link CommandBarState.revision} the renderer rendered the
@@ -865,6 +883,11 @@ function acceptCommandBar(index?: number, revision?: number): void {
   }
   const idx = index ?? commandBar.selectedIndex;
   if (idx === -1) {
+    // Commands mode has no text action: a no-match query simply leaves the bar
+    // open rather than routing to submit (which rejects in commands mode).
+    if (commandBar.mode === "commands") {
+      return;
+    }
     submitCommandBar(commandBar.query);
     return;
   }
@@ -877,10 +900,11 @@ function acceptCommandBar(index?: number, revision?: number): void {
     // executeCommand throws on a stale/disabled command; the throw propagates
     // and the invoke rejects with the bar untouched (do not catch it).
     executeCommand(s.id);
-    // bar.open-location and tab.new re-open the bar (openCommandBar sets
-    // open:true unconditionally), so closing here would immediately dismiss the
-    // just-opened bar. Every other command closes it.
-    if (s.id !== "bar.open-location" && s.id !== "tab.new") {
+    // bar.open-location, tab.new, and bar.open-commands re-open or switch the
+    // bar (openCommandBar sets open:true unconditionally; bar.open-commands
+    // switches into commands mode), so closing here would immediately dismiss
+    // the just-opened bar. Every other command closes it.
+    if (s.id !== "bar.open-location" && s.id !== "tab.new" && s.id !== "bar.open-commands") {
       closeCommandBar();
     }
     return;

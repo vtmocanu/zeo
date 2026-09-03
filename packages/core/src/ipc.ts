@@ -170,9 +170,12 @@ export interface ProfilesApi {
 /**
  * Command-bar commands the renderer invokes over IPC, handled in main against the
  * single command-bar controller. `open` shows the bar in the given
- * {@link CommandBarMode}; `close` hides it; `submit` resolves the text (defaulting
- * to the currently-open mode when `mode` is omitted) and performs the navigate or
- * new-tab action; `state` reads back the current {@link CommandBarState}.
+ * {@link CommandBarMode} (a `commands` bar opens empty and, unlike `navigate`,
+ * never falls back to another mode); `close` hides it; `submit` resolves the text
+ * (defaulting to the currently-open mode when `mode` is omitted) and performs the
+ * navigate or new-tab action, but rejects when the effective mode is `commands`
+ * (which has no text action) and changes nothing; `state` reads back the current
+ * {@link CommandBarState}.
  */
 export interface CommandBarApi {
   open(mode: CommandBarMode): Promise<void>;
@@ -190,10 +193,15 @@ export interface CommandBarApi {
    */
   moveSelection(delta: 1 | -1): Promise<void>;
   /**
-   * Performs one suggestion's action and closes the bar: the row at `index`
-   * when given (the clicked row), otherwise the row at `selectedIndex`. An
-   * index outside `0 .. suggestions.length - 1` rejects; with no index and
-   * `selectedIndex === -1` it behaves like {@link CommandBarApi.submit}.
+   * Performs one suggestion's action and closes the bar, EXCEPT when the
+   * accepted row is the `tab.new`, `bar.open-location`, or `bar.open-commands`
+   * command, whose handlers re-open or switch the bar and leave it open in the
+   * resulting mode. The row is the one at `index` when given (the clicked row),
+   * otherwise the row at `selectedIndex`. An index outside
+   * `0 .. suggestions.length - 1` rejects; with no index and
+   * `selectedIndex === -1` it behaves like {@link CommandBarApi.submit} — except
+   * in `commands` mode, which has no text action, so an empty list is a no-op
+   * (submit rejects in commands mode) and the bar is left open.
    *
    * `revision` is the {@link CommandBarState.revision} the renderer had rendered
    * when the row was clicked. When both `index` and `revision` are given and the

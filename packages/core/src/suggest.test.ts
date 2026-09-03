@@ -380,6 +380,103 @@ describe("suggest — command rows", () => {
   });
 });
 
+describe("suggest — commands mode", () => {
+  test("empty query lists enabled commands in registry order, excluding bar.open-commands and disabled, with no text row", () => {
+    const rows = suggest(
+      "  ",
+      catalog({
+        // A tab and space present; commands mode must ignore them entirely.
+        spaces: [{ id: "s1", name: "Personal", active: true }],
+        tabs: [tab({ tabId: "t", title: "Anything" })],
+        commands: [
+          command({ id: "bar.open-commands", title: "Run Command", keywords: ["run"] }),
+          command({ id: "tab.new", title: "New Tab", keywords: ["new"] }),
+          command({ id: "tab.pin", title: "Pin Tab", keywords: ["pin"] }),
+          command({ id: "tab.close", title: "Close Tab", keywords: ["close"], enabled: false }),
+          command({ id: "space.rename", title: "Rename Space", keywords: ["rename"] }),
+        ],
+      }),
+      options({ mode: "commands" }),
+    );
+    expect(rows.every((r) => r.kind === "command")).toBe(true);
+    expect(rows.map((r) => (r.kind === "command" ? r.id : ""))).toEqual([
+      "tab.new",
+      "tab.pin",
+      "space.rename",
+    ]);
+    // bar.open-commands and the disabled tab.close are absent.
+    const ids = rows.map((r) => (r.kind === "command" ? r.id : ""));
+    expect(ids).not.toContain("bar.open-commands");
+    expect(ids).not.toContain("tab.close");
+  });
+
+  test("a non-empty query that also matches a tab and space yields only command rows", () => {
+    const rows = suggest(
+      "focus",
+      catalog({
+        spaces: [{ id: "sp", name: "Focus", active: false }],
+        tabs: [tab({ tabId: "t", title: "Focus", url: "https://focus.test/" })],
+        archived: [archivedTab({ tabId: "a", title: "Focus", url: "https://arch.test/" })],
+        commands: [command({ id: "tab.new", title: "Focus Mode", keywords: ["focus"] })],
+      }),
+      options({ mode: "commands" }),
+    );
+    expect(rows.every((r) => r.kind === "command")).toBe(true);
+    expect(rows.some((r) => r.kind === "tab" || r.kind === "space" || r.kind === "archived-tab")).toBe(false);
+    expect(rows[0]).toMatchObject({ kind: "command", id: "tab.new" });
+  });
+
+  test("disabled commands are excluded on a non-empty query", () => {
+    const rows = suggest(
+      "pin",
+      catalog({
+        commands: [command({ id: "tab.pin", title: "Pin Tab", keywords: ["pin"], enabled: false })],
+      }),
+      options({ mode: "commands" }),
+    );
+    expect(rows).toEqual([]);
+  });
+
+  test("the cap applies on a non-empty query with more than MAX_MATCHES matching commands", () => {
+    const ids: SuggestCatalog["commands"][number]["id"][] = [
+      "tab.new",
+      "tab.close",
+      "tab.pin",
+      "tab.unpin",
+      "tab.archive",
+      "tab.reload",
+      "tab.back",
+      "tab.forward",
+      "space.rename",
+      "bar.open-location",
+    ];
+    const rows = suggest(
+      "cmd",
+      catalog({
+        commands: ids.map((id) => command({ id, title: `cmd ${id}`, keywords: ["cmd"] })),
+      }),
+      options({ mode: "commands" }),
+    );
+    expect(rows).toHaveLength(8);
+    expect(rows.every((r) => r.kind === "command")).toBe(true);
+  });
+
+  test("row 0 is never a navigate/search text action in commands mode", () => {
+    const rows = suggest(
+      "example.com",
+      catalog({
+        commands: [command({ id: "tab.new", title: "New Tab", keywords: ["new"] })],
+      }),
+      options({ mode: "commands" }),
+    );
+    // "example.com" resolves to a navigate URL in other modes; here it must not.
+    expect(rows.every((r) => r.kind === "command")).toBe(true);
+    if (rows.length > 0) {
+      expect(rows[0].kind).toBe("command");
+    }
+  });
+});
+
 describe("nextSelectedIndex", () => {
   test("an empty list stays at -1 for both directions", () => {
     expect(nextSelectedIndex(-1, 0, 1)).toBe(-1);
