@@ -9,6 +9,15 @@ milestone, a minor bump only for very large breakthroughs.
 
 ## [Unreleased]
 
+## [0.0.13] - 2026-09-03
+
+### Added
+
+- A command palette bound to `Cmd+K`: a third command-bar mode that lists only
+  runnable actions — no address/search row and no tab or space rows — filtered as
+  you type. `Enter` runs the highlighted action and `Cmd+K` again closes it;
+  `Cmd+T` and `Cmd+L` behave exactly as before.
+
 ## [0.0.12] - 2026-09-02
 
 ### Added
