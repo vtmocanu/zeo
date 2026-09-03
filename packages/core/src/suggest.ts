@@ -136,6 +136,11 @@ function matchesAll(haystack: string, terms: string[]): boolean {
   return terms.every((term) => haystack.includes(term));
 }
 
+/** Projects a catalog command entry to a `command` {@link Suggestion}. */
+function commandSuggestion(c: SuggestCatalog["commands"][number]): Suggestion {
+  return { kind: "command", id: c.id, title: c.title, accelerator: c.accelerator };
+}
+
 /**
  * Ranks the command-bar suggestion list for `query`. Row 0 is the text action
  * ({@link resolveInput} mapped to a `navigate` or `search` row), omitted when
@@ -149,6 +154,37 @@ function matchesAll(haystack: string, terms: string[]): boolean {
  * arguments.
  */
 export function suggest(query: string, catalog: SuggestCatalog, options: SuggestOptions): Suggestion[] {
+  if (options.mode === "commands") {
+    // Commands mode is command-only: spaces, tabs, and archived tabs are never
+    // consulted, so there is never a row-0 text action (navigate/search).
+    // `bar.open-commands` (the bar is already open in this mode) and disabled
+    // commands are excluded. An empty/whitespace query lists every remaining
+    // enabled command in registry (catalog) order, uncapped. A non-empty query
+    // applies the same PRD 4.2 tier/match rules the mixed command block uses,
+    // ranked by score then registry order and capped at MAX_MATCHES.
+    const enabledCommands = catalog.commands.filter(
+      (c) => c.enabled && c.id !== "bar.open-commands",
+    );
+
+    if (query.trim() === "") {
+      return enabledCommands.map(commandSuggestion);
+    }
+
+    const terms = query.trim().toLowerCase().split(/\s+/);
+    const ranked: { suggestion: Suggestion; score: number; order: number }[] = [];
+    let order = 0;
+    for (const command of enabledCommands) {
+      const titleLower = command.title.toLowerCase();
+      const haystack = `${command.title} ${command.keywords.join(" ")}`.toLowerCase();
+      if (matchesAll(haystack, terms)) {
+        const score = Math.max(...terms.map((term) => termTier(term, titleLower, null)));
+        ranked.push({ suggestion: commandSuggestion(command), score, order: order++ });
+      }
+    }
+    ranked.sort((a, b) => a.score - b.score || a.order - b.order);
+    return ranked.slice(0, MAX_MATCHES).map((c) => c.suggestion);
+  }
+
   const resolved = resolveInput(query);
 
   if (resolved === null) {
