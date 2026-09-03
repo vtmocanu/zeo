@@ -3455,19 +3455,39 @@ test.describe("zeo desktop app", () => {
         )
         .toBe(true);
 
-      // Open commands mode and type "back": on this fresh tab there is no back-history,
-      // so no tab.back command row.
-      await sidebar.evaluate(async () => {
+      // Open commands mode. Anchor the setup BEFORE the negative assertion so the
+      // latter cannot pass vacuously: the empty-query commands list is every enabled
+      // command (bar.open-commands aside), which proves the bar is genuinely open in
+      // commands mode with a live, non-empty suggestion pipeline — not a closed bar,
+      // a wrong mode, or a dead pipeline that would also make tab.back "absent".
+      const openedState = await sidebar.evaluate(async () => {
         const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
         await zeo.commandBar.open("commands");
-        await zeo.commandBar.setQuery("back");
+        return zeo.commandBar.state();
       });
-      const initialHasBack = await sidebar.evaluate(async () => {
+      expect(openedState.open).toBe(true);
+      expect(openedState.mode).toBe("commands");
+      expect(openedState.suggestions.length).toBeGreaterThan(0);
+      expect(openedState.suggestions.every((s) => s.kind === "command")).toBe(true);
+
+      // Type "back". Anchor that the query took effect and the bar is still open in
+      // commands mode, so the empty "back"-filtered list below can only mean tab.back
+      // is disabled — not that the bar closed or the query never applied. The
+      // "back"-filtered list is empty BY DESIGN here: tab.back is the only command
+      // whose keywords contain "back", and it is disabled on this fresh single-entry
+      // tab (canGoBack === false), so a `suggestions.length > 0` anchor cannot come
+      // from this query — it comes from the empty-query list asserted above.
+      const queriedState = await sidebar.evaluate(async () => {
         const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
-        const st = await zeo.commandBar.state();
-        return st.suggestions.some((s) => s.kind === "command" && s.id === "tab.back");
+        await zeo.commandBar.setQuery("back");
+        return zeo.commandBar.state();
       });
-      expect(initialHasBack).toBe(false);
+      expect(queriedState.open).toBe(true);
+      expect(queriedState.mode).toBe("commands");
+      expect(queriedState.query).toBe("back");
+      expect(
+        queriedState.suggestions.some((s) => s.kind === "command" && s.id === "tab.back"),
+      ).toBe(false);
 
       // Navigate the active tab IN PLACE via a same-document hash change in the tab's
       // OWN context, driven from the main process: adds a real back-history entry
