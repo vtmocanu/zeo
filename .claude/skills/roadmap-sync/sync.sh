@@ -52,7 +52,18 @@ while IFS=$'\t' read -r id n; do
     -f query='query($owner:String!,$name:String!,$n:Int!){repository(owner:$owner,name:$name){issue(number:$n){title state milestone{title} parent{number} subIssuesSummary{total completed} subIssues(first:100){nodes{number state closedByPullRequestsReferences(first:10){nodes{state}}}}}}}' \
     --jq '.data.repository.issue')"
   parent="$(jq -r '.parent.number // ""' <<<"$detail")"
-  [ -z "$parent" ] || continue
+  current="$(jq -r --arg id "$id" '.items[] | select(.id==$id) | .status // ""' <<<"$items_json")"
+  if [ -n "$parent" ]; then
+    own_prs="$(gh api graphql -F n="$n" -F owner="$GQL_OWNER" -F name="$GQL_NAME" \
+      -f query='query($owner:String!,$name:String!,$n:Int!){repository(owner:$owner,name:$name){issue(number:$n){closedByPullRequestsReferences(first:10){nodes{state}}}}}' \
+      --jq '[.data.repository.issue.closedByPullRequestsReferences.nodes[] | select(.state=="OPEN")] | length')"
+    if [ "$(jq -r .state <<<"$detail")" = "CLOSED" ]; then desired=Done
+    elif [ "$own_prs" -gt 0 ]; then desired="In Progress"
+    else desired=Todo
+    fi
+    [ "$current" = "$desired" ] || { say "#$n (PRD of #$parent) -> $desired${current:+ (was $current)}"; set_status "$id" "$desired"; }
+    continue
+  fi
   feature_count=$((feature_count + 1))
 
   title="$(jq -r .title <<<"$detail")"
@@ -63,7 +74,6 @@ while IFS=$'\t' read -r id n; do
   open_prs="$(jq -r '[.subIssues.nodes[].closedByPullRequestsReferences.nodes[] | select(.state=="OPEN")] | length' <<<"$detail")"
   all_sub_numbers="$all_sub_numbers $(jq -r '[.subIssues.nodes[].number] | join(" ")' <<<"$detail")"
 
-  current="$(jq -r --arg id "$id" '.items[] | select(.id==$id) | .status // ""' <<<"$items_json")"
   start="$(jq -r --arg id "$id" '.items[] | select(.id==$id) | .start // ""' <<<"$items_json")"
   target="$(jq -r --arg id "$id" '.items[] | select(.id==$id) | .target // ""' <<<"$items_json")"
 

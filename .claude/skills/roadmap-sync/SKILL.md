@@ -29,7 +29,8 @@ milestone also promotes Wishlist to Todo). Agents own **In Progress** and **Done
 | any closed, or any open PR | In Progress |
 | feature issue closed | Done |
 
-The sync never moves a feature back to Wishlist. `Start` is set when a feature first reaches
+PRD issues reach the board automatically as sub-issues; the sync marks them Todo, In Progress
+(open PR) or Done (closed). The sync never moves a feature back to Wishlist. `Start` is set when a feature first reaches
 In Progress, `Target` when it reaches Done, unless a human filled one in earlier.
 
 ## Decomposing a feature
