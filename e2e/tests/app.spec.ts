@@ -4,6 +4,9 @@ import { fileURLToPath } from "node:url";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createServer } from "node:http";
+import type { Server } from "node:http";
+import type { AddressInfo } from "node:net";
 // PRD 4.2 / CodeRabbit 2c — the @zeo/core value imports in this otherwise
 // import-free spec. `commandBarBounds` is the exact bounds math main applies to
 // the overlay, so the native-bounds assertion checks against the real formula
@@ -342,6 +345,47 @@ async function pressNewTab(app: ElectronApplication): Promise<void> {
 }
 async function pressCloseTab(app: ElectronApplication): Promise<void> {
   await clickTabsMenuItem(app, "Close Tab");
+}
+
+/** A running loopback page server plus a promisified close. */
+interface LocalPageServer {
+  base: string;
+  close: () => Promise<void>;
+}
+
+/**
+ * Start a minimal loopback HTTP server that serves a trivial HTML page at
+ * `/page.html`. Mirrors the fixture-server pattern in blocking.spec.ts: bind to
+ * an ephemeral port on 127.0.0.1 so a tab pointed at it commits deterministically
+ * and OFFLINE — no external network, no page-load timing to swallow. Used by the
+ * commands-mode enablement-refresh test so its setup cannot flake on network.
+ */
+async function startLocalPageServer(): Promise<LocalPageServer> {
+  const server: Server = createServer((req, res) => {
+    const pathname = (req.url ?? "").split("?")[0];
+    if (pathname === "/page.html") {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      res.end("<!doctype html><meta charset=utf-8><title>zeo-e2e-local</title>");
+      return;
+    }
+    res.writeHead(404);
+    res.end();
+  });
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  if (address === null || typeof address === "string") {
+    throw new Error("local page server did not bind to an inet address");
+  }
+  const port = (address as AddressInfo).port;
+  return {
+    base: `http://127.0.0.1:${port}`,
+    close: () =>
+      new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      }),
+  };
 }
 
 test.describe("zeo desktop app", () => {
@@ -3377,58 +3421,95 @@ test.describe("zeo desktop app", () => {
   // open in commands mode and "back" typed, a fresh tab has no tab.back row. An
   // IN-PLACE hash navigation (focus-neutral, keeps the overlay open) adds back-history
   // and refreshCommandState re-ranks the live suggestions, so the tab.back row appears
-  // WITHOUT retyping. Network-dependent (the seeded page must load first), so it polls
-  // generously.
+  // WITHOUT retyping. Setup is fully deterministic and OFFLINE: a fresh tab is pointed
+  // at a loopback page (no external network, no swallowed page-load failure), and the
+  // hash change is driven in the tab's own context from the main process.
   test("commands mode refreshes enablement without retyping: the Go Back row appears after an in-place navigation", async () => {
-    // Fully load the seeded page BEFORE opening the bar so the only thing happening
-    // with the bar open is the focus-neutral hash change (a load can steal focus and
-    // close the overlay).
-    const tabView = await tabViewWindow(app, sidebar);
-    await expect.poll(() => tabView.url(), { timeout: 30_000 }).toContain("example.com");
-    await tabView.waitForLoadState("load").catch(() => {});
+    const server = await startLocalPageServer();
+    try {
+      // A unique token in the query string identifies exactly this tab's view when
+      // looking it up by URL from the main process below.
+      const token = "zeo-cmdback-probe";
+      const pageUrl = `${server.base}/page.html?probe=${token}`;
 
-    // Open commands mode and type "back": on a fresh tab there is no back-history, so
-    // no tab.back command row.
-    await sidebar.evaluate(async () => {
-      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
-      await zeo.commandBar.open("commands");
-      await zeo.commandBar.setQuery("back");
-    });
-    const initialHasBack = await sidebar.evaluate(async () => {
-      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
-      const st = await zeo.commandBar.state();
-      return st.suggestions.some((s) => s.kind === "command" && s.id === "tab.back");
-    });
-    expect(initialHasBack).toBe(false);
+      // Create a FRESH tab at the loopback page: createTab activates it, and a
+      // single-entry tab has canGoBack === false. No external page, no 30s network
+      // poll, no swallowed waitForLoadState.
+      await sidebar.evaluate(async (url) => {
+        const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+        await zeo.tabs.create(url);
+      }, pageUrl);
 
-    // Navigate the active tab IN PLACE via a same-document hash change in the tab
-    // view's own context: adds a real back-history entry (canGoBack → true) and fires
-    // did-navigate-in-page WITHOUT reloading or refocusing the view, so the overlay
-    // stays open and refreshCommandState re-ranks its suggestions live.
-    await tabView.evaluate(() => {
-      window.location.hash = "#zeo-cmdback";
-    });
+      // Wait until the fresh tab's view has committed the loopback page. The lookup
+      // is by URL token in the main process (network-free); on a loopback origin the
+      // commit is effectively immediate.
+      await expect
+        .poll(
+          async () =>
+            app.evaluate(
+              ({ webContents }, tok) =>
+                webContents.getAllWebContents().some((w) => w.getURL().includes(tok)),
+              token,
+            ),
+          { message: "expected the fresh tab to commit the loopback page" },
+        )
+        .toBe(true);
 
-    // WITHOUT retyping, the tab.back row appears.
-    await expect
-      .poll(
-        async () =>
-          sidebar.evaluate(async () => {
-            const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
-            const st = await zeo.commandBar.state();
-            return st.suggestions.some((s) => s.kind === "command" && s.id === "tab.back");
-          }),
-        {
-          message: "expected the tab.back row to appear in commands mode without retyping",
-          timeout: 30_000,
-        },
-      )
-      .toBe(true);
+      // Open commands mode and type "back": on this fresh tab there is no back-history,
+      // so no tab.back command row.
+      await sidebar.evaluate(async () => {
+        const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+        await zeo.commandBar.open("commands");
+        await zeo.commandBar.setQuery("back");
+      });
+      const initialHasBack = await sidebar.evaluate(async () => {
+        const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+        const st = await zeo.commandBar.state();
+        return st.suggestions.some((s) => s.kind === "command" && s.id === "tab.back");
+      });
+      expect(initialHasBack).toBe(false);
 
-    // Hygiene: close the bar.
-    await sidebar.evaluate(async () => {
-      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
-      await zeo.commandBar.close();
-    });
+      // Navigate the active tab IN PLACE via a same-document hash change in the tab's
+      // OWN context, driven from the main process: adds a real back-history entry
+      // (canGoBack → true) and fires did-navigate-in-page WITHOUT reloading or
+      // refocusing the view, so the overlay stays open and refreshCommandState
+      // re-ranks its suggestions live. A missing view throws — setup failures reject
+      // rather than being swallowed.
+      await app.evaluate(async ({ webContents }, tok) => {
+        const wc = webContents.getAllWebContents().find((w) => w.getURL().includes(tok));
+        if (wc === undefined) {
+          throw new Error("tab view for the hash navigation was not found");
+        }
+        // userGesture=true is REQUIRED: a script-driven fragment change with no
+        // user activation is treated by Chromium as a history REPLACE, leaving
+        // canGoBack false; simulating the gesture makes it PUSH a back entry so
+        // tab.back becomes enabled.
+        await wc.executeJavaScript("window.location.hash = '#zeo-cmdback';", true);
+      }, token);
+
+      // WITHOUT retyping, the tab.back row appears.
+      await expect
+        .poll(
+          async () =>
+            sidebar.evaluate(async () => {
+              const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+              const st = await zeo.commandBar.state();
+              return st.suggestions.some((s) => s.kind === "command" && s.id === "tab.back");
+            }),
+          {
+            message: "expected the tab.back row to appear in commands mode without retyping",
+            timeout: 10_000,
+          },
+        )
+        .toBe(true);
+
+      // Hygiene: close the bar.
+      await sidebar.evaluate(async () => {
+        const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+        await zeo.commandBar.close();
+      });
+    } finally {
+      await server.close();
+    }
   });
 });
