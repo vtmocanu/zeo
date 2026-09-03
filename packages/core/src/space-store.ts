@@ -2,7 +2,7 @@ import { TabStore } from "./tab-store.js";
 import type { Tab } from "./tab.js";
 import type { Space } from "./space.js";
 import type { Profile } from "./profile.js";
-import type { TabsState, SpacesState } from "./ipc.js";
+import type { StoreSnapshot, SpacesState } from "./ipc.js";
 import { SCHEMA_VERSION, UnsupportedSchemaVersionError } from "./persistence.js";
 import type { PersistedState, TabRow } from "./persistence.js";
 
@@ -454,10 +454,12 @@ export class SpaceStore {
   // --- Snapshots -----------------------------------------------------------
 
   /**
-   * The full application state broadcast to renderers: the space list, the
-   * active space id, and the active space's tab payload in the existing shape.
+   * The store's snapshot: the space list, the active space id, and the active
+   * space's tab payload in the existing shape. This is the pure
+   * {@link StoreSnapshot} with NO blocking dimension — main attaches the
+   * blocking slice before broadcasting the full {@link TabsState}.
    */
-  snapshot(): TabsState {
+  snapshot(): StoreSnapshot {
     return {
       ...this.spacesSnapshot(),
       ...this.active().snapshot(),

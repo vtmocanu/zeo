@@ -253,6 +253,28 @@ body {
   color: #fff;
 }
 
+/* Per-tab blocked-count shield. Always visible when count > 0 (unlike the
+   hover-revealed close button); small, muted, non-interactive badge. */
+.tab-item__shield {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex: 0 0 auto;
+  color: #9a9ab0;
+  font-size: 11px;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 4px;
+}
+
+.tab-item__shield-count {
+  font-variant-numeric: tabular-nums;
+}
+
+.tab-item__shield--disabled {
+  opacity: 0.4;
+}
+
 .sidebar__empty {
   padding: 12px;
   font-size: 12px;

@@ -1,6 +1,7 @@
 import { app, BrowserWindow, WebContentsView, clipboard, ipcMain, Menu, session } from "electron";
 import type { MenuItemConstructorOptions } from "electron";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import {
   SpaceStore,
@@ -16,8 +17,14 @@ import {
   COMMANDS,
   isCommandEnabled,
   menuEntries,
+  initialBlockingState,
+  applyBlockedRequest,
+  applyUnattributedBlock,
+  resetBlockedCount,
+  dropBlockedTab,
 } from "@zeo/core";
 import type {
+  BlockingState,
   CommandBarMode,
   CommandBarState,
   CommandContext,
@@ -33,7 +40,9 @@ import type {
   TabContextMenuResult,
   TabsState,
 } from "@zeo/core";
-import { loadStore, scheduleSave, flush } from "./db.js";
+import { createBlocker, createBlockerFromFilters } from "@zeo/adblock";
+import type { Blocker } from "@zeo/adblock";
+import { loadStore, scheduleSave, flush, readBlockingEnabled, writeBlockingEnabled } from "./db.js";
 
 // The built main is emitted by electron-vite as ESM (out/main/index.js, the
 // package is "type": "module"), so `__dirname` is not defined — derive it from
@@ -114,6 +123,156 @@ const navSeq = new Map<string, number>();
  */
 const hasRealTitle = new Set<string>();
 
+/**
+ * The single app-lifetime {@link Blocker}, or `null` before the engine has
+ * loaded (the 3 s startup cap elapsed with no cache yet) — a null blocker blocks
+ * nothing, the empty engine the PRD allows. The real engine swaps in via the
+ * cap race's `then` when it arrives.
+ */
+let blocker: Blocker | null = null;
+/**
+ * The content-blocking slice main owns and attaches to every broadcast snapshot.
+ * Seeded here and replaced at startup with the persisted `enabled` value.
+ */
+let blocking: BlockingState = initialBlockingState(true, "none");
+/**
+ * Reverse index `webContents.id -> tabId` for attributing a blocked request to
+ * the tab that issued it. Populated in {@link createViewFor}, dropped in
+ * {@link destroyView}.
+ */
+const webContentsToTab = new Map<number, string>();
+/**
+ * Forward index `tabId -> webContents.id`, the teardown counterpart to
+ * {@link webContentsToTab}. It lets {@link destroyView} drop the reverse-index
+ * entry by the id captured at creation, independent of whether the webContents is
+ * still alive (a destroyed webContents' `id` is inaccessible), so the reverse
+ * index never orphans an entry on teardown. Populated in {@link createViewFor}.
+ */
+const tabToWcId = new Map<string, number>();
+/**
+ * Per-tab last committed top-level origin, for the navigation reset: a
+ * `did-navigate` to a DIFFERENT origin resets that tab's blocked count.
+ */
+const tabOrigin = new Map<string, string>();
+/**
+ * Coalescing timer for blocking-only broadcasts (a page loading many blocked
+ * resources must not flood the renderer). `null` when no push is pending.
+ */
+let blockingBroadcastTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** Coalescing window for {@link scheduleBlockingBroadcast}, in milliseconds. */
+const BLOCKING_BROADCAST_MS = 250;
+
+/**
+ * The Electron sessions for every profile partition (`persist:<profileId>`), the
+ * set the blocker attaches to. Derived from the store's profiles on each call so
+ * a newly created profile is covered the next time it runs.
+ */
+function profileSessions(): Electron.Session[] {
+  return store.profiles().map((p) => session.fromPartition("persist:" + p.id));
+}
+
+/**
+ * The full broadcast snapshot: the store snapshot plus the blocking slice, with
+ * `listVersion` read LIVE off the blocker so a background refresh's new version
+ * surfaces on the next push with no extra observation.
+ */
+function fullSnapshot(): TabsState {
+  return {
+    ...store.snapshot(),
+    blocking: { ...blocking, listVersion: blocker?.listVersion ?? blocking.listVersion },
+  };
+}
+
+/**
+ * Pushes the blocking-updated snapshot to the renderer, coalesced to at most one
+ * push per {@link BLOCKING_BROADCAST_MS}. Unlike {@link broadcast} this does NOT
+ * schedule a store save — a blocked request changes no persisted store state.
+ */
+function scheduleBlockingBroadcast(): void {
+  if (blockingBroadcastTimer !== null) {
+    return;
+  }
+  blockingBroadcastTimer = setTimeout(() => {
+    blockingBroadcastTimer = null;
+    win?.webContents.send(IPC.stateChange, fullSnapshot());
+  }, BLOCKING_BROADCAST_MS);
+}
+
+/**
+ * Subscribes to the blocker's blocked events: a hit in the reverse index
+ * attributes the block to that tab, a miss (a torn-down view or a non-tab
+ * renderer) is counted as unattributed so a wrong mapping is visible in tests.
+ */
+function wireOnBlocked(b: Blocker): void {
+  b.onBlocked(({ webContentsId }) => {
+    const tabId = webContentsToTab.get(webContentsId);
+    blocking =
+      tabId !== undefined
+        ? applyBlockedRequest(blocking, tabId)
+        : applyUnattributedBlock(blocking);
+    scheduleBlockingBroadcast();
+  });
+}
+
+/** Attaches the blocker to every profile session (idempotent per session). */
+function attachBlockerToAllSessions(b: Blocker): void {
+  for (const s of profileSessions()) {
+    b.attach(s);
+  }
+}
+
+/**
+ * The ordered set-enabled contract (PRD 5.1 §2): (1) no-op when the value is
+ * unchanged; (2) persist synchronously — a throw propagates with nothing else
+ * changed; (3) attach/detach every profile session, reverting the sessions
+ * already changed AND the persisted value on any throw; (4) update the in-memory
+ * flag and broadcast. attach/detach are idempotent, so the revert is safe. When
+ * `blocker` is null during the startup cap window the session loop is a no-op but
+ * the flag still flips; the cap race's `then` then attaches per `blocking.enabled`.
+ */
+async function setBlockingEnabled(enabled: boolean): Promise<void> {
+  // Reachable from the renderer over IPC.blockingSetEnabled with an untrusted
+  // payload: reject a non-boolean BEFORE any persistence or state change so a
+  // malformed payload can never persist/broadcast a non-boolean. The IPC handler
+  // returns this promise, so the rejection surfaces to the renderer's invoke.
+  if (typeof enabled !== "boolean") {
+    throw new TypeError("blocking.setEnabled expects a boolean");
+  }
+  if (enabled === blocking.enabled) {
+    return;
+  }
+  writeBlockingEnabled(enabled);
+  const sessions = profileSessions();
+  const done: Electron.Session[] = [];
+  try {
+    for (const s of sessions) {
+      if (blocker) {
+        if (enabled) {
+          blocker.attach(s);
+        } else {
+          blocker.detach(s);
+        }
+      }
+      done.push(s);
+    }
+  } catch (err) {
+    for (const s of done) {
+      if (blocker) {
+        if (enabled) {
+          blocker.detach(s);
+        } else {
+          blocker.attach(s);
+        }
+      }
+    }
+    writeBlockingEnabled(blocking.enabled);
+    throw err;
+  }
+  blocking = { ...blocking, enabled };
+  broadcast();
+}
+
 /** Bounds of the tab web-view region: everything right of the sidebar. */
 function viewBounds(): Electron.Rectangle {
   if (win === null) {
@@ -173,6 +332,12 @@ function createViewFor(tab: Tab, spaceId: string, urlOverride?: string): void {
     webPreferences: { partition: "persist:" + store.spaceProfileId(spaceId) },
   });
   views.set(tab.id, { view, spaceId });
+  // Reverse index for blocked-request attribution: this view's webContents id
+  // maps to its tab. Removed in destroyView. The parallel forward index records
+  // the same id keyed by tab so teardown can drop the reverse entry even after
+  // the webContents is destroyed (its id would then be inaccessible).
+  webContentsToTab.set(view.webContents.id, tab.id);
+  tabToWcId.set(tab.id, view.webContents.id);
   win.contentView.addChildView(view);
   view.setBounds(viewBounds());
   view.setVisible(false);
@@ -209,6 +374,24 @@ function createViewFor(tab: Tab, spaceId: string, urlOverride?: string): void {
   };
   view.webContents.on("did-navigate", onDidNavigate);
   view.webContents.on("did-navigate-in-page", onDidNavigate);
+
+  // Blocked-count reset on a TOP-LEVEL navigation to a DIFFERENT origin (never
+  // did-navigate-in-page, an in-document hash/pushState change). The per-tab
+  // count is scoped to "since the tab was created or last navigated to a new
+  // origin", so crossing origins clears it.
+  view.webContents.on("did-navigate", (_event, url) => {
+    let origin: string;
+    try {
+      origin = new URL(url).origin;
+    } catch {
+      return; // Unparseable url (e.g. about:blank): leave the count as-is.
+    }
+    if (tabOrigin.get(tab.id) !== origin) {
+      blocking = resetBlockedCount(blocking, tab.id);
+      scheduleBlockingBroadcast();
+      tabOrigin.set(tab.id, origin);
+    }
+  });
 
   // History flags (canGoBack/canGoForward) settle only after a load finishes, so
   // refresh the menu and the open bar's command enablement then. The
@@ -368,6 +551,11 @@ const commandHandlers: Record<CommandId, () => void> = {
     win?.webContents.send(IPC.spaceMenuAction, { action: "rename", spaceId: store.activeSpaceId }),
   "space.delete": () => deleteSpace(store.activeSpaceId),
   "bar.open-location": () => openCommandBar("navigate"),
+  "blocking.toggle": () => {
+    setBlockingEnabled(!blocking.enabled).catch((err) => {
+      console.error("[blocking] toggle failed:", err);
+    });
+  },
 };
 
 /**
@@ -705,6 +893,9 @@ function acceptCommandBar(index?: number, revision?: number): void {
 function closeTab(id: string): void {
   // A thrown Error (e.g. unknown id) propagates out to the caller.
   store.close(id);
+  // Real tab removal: drop the blocked count and the origin marker for good.
+  blocking = dropBlockedTab(blocking, id);
+  tabOrigin.delete(id);
   destroyView(id);
   // MRU re-activation may land on a not-yet-materialized restored sibling tab,
   // so ensure its view exists before showing it (lazy restore).
@@ -721,6 +912,9 @@ function closeTab(id: string): void {
 function removeTab(id: string): void {
   // A thrown Error (e.g. unknown id) propagates out to the caller.
   store.remove(id);
+  // Real tab removal: drop the blocked count and the origin marker for good.
+  blocking = dropBlockedTab(blocking, id);
+  tabOrigin.delete(id);
   destroyView(id);
   // MRU re-activation may land on a not-yet-materialized restored sibling tab,
   // so ensure its view exists before showing it (lazy restore).
@@ -733,6 +927,16 @@ function destroyView(id: string): void {
   const tracked = views.get(id);
   if (tracked !== undefined) {
     win?.contentView.removeChildView(tracked.view);
+    // Drop the reverse-index entry via the forward index, so the entry is removed
+    // even when the webContents is already destroyed (its `id` would then be
+    // inaccessible). NOT the blocked COUNT: a remap or activate-retry recreates
+    // the same tab, so the count survives a view teardown and is dropped only on
+    // real tab removal (close/remove/delete).
+    const wcId = tabToWcId.get(id);
+    if (wcId !== undefined) {
+      webContentsToTab.delete(wcId);
+    }
+    tabToWcId.delete(id);
     if (!tracked.view.webContents.isDestroyed()) {
       tracked.view.webContents.close();
     }
@@ -783,6 +987,11 @@ function deleteSpace(id: string): void {
 
   const wasActive = store.activeSpaceId === id;
 
+  // Every tab id the delete will remove (open + archived) — captured BEFORE the
+  // store drops the space — so their blocked counts and origin markers can be
+  // dropped for good, mirroring closeTab/removeTab.
+  const removedTabIds = store.tabsOfSpace(id).map((t) => t.id);
+
   // Destroy every view owned by the space (open and archived). Snapshot the
   // entries first: destroyView mutates `views` as it goes.
   for (const [tabId, tracked] of [...views]) {
@@ -792,6 +1001,11 @@ function deleteSpace(id: string): void {
   }
 
   store.deleteSpace(id);
+
+  for (const tabId of removedTabIds) {
+    blocking = dropBlockedTab(blocking, tabId);
+    tabOrigin.delete(tabId);
+  }
 
   if (wasActive) {
     // The store activated a surviving space; materialize its active tab's view
@@ -817,6 +1031,12 @@ function remapSpaceProfile(spaceId: string, profileId: string): void {
   }
 
   store.setSpaceProfile(spaceId, profileId);
+
+  // The recreated views below load on the NEW partition; attach the blocker to
+  // it so they are filtered from their first request (enabled + engine loaded).
+  if (blocking.enabled && blocker) {
+    blocker.attach(session.fromPartition("persist:" + profileId));
+  }
 
   // Capture the exact tab ids whose views are on the OLD partition, from the LIVE
   // views map filtered by owning space — NOT from tabsOfSpace, which would
@@ -873,7 +1093,7 @@ function setActive(id: string | null): void {
 
 /** Pushes the current store snapshot to the renderer, then schedules a save. */
 function broadcast(): void {
-  win?.webContents.send(IPC.stateChange, store.snapshot());
+  win?.webContents.send(IPC.stateChange, fullSnapshot());
   scheduleSave(store);
   // Every active-tab/active-space/store change can change command enablement and
   // the pin/unpin menu label, so refresh the menu (and the open bar) here.
@@ -1223,7 +1443,7 @@ ipcMain.handle(IPC.tabsActivate, (_event, id: string): void => {
   activateTab(id);
 });
 
-ipcMain.handle(IPC.tabsList, (): TabsState => store.snapshot());
+ipcMain.handle(IPC.tabsList, (): TabsState => fullSnapshot());
 
 // pin/unpin/reorder only change ordering — no view create/destroy and no active
 // change, so broadcast() alone suffices. A thrown Error (unknown id, archived,
@@ -1317,6 +1537,16 @@ ipcMain.handle(IPC.commandsRun, (_event, id: CommandId): void => {
   executeCommand(id);
 });
 
+// --- Content blocking ---------------------------------------------------------
+// setEnabled runs the ordered set-enabled contract (persist → attach/detach →
+// broadcast) and rejects the invoke on a persistence/session failure; state()
+// reads back the live blocking slice (listVersion derived off the blocker).
+ipcMain.handle(IPC.blockingSetEnabled, (_event, enabled: boolean): Promise<void> =>
+  setBlockingEnabled(enabled),
+);
+
+ipcMain.handle(IPC.blockingState, (): BlockingState => fullSnapshot().blocking);
+
 // --- Space commands -----------------------------------------------------------
 // The renderer's single UI bridge drives these; tab WebContentsViews have no
 // bridge and cannot dispatch. A thrown Error (unknown/last space) propagates out
@@ -1352,6 +1582,11 @@ ipcMain.handle(IPC.spacesSetProfile, (_event, spaceId: string, profileId: string
 
 ipcMain.handle(IPC.profilesCreate, (_event, name: string): Profile => {
   const profile = store.createProfile(name);
+  // Cover the new partition so views created on it are filtered from their first
+  // request (only while blocking is enabled and the engine has loaded).
+  if (blocking.enabled && blocker) {
+    blocker.attach(session.fromPartition("persist:" + profile.id));
+  }
   broadcast();
   return profile;
 });
@@ -1473,7 +1708,7 @@ function buildMenu(): void {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   // Restore from disk if a prior session was persisted; otherwise start empty and
   // let createWindow seed the first tab.
   const restored = loadStore();
@@ -1485,6 +1720,112 @@ app.whenReady().then(() => {
     // every open tab's lastActiveAt so the most-recently-active one sits at now.
     store.rebaseActivity(Date.now());
   }
+
+  // --- Content-blocking startup gate (PRD 5.1 §3) --------------------------
+  // The ENTIRE startup is wrapped so ANY failure — a bad ZEO_ADBLOCK_FILTERS
+  // path (readFileSync throws ENOENT), a cache/engine load error, a session
+  // attach failure — degrades gracefully to "blocking off" rather than aborting
+  // the whenReady handler before the window is ever created. buildMenu() and
+  // createWindow(...) below ALWAYS run afterward. `blocking` is left seeded so
+  // fullSnapshot() never dereferences undefined.
+  try {
+    // Read the persisted enabled flag (needs the store's open db handle) and seed
+    // the blocking slice before any window or tab view exists.
+    const enabled = readBlockingEnabled();
+    blocking = initialBlockingState(enabled, "none");
+
+    const filtersFile = process.env.ZEO_ADBLOCK_FILTERS;
+    if (filtersFile !== undefined && filtersFile !== "") {
+      // Test/e2e hook, checked FIRST: build the engine from a fixture list only —
+      // no cache read/write, no remote fetch, no daily refresh. It is a test hook,
+      // so a bad path must degrade gracefully (logged in the catch) not brick the
+      // app.
+      const text = readFileSync(filtersFile, "utf8");
+      blocker = createBlockerFromFilters(text, "fixture:" + basename(filtersFile));
+    } else {
+      // Kick off the real engine load and race it against a 3 s cap. createBlocker's
+      // promise covers only the fast local step (cache or empty engine); if the cap
+      // wins the window opens with an empty engine (blocker stays null) and the
+      // loaded engine swaps in when it arrives.
+      const p = createBlocker({
+        cacheFile: join(app.getPath("userData"), "adblock-engine.bin"),
+        fetch,
+      });
+      const capped = await Promise.race([
+        p.then((b) => ({ won: true as const, blocker: b })),
+        new Promise<{ won: false }>((resolve) =>
+          setTimeout(() => resolve({ won: false }), 3000),
+        ),
+      ]);
+      if (capped.won) {
+        blocker = capped.blocker;
+      } else {
+        // Cap won the race: leave blocker null (empty engine) for now and swap in
+        // the loaded engine when it arrives, attaching + wiring like the cap-winner
+        // path below.
+        void p
+          .then((b) => {
+            blocker = b;
+            if (blocking.enabled) {
+              attachBlockerToAllSessions(b);
+            }
+            wireOnBlocked(b);
+            scheduleBlockingBroadcast();
+          })
+          .catch(() => {});
+      }
+      // Refresh once a day while running. createBlocker already starts ONE
+      // background refresh on startup (§1), so this interval covers only the
+      // recurring "once a day" case. Because fullSnapshot derives listVersion LIVE
+      // off the blocker, the startup refresh's (and each daily refresh's) new
+      // version surfaces on the next push with no extra observation — so main does
+      // not separately gate on cache age (an intentional simplification vs. §3's
+      // "on launch when the cache is older than a day").
+      setInterval(
+        () => {
+          // Skip the recurring refresh while blocking is disabled: a user who
+          // turned content blocking off must not trigger a remote filter-list
+          // download every 24h.
+          if (!blocking.enabled) {
+            return;
+          }
+          blocker
+            ?.refresh()
+            .then((ok) => {
+              if (ok) {
+                scheduleBlockingBroadcast();
+              }
+            })
+            .catch(() => {});
+        },
+        24 * 60 * 60 * 1000,
+      );
+    }
+    // After the blocker is set (fixture or cap-winner) attach it to every existing
+    // profile session when enabled, and wire the blocked-event listener. In the
+    // cap-lost case blocker is still null here; its p.then above does both.
+    if (enabled && blocker) {
+      attachBlockerToAllSessions(blocker);
+    }
+    if (blocker) {
+      wireOnBlocked(blocker);
+    }
+  } catch (err) {
+    console.error("[blocking] startup failed; continuing without content blocking:", err);
+    // Detach any sessions attached before the failure so no session hook is
+    // left pointing at a blocker we are about to drop the reference to (a
+    // partial attachBlockerToAllSessions above could leave some attached).
+    if (blocker) {
+      for (const s of blocker.attachedSessions()) {
+        blocker.detach(s);
+      }
+    }
+    blocker = null;
+    // Keep the blocking slice seeded to a sane value even when readBlockingEnabled
+    // threw before it was set above, so fullSnapshot() never dereferences undefined.
+    blocking = initialBlockingState(blocking.enabled, "none");
+  }
+
   buildMenu();
   createWindow(!restoredFromDisk);
   // Skip the launch sweep on a restored session: its tabs' persisted

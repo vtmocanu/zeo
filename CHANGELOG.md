@@ -9,6 +9,23 @@ milestone, a minor bump only for very large breakthroughs.
 
 ## [Unreleased]
 
+## [0.0.12] - 2026-09-02
+
+### Added
+
+- Built-in content blocking over uBlock Origin's ad and tracking filter lists,
+  in a new `@zeo/adblock` engine attached to every profile's browsing session.
+  The engine is cached under the app's data directory, so the second launch
+  starts blocking immediately with no network, and it refreshes the lists in the
+  background; the recurring daily list refresh is skipped while blocking is
+  turned off.
+- Per-tab blocked-request counts: each sidebar tab row shows a small shield with
+  the number of requests blocked since the tab last navigated to a new site; the
+  shield dims when blocking is turned off.
+- A "Toggle Content Blocking" command (searchable in the command bar under
+  "ads", "tracking", or "adblock", and in the View menu) turns blocking on and
+  off instantly, without a relaunch. The setting persists across launches.
+
 ## [0.0.11] - 2026-09-02
 
 ### Added

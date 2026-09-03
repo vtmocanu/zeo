@@ -19,6 +19,7 @@ export type {
 } from "./persistence.js";
 export type {
   TabsState,
+  StoreSnapshot,
   TabsSlice,
   SpacesState,
   TabsApi,
@@ -26,6 +27,7 @@ export type {
   ProfilesApi,
   CommandBarApi,
   CommandsApi,
+  BlockingApi,
   ZeoApi,
   TabContextMenuItem,
   TabContextMenuResult,
@@ -34,6 +36,14 @@ export type {
   SpaceMenuAction,
 } from "./ipc.js";
 export { IPC } from "./ipc.js";
+export type { BlockingState } from "./blocking.js";
+export {
+  applyBlockedRequest,
+  applyUnattributedBlock,
+  resetBlockedCount,
+  dropBlockedTab,
+  initialBlockingState,
+} from "./blocking.js";
 export { COMMANDS, isCommandEnabled, menuEntries, formatAccelerator } from "./commands.js";
 export type { CommandId, CommandDescriptor, CommandContext, MenuEntry } from "./commands.js";
 export { resolveInput, DEFAULT_SEARCH_ENGINE } from "./resolve-input.js";

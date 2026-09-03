@@ -604,7 +604,16 @@ test.describe("zeo desktop app", () => {
     // has no explicit spot-checks after it, unlike the Tabs test.
     expect(viewCommands.length).toBeGreaterThan(0);
     for (const command of viewCommands) {
-      expect(accelerators[command.title]).toBe(command.accelerator ?? undefined);
+      // Each registry View command must actually appear in the native View menu
+      // (guards e.g. blocking.toggle being reachable from the menu per PRD 5.1
+      // §4); without this a null-accelerator command absent from the menu would
+      // pass the accelerator check vacuously (undefined === undefined).
+      expect(command.title in accelerators).toBe(true);
+      // A command with no accelerator surfaces as `null` on the native MenuItem
+      // and as `null` in the registry; normalize both to `undefined` so a
+      // no-accelerator View command (e.g. blocking.toggle) matches, while
+      // accelerator-bearing commands still compare their exact string.
+      expect(accelerators[command.title] ?? undefined).toBe(command.accelerator ?? undefined);
     }
   });
 
