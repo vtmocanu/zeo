@@ -45,8 +45,8 @@ load_items
 
 while IFS=$'\t' read -r id title; do
   say "draft \"$title\": converting to an issue"
-  run gh api graphql -F itemId="$id" -F repositoryId="$REPO_ID" -F title="$title" \
-    -f query='mutation($itemId:ID!,$repositoryId:ID!,$title:String!){convertProjectV2DraftIssueItemToIssue(input:{itemId:$itemId,repositoryId:$repositoryId,title:$title}){item{id}}}'
+  run gh api graphql -F itemId="$id" -F repositoryId="$REPO_ID" \
+    -f query='mutation($itemId:ID!,$repositoryId:ID!){convertProjectV2DraftIssueItemToIssue(input:{itemId:$itemId,repositoryId:$repositoryId}){item{id}}}'
 done < <(jq -r '.items[] | select(.content.type=="DraftIssue") | [.id, .title] | @tsv' <<<"$items_json")
 [ "$DRY_RUN" = "1" ] || load_items
 
