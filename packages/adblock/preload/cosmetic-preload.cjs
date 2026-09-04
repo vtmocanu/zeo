@@ -14,7 +14,11 @@ const INJECT = "@ghostery/adblocker/inject-cosmetic-filters";
 const MUTATION = "@ghostery/adblocker/is-mutation-observer-enabled";
 
 if (window.location.href.startsWith("devtools://") === false) {
-  const send = (data) => ipcRenderer.invoke(INJECT, window.location.href, data);
+  // Swallow send rejections: a deferred or mutation-driven invoke can reject
+  // after the INJECT handler is removed by dispose() or when a frame op fails,
+  // and an unhandled rejection would otherwise surface as a console error.
+  const send = (data) =>
+    ipcRenderer.invoke(INJECT, window.location.href, data).catch(() => {});
 
   // First call: url only (the wrapper treats a missing message as the first run).
   // Wait until <html> exists before sending: at document-start in a cross-origin
