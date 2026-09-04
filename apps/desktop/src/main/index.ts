@@ -345,7 +345,18 @@ function createViewFor(tab: Tab, spaceId: string, urlOverride?: string): void {
     return;
   }
   const view = new WebContentsView({
-    webPreferences: { partition: "persist:" + store.spaceProfileId(spaceId) },
+    webPreferences: {
+      partition: "persist:" + store.spaceProfileId(spaceId),
+      // Run the adblock cosmetic frame preload in cross-origin child frames too:
+      // Electron only lets a child frame send IPC (the preload's
+      // inject-cosmetic-filters invoke) when nodeIntegrationInSubFrames is
+      // enabled, so without this an iframe's ads are never hidden (PRD 5.3). This
+      // does NOT weaken isolation — sandbox and contextIsolation keep their secure
+      // defaults, so page scripts still get nothing; it only lets the isolated
+      // preload run and invoke in subframes, and the wrapper validates
+      // event.senderFrame on every message.
+      nodeIntegrationInSubFrames: true,
+    },
   });
   views.set(tab.id, { view, spaceId });
   // Reverse index for blocked-request attribution: this view's webContents id

@@ -617,13 +617,25 @@ const COSMETIC_FILTER =
   ["##.zeo-ad-slot", "/csp.html$csp=script-src 'none'", "localhost##+js(zeo-mark)"].join("\n") +
   "\n";
 
-// The library resources.txt payload defining the `zeo-mark` scriptlet: a header
-// line `name type`, then the body, blocks separated by a blank line. main hands
-// this to createBlockerFromFilters via ZEO_ADBLOCK_RESOURCES so `##+js(zeo-mark)`
-// resolves. The body stamps a dataset marker on <html> so a frame can prove the
-// scriptlet executed in it.
-const COSMETIC_RESOURCES =
-  'zeo-mark.js application/javascript\n(function() { document.documentElement.dataset.zeoScriptlet = "ran"; })();\n';
+// The library resources payload defining the `zeo-mark` scriptlet, in the JSON
+// distribution shape `updateResources` (Resources.parse -> JSON.parse) expects:
+// `{ scriptlets: [{ name, aliases, body, dependencies }], redirects: [] }`. main
+// hands this to createBlockerFromFilters via ZEO_ADBLOCK_RESOURCES so
+// `##+js(zeo-mark)` resolves (looked up as `zeo-mark.js`). The body must be a
+// FUNCTION expression: the engine assembles it as `(body)(...args)`, so a bare
+// statement would be a runtime syntax error. It stamps a dataset marker on
+// <html> so a frame can prove the scriptlet executed in it.
+const COSMETIC_RESOURCES = JSON.stringify({
+  scriptlets: [
+    {
+      name: "zeo-mark.js",
+      aliases: [],
+      body: 'function() { document.documentElement.dataset.zeoScriptlet = "ran"; }',
+      dependencies: [],
+    },
+  ],
+  redirects: [],
+});
 
 /** A running dual-name (127.0.0.1 + localhost) fixture server for PRD 5.3 pages. */
 interface CosmeticFixtureServer {
@@ -1009,14 +1021,20 @@ test.describe("PRD 5.3 CSP + cosmetic filtering (offline)", () => {
       const child = await childCosmeticFrame(page);
 
       // Child (localhost): ad slot hidden AND the localhost-scoped scriptlet ran.
+      // A cross-origin child is an out-of-process iframe, so its preload load, its
+      // IPC round trip, and the cross-process executeJavaScript that runs the
+      // scriptlet are slower than a same-process top frame — give the two polls a
+      // generous budget so a cold start does not make this case flaky.
       await expect
         .poll(() => adSlotDisplay(child), {
           message: "expected the child frame ad slot to be hidden",
+          timeout: 20_000,
         })
         .toBe("none");
       await expect
         .poll(() => scriptletRan(child), {
           message: "expected the scriptlet to run in the localhost child",
+          timeout: 20_000,
         })
         .toBe(true);
 

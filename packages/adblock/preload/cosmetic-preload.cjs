@@ -16,8 +16,26 @@ const MUTATION = "@ghostery/adblocker/is-mutation-observer-enabled";
 if (window.location.href.startsWith("devtools://") === false) {
   const send = (data) => ipcRenderer.invoke(INJECT, window.location.href, data);
 
-  // First call: url only. The wrapper treats a missing message as the first run.
-  send();
+  // First call: url only (the wrapper treats a missing message as the first run).
+  // Wait until <html> exists before sending: at document-start in a cross-origin
+  // child frame the invoke can otherwise reach main and run scriptlets before the
+  // parser has created `document.documentElement`, and a scriptlet that touches
+  // it would throw against null. Once created, documentElement never disappears,
+  // so sending after it exists is safe and still early.
+  const sendFirst = () => {
+    if (document.documentElement) {
+      send();
+      return;
+    }
+    const observer = new MutationObserver(() => {
+      if (document.documentElement) {
+        observer.disconnect();
+        send();
+      }
+    });
+    observer.observe(document, { childList: true });
+  };
+  sendFirst();
 
   window.addEventListener(
     "DOMContentLoaded",

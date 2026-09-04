@@ -619,8 +619,15 @@ class BlockerImpl implements Blocker {
     }
 
     for (const script of scripts) {
-      // One argument only, so a scriptlet cannot reach gesture-gated APIs.
-      await frame.executeJavaScript(script);
+      // One argument only, so a scriptlet cannot reach gesture-gated APIs. A
+      // scriptlet that throws must not reject the handler (which would surface as
+      // a rejected invoke in the sending frame and skip the remaining scriptlets),
+      // so each runs in its own try/catch, matching the library.
+      try {
+        await frame.executeJavaScript(script);
+      } catch (err) {
+        console.error("[adblock] cosmetic scriptlet failed:", err);
+      }
     }
   };
 
