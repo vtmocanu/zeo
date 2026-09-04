@@ -9,6 +9,20 @@ milestone, a minor bump only for very large breakthroughs.
 
 ## [Unreleased]
 
+## [0.0.14] - 2026-09-04
+
+### Added
+
+- Content blocking now applies two more filter-list layers on top of network
+  blocking: `$csp` rules inject a `Content-Security-Policy` response header (so a
+  filter can only tighten a site's policy, never loosen it), and cosmetic
+  filters hide ad elements and run scriptlets inside each browsing frame —
+  including cross-origin child frames, each filtered by its own URL. Sites whose
+  ads are hidden rather than network-blocked no longer show empty placeholder
+  slots, and anti-adblock scriptlets run. Both layers live in `@zeo/adblock`,
+  delegate to the current engine (so a list refresh needs no re-attach), and
+  turn off with the rest of content blocking.
+
 ## [0.0.13] - 2026-09-03
 
 ### Added
