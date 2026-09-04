@@ -129,7 +129,7 @@ function makeFakeSession(): { session: Session; state: SessionState } {
         state.headerRegistrations += 1;
       },
     },
-    registerPreloadScript(_registration: { type: string; filePath: string }): string {
+    registerPreloadScript(): string {
       if (state.registerThrows) {
         throw new Error("registerPreloadScript failed");
       }
@@ -137,7 +137,7 @@ function makeFakeSession(): { session: Session; state: SessionState } {
       state.preloadCount += 1;
       return String(state.nextId++);
     },
-    unregisterPreloadScript(_id: string): void {
+    unregisterPreloadScript(): void {
       state.unregisterCalls += 1;
       if (state.unregisterThrows) {
         // Throw before decrementing: a failed unregister keeps the script
@@ -157,10 +157,12 @@ function makeFakeSession(): { session: Session; state: SessionState } {
 function makeFakeIpc(): {
   ipc: BlockerIpc;
   // The listener shape is Electron's `ipcMain.handle` seam; `any` mirrors it.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- mirrors the BlockerIpc seam
   handlers: Map<string, (...args: any[]) => any>;
   stats: { handle: number; remove: number };
   invoke: (channel: string, ...args: unknown[]) => Promise<unknown>;
 } {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- mirrors the BlockerIpc seam
   const handlers = new Map<string, (...args: any[]) => any>();
   const stats = { handle: 0, remove: 0 };
   const ipc: BlockerIpc = {

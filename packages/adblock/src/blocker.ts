@@ -62,6 +62,7 @@ export interface BlockerIpc {
    * `ipcMain.handle(channel, (event, ...args) => ...)`, whose event/args types
    * are not visible through this seam and differ per channel.
    */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Electron ipcMain.handle seam (see above)
   handle(channel: string, listener: (...args: any[]) => any): void;
   /** Removes the handler for `channel` (mirrors `ipcMain.removeHandler`). */
   removeHandler(channel: string): void;
@@ -386,6 +387,7 @@ class BlockerImpl implements Blocker {
         ipc.handle(INJECT_CHANNEL, this.onInject);
         ipc.handle(MUTATION_CHANNEL, this.onMutation);
         this.ipc = ipc;
+        // eslint-disable-next-line @typescript-eslint/no-this-alias -- module-level registry of the single blocker holding the IPC handlers
         ipcHolder = this;
       }
 
