@@ -50,6 +50,15 @@ import { loadStore, scheduleSave, flush, readBlockingEnabled, writeBlockingEnabl
 // file's directory (out/preload/index.cjs, out/renderer/index.html).
 const moduleDir = dirname(fileURLToPath(import.meta.url));
 
+/**
+ * Absolute path to the cosmetic-filtering frame preload, shipped as a sibling of
+ * the main bundle (out/preload/cosmetic-preload.cjs, copied by
+ * scripts/copy-renderer.mjs). Passed to the blocker via `internals.preloadPath`;
+ * the wrapper registers it on each attached profile session. Resolved the same
+ * way as the renderer preload above.
+ */
+const cosmeticPreloadPath = join(moduleDir, "../preload/cosmetic-preload.cjs");
+
 /** Default url/title used by the renderer's URL-less new-tab button. */
 const DEFAULT_URL = "https://example.com";
 
@@ -1765,7 +1774,18 @@ app.whenReady().then(async () => {
       // so a bad path must degrade gracefully (logged in the catch) not brick the
       // app.
       const text = readFileSync(filtersFile, "utf8");
-      blocker = createBlockerFromFilters(text, "fixture:" + basename(filtersFile));
+      // ZEO_ADBLOCK_RESOURCES (fixture path only): scriptlet resource text in the
+      // library's resources format, applied to the parsed engine so fixture
+      // scriptlets (##+js(...)) resolve. Read only here, alongside the filters.
+      const resourcesFile = process.env.ZEO_ADBLOCK_RESOURCES;
+      const resources =
+        resourcesFile !== undefined && resourcesFile !== ""
+          ? readFileSync(resourcesFile, "utf8")
+          : undefined;
+      blocker = createBlockerFromFilters(text, "fixture:" + basename(filtersFile), {
+        preloadPath: cosmeticPreloadPath,
+        resources,
+      });
     } else {
       // Kick off the real engine load and race it against a 3 s cap. createBlocker's
       // promise covers only the fast local step (cache or empty engine); if the cap
@@ -1774,6 +1794,7 @@ app.whenReady().then(async () => {
       const p = createBlocker({
         cacheFile: join(app.getPath("userData"), "adblock-engine.bin"),
         fetch,
+        internals: { preloadPath: cosmeticPreloadPath },
       });
       const capped = await Promise.race([
         p.then((b) => ({ won: true as const, blocker: b })),
@@ -1840,8 +1861,13 @@ app.whenReady().then(async () => {
     // left pointing at a blocker we are about to drop the reference to (a
     // partial attachBlockerToAllSessions above could leave some attached).
     if (blocker) {
-      for (const s of blocker.attachedSessions()) {
-        blocker.detach(s);
+      // Terminal transition: dispose() detaches every session AND removes the
+      // wrapper's IPC handlers, so a replacement blocker (e.g. next launch) can
+      // take them. A thrown error is caught and logged once; startup continues.
+      try {
+        blocker.dispose();
+      } catch (disposeErr) {
+        console.error("[blocking] dispose during startup cleanup failed:", disposeErr);
       }
     }
     blocker = null;

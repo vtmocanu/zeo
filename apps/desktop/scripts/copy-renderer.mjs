@@ -18,3 +18,17 @@ if (!existsSync(uiDist)) {
 
 cpSync(uiDist, outRenderer, { recursive: true });
 console.log(`Copied renderer from ${uiDist} to ${outRenderer}`);
+
+// Also ship the @zeo/adblock cosmetic frame preload as a sibling of the main
+// bundle. electron-vite builds only main + the desktop renderer preload; this
+// library-owned preload (registered on profile sessions by the blocker) is a
+// plain .cjs asset, so copy it into out/preload where main resolves it.
+const cosmeticPreloadSrc = resolve(
+  desktopRoot, "..", "..", "packages", "adblock", "preload", "cosmetic-preload.cjs",
+);
+const cosmeticPreloadDest = resolve(desktopRoot, "out", "preload", "cosmetic-preload.cjs");
+if (!existsSync(cosmeticPreloadSrc)) {
+  throw new Error(`Cosmetic preload not found at ${cosmeticPreloadSrc}.`);
+}
+cpSync(cosmeticPreloadSrc, cosmeticPreloadDest);
+console.log(`Copied cosmetic preload from ${cosmeticPreloadSrc} to ${cosmeticPreloadDest}`);
