@@ -208,14 +208,12 @@ function makeFakeEvent(options: {
 }): {
   event: unknown;
   insertCSS: ReturnType<typeof vi.fn>;
-  removeInsertedCSS: ReturnType<typeof vi.fn>;
   frame: FakeFrame;
 } {
-  // Return a distinct non-empty key per call so the wrapper's dedup logic has a
-  // real key to track and later pass to removeInsertedCSS.
+  // Return a distinct non-empty key per call, mirroring Electron's insertCSS
+  // (which resolves a stylesheet key).
   let nextKey = 0;
   const insertCSS = vi.fn(() => Promise.resolve(`key-${(nextKey += 1)}`));
-  const removeInsertedCSS = vi.fn(() => Promise.resolve());
   const mainFrame: FakeFrame = {
     url: options.kind === "top" ? options.frameUrl : "https://top.example/",
     destroyed: false,
@@ -236,12 +234,12 @@ function makeFakeEvent(options: {
   frame.destroyed = options.destroyed ?? false;
   const senderFrame = options.senderFrameNull === true ? null : frame;
   const event = {
-    sender: { session: options.session, mainFrame, insertCSS, removeInsertedCSS },
+    sender: { session: options.session, mainFrame, insertCSS },
     senderFrame,
     frameId: 7,
     processId: 3,
   };
-  return { event, insertCSS, removeInsertedCSS, frame };
+  return { event, insertCSS, frame };
 }
 
 /**
@@ -1069,30 +1067,11 @@ describe("cosmetic IPC handlers", () => {
     expect(insertCSS).not.toHaveBeenCalled();
   });
 
-  test("identical top-frame CSS on a rescan is not inserted a second time", async () => {
-    const ipc = makeFakeIpc();
-    const blocker = makeCosmeticBlocker(ipc.ipc);
-    const { session } = attachSession(blocker);
-    const { event, insertCSS, removeInsertedCSS } = makeFakeEvent({
-      session,
-      frameUrl: PAGE_URL,
-      kind: "top",
-    });
-
-    // Two runs of the same host-scoped rule yield identical styles; the second
-    // is deduped, so no second sheet is inserted and the first is not removed.
-    await ipc.invoke(INJECT, event, PAGE_URL, undefined);
-    await ipc.invoke(INJECT, event, PAGE_URL, undefined);
-
-    expect(insertCSS).toHaveBeenCalledTimes(1);
-    expect(insertCSS).toHaveBeenCalledWith(HIDE_STYLES, { cssOrigin: "user" });
-    expect(removeInsertedCSS).not.toHaveBeenCalled();
-  });
-
-  test("changed top-frame CSS removes the previous sheet before inserting the new one", async () => {
-    // A host-scoped rule (first run) and a generic class rule (dom-update) yield
-    // different stylesheets, so the rescan must remove the first sheet by its
-    // key before inserting the second.
+  test("top-frame rescans keep the base sheet and dedupe identical dom-updates", async () => {
+    // Cosmetic injection is cumulative: the first run inserts the host-scoped
+    // base hide, and a dom-update inserts only its DOM-matched delta (never the
+    // base again). The base sheet must survive — the delta is layered on top,
+    // not swapped in — and repeating an identical dom-update inserts nothing new.
     const ipc = makeFakeIpc();
     const blocker = track(
       createBlockerFromFilters("example.com##.ad-slot\n##.some-class", "fixture", {
@@ -1101,14 +1080,17 @@ describe("cosmetic IPC handlers", () => {
       }),
     );
     const { session } = attachSession(blocker);
-    const { event, insertCSS, removeInsertedCSS } = makeFakeEvent({
-      session,
-      frameUrl: PAGE_URL,
-      kind: "top",
-    });
+    const { event, insertCSS } = makeFakeEvent({ session, frameUrl: PAGE_URL, kind: "top" });
 
+    // First run: base hide. Then the same dom-update twice: the delta once, the
+    // repeat deduped. The base is never removed, so it stays the first insert.
     await ipc.invoke(INJECT, event, PAGE_URL, undefined);
-    const firstKey = await insertCSS.mock.results[0]!.value;
+    await ipc.invoke(INJECT, event, PAGE_URL, {
+      classes: ["some-class"],
+      ids: [],
+      hrefs: [],
+      lifecycle: "dom-update",
+    });
     await ipc.invoke(INJECT, event, PAGE_URL, {
       classes: ["some-class"],
       ids: [],
@@ -1119,8 +1101,28 @@ describe("cosmetic IPC handlers", () => {
     expect(insertCSS).toHaveBeenCalledTimes(2);
     expect(insertCSS.mock.calls[0]![0]).toBe(HIDE_STYLES);
     expect(insertCSS.mock.calls[1]![0]).toBe(".some-class { display: none !important; }");
-    expect(removeInsertedCSS).toHaveBeenCalledTimes(1);
-    expect(removeInsertedCSS).toHaveBeenCalledWith(firstKey);
+    expect(insertCSS).toHaveBeenCalledWith(HIDE_STYLES, { cssOrigin: "user" });
+  });
+
+  test("a fresh page load resets the top-frame dedupe so the base sheet re-inserts", async () => {
+    // On navigation Electron clears the page's inserted sheets and the preload
+    // sends a new first run (no DOM message). That first run must re-insert the
+    // base hide even though the identical styles were inserted for the previous
+    // page on the same WebContents.
+    const ipc = makeFakeIpc();
+    const blocker = track(
+      createBlockerFromFilters(HIDE_FILTER, "fixture", { ipc: ipc.ipc, preloadPath: "p.cjs" }),
+    );
+    const { session } = attachSession(blocker);
+    const { event, insertCSS } = makeFakeEvent({ session, frameUrl: PAGE_URL, kind: "top" });
+
+    await ipc.invoke(INJECT, event, PAGE_URL, undefined);
+    // A second first run stands in for a reload of the same page/WebContents.
+    await ipc.invoke(INJECT, event, PAGE_URL, undefined);
+
+    expect(insertCSS).toHaveBeenCalledTimes(2);
+    expect(insertCSS.mock.calls[0]![0]).toBe(HIDE_STYLES);
+    expect(insertCSS.mock.calls[1]![0]).toBe(HIDE_STYLES);
   });
 
   test("an accepted sender's mutation query returns the engine's setting", async () => {

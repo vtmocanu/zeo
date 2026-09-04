@@ -111,8 +111,6 @@ interface CosmeticSender {
   readonly mainFrame: CosmeticFrame | null;
   /** Inserts a user-origin stylesheet into the top frame. */
   insertCSS(css: string, options?: { cssOrigin?: "user" | "author" }): Promise<string>;
-  /** Removes a previously inserted stylesheet by its returned key. */
-  removeInsertedCSS(key: string): Promise<void>;
 }
 
 /** The subset of an Electron IPC invoke event the cosmetic handlers read. */
@@ -291,12 +289,16 @@ class BlockerImpl implements Blocker {
   private readonly blockedListeners: Array<(event: BlockedEvent) => void> = [];
   private readonly internals: BlockerInternals;
   /**
-   * Per-sender record of the last top-frame stylesheet inserted via
-   * `insertCSS`, so a mutation-driven rescan returning identical CSS is not
-   * inserted again (Electron keeps each sheet until navigation or
-   * `removeInsertedCSS`). Keyed weakly by the sending WebContents.
+   * Per-sender set of the top-frame stylesheets inserted via `insertCSS` since
+   * the current page load, so a mutation-driven rescan returning an already
+   * inserted stylesheet is not applied again (Electron keeps each sheet until
+   * navigation, so a repeat would stack a duplicate). Cosmetic injection is
+   * cumulative — the first run inserts the base and hostname hides and each
+   * dom-update inserts only its DOM-matched delta — so sheets are only ever
+   * added, never removed, and the set is reset on each page's first run. Keyed
+   * weakly by the sending WebContents.
    */
-  private readonly insertedCss = new WeakMap<CosmeticSender, { css: string; key: string }>();
+  private readonly insertedCss = new WeakMap<CosmeticSender, Set<string>>();
   /** Absolute path of the frame preload registered on every attached session. */
   private readonly preloadPath: string;
   /** The resolved IPC seam, set on the first attach that registers handlers. */
@@ -619,17 +621,25 @@ class BlockerImpl implements Blocker {
 
     if (styles.length > 0) {
       if (frame === event.sender.mainFrame) {
-        // Electron keeps every inserted sheet until navigation, so a
-        // mutation-driven rescan returning identical CSS would stack duplicate
-        // sheets. Skip an unchanged rescan, and remove the previous sheet before
-        // inserting a changed one.
-        const prev = this.insertedCss.get(event.sender);
-        if (prev === undefined || prev.css !== styles) {
-          if (prev !== undefined) {
-            await event.sender.removeInsertedCSS(prev.key);
-          }
-          const key = await event.sender.insertCSS(styles, { cssOrigin: "user" });
-          this.insertedCss.set(event.sender, { css: styles, key });
+        // Cosmetic injection is cumulative: the first run inserts the base and
+        // hostname hides, and each later dom-update inserts only its DOM-matched
+        // delta — the base rules are never re-emitted. Electron keeps every
+        // inserted sheet until navigation, so re-inserting a stylesheet already
+        // applied to this page would stack a duplicate on a mutation-heavy page,
+        // but removing an earlier sheet would drop hides a dom-update does not
+        // re-send. So track the stylesheets inserted since this page loaded and
+        // skip only an exact repeat, never removing. The first run (no DOM
+        // message) marks a fresh page, so its set starts empty.
+        let inserted = this.insertedCss.get(event.sender);
+        if (isFirstRun || inserted === undefined) {
+          inserted = new Set();
+          this.insertedCss.set(event.sender, inserted);
+        }
+        if (!inserted.has(styles)) {
+          // Record before the await so two closely-spaced identical rescans
+          // cannot both pass the guard and double-insert.
+          inserted.add(styles);
+          await event.sender.insertCSS(styles, { cssOrigin: "user" });
         }
       } else {
         // Child frames have no insertCSS; append a single, reused <style>
