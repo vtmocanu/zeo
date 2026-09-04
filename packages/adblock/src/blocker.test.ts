@@ -1081,6 +1081,54 @@ describe("cosmetic IPC handlers", () => {
     expect(insertCSS).not.toHaveBeenCalled();
   });
 
+  test("a scriptlet whose executeJavaScript rejects does not reject the handler or skip the next scriptlet", async () => {
+    // Two host-scoped scriptlet rules so the engine yields two scripts for the
+    // accepted first-run sender; the first executeJavaScript rejects.
+    const TWO_SCRIPTLETS = ["example.com##+js(zeo-mark)", "example.com##+js(zeo-mark2)"].join("\n");
+    const TWO_RESOURCES = JSON.stringify({
+      scriptlets: [
+        {
+          name: "zeo-mark.js",
+          aliases: [],
+          body: "document.documentElement.dataset.zeoScriptlet = 'ran';",
+          dependencies: [],
+        },
+        {
+          name: "zeo-mark2.js",
+          aliases: [],
+          body: "document.documentElement.dataset.zeoScriptlet2 = 'ran';",
+          dependencies: [],
+        },
+      ],
+      redirects: [],
+    });
+    const ipc = makeFakeIpc();
+    const blocker = track(
+      createBlockerFromFilters(TWO_SCRIPTLETS, "fixture", {
+        ipc: ipc.ipc,
+        preloadPath: "p.cjs",
+        resources: TWO_RESOURCES,
+      }),
+    );
+    const { session } = attachSession(blocker);
+    const { event, frame } = makeFakeEvent({ session, frameUrl: PAGE_URL, kind: "top" });
+    // First scriptlet rejects, the rest resolve. The handler must catch the
+    // rejection per-scriptlet, so it resolves and still runs the second one.
+    frame.executeJavaScript = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("scriptlet boom"))
+      .mockResolvedValue(undefined);
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      // Resolves (not rejects) despite the first scriptlet throwing.
+      expect(await ipc.invoke(INJECT, event, PAGE_URL, undefined)).toBeUndefined();
+      // The second scriptlet still ran after the first threw.
+      expect(frame.executeJavaScript).toHaveBeenCalledTimes(2);
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
   test("after dispose the fake ipc holds no handlers", () => {
     const ipc = makeFakeIpc();
     const blocker = makeCosmeticBlocker(ipc.ipc);
