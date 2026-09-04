@@ -12,11 +12,22 @@
  * `enableBlockingInSession`, which binds a session's hooks to one specific
  * engine instance and would leave a session pointing at a stale engine after a
  * rebuild.
+ *
+ * Beyond network blocking (PRD 5.1) the wrapper also applies `$csp` rules (an
+ * `onHeadersReceived` hook that appends `Content-Security-Policy` directives)
+ * and cosmetic filters (element-hiding CSS and scriptlets pushed into each
+ * frame over the library's two IPC channels via a frame preload). All three
+ * layers read the *current* engine at call time, so a refresh keeps working
+ * with no re-attach. Session ownership and the IPC handlers are process-wide:
+ * at most one blocker owns a given session's hooks/preload and at most one
+ * holds the IPC handlers, so resources are handed over only after a
+ * {@link Blocker.dispose | dispose}, never shared between live blockers.
  */
-import { ElectronBlocker } from "@ghostery/adblocker-electron";
-import type { Request } from "@ghostery/adblocker-electron";
+import { ElectronBlocker, Request } from "@ghostery/adblocker-electron";
 import type { Session } from "electron";
 import { readFile, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
 
 /** A single request the engine blocked, mapped to zeo's attribution keys. */
 export interface BlockedEvent {
@@ -37,6 +48,100 @@ export interface BlockerFs {
   /** Writes the serialized engine `data` to `path`. */
   writeFile: (path: string, data: Uint8Array) => Promise<void>;
 }
+
+/**
+ * The Electron `ipcMain` seam the cosmetic channels are registered on, so the
+ * package's unit tests run under plain Vitest with a fake instead of a real
+ * Electron main process. Production resolves it lazily from `ipcMain` on the
+ * first attach (never at module load).
+ */
+export interface BlockerIpc {
+  /**
+   * Registers `listener` for `channel` (mirrors `ipcMain.handle`). The `any`
+   * here is justified: the listener shape is Electron's
+   * `ipcMain.handle(channel, (event, ...args) => ...)`, whose event/args types
+   * are not visible through this seam and differ per channel.
+   */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Electron ipcMain.handle seam (see above)
+  handle(channel: string, listener: (...args: any[]) => any): void;
+  /** Removes the handler for `channel` (mirrors `ipcMain.removeHandler`). */
+  removeHandler(channel: string): void;
+}
+
+/**
+ * The `inject-cosmetic-filters` message the preload sends after the first call:
+ * the DOM tokens observed in the frame plus a lifecycle marker. Absent on the
+ * first call per document (which carries only the url).
+ */
+interface CosmeticMessage {
+  /** Unique class tokens observed in the frame. */
+  classes?: string[];
+  /** Unique element ids observed in the frame. */
+  ids?: string[];
+  /** Unique anchor `href` attributes observed in the frame. */
+  hrefs?: string[];
+  /** `"start"` for the DOMContentLoaded scan, `"dom-update"` for mutations. */
+  lifecycle?: string;
+}
+
+/**
+ * The subset of an Electron `WebFrameMain` the cosmetic handlers touch. Defined
+ * as a seam (rather than reusing Electron's type) so unit tests pass plain
+ * fakes and so the destroyed check is a readable boolean field.
+ */
+interface CosmeticFrame {
+  /** The frame's current URL. */
+  readonly url: string;
+  /**
+   * Whether the frame has been destroyed. A method (not a property) to match
+   * Electron's real `WebFrameMain.isDestroyed()`; a plain `destroyed` field
+   * would read `undefined` (falsy) against a real event and never reject a
+   * genuinely destroyed frame.
+   */
+  isDestroyed(): boolean;
+  /** Runs `code` in the frame with no user-gesture flag. */
+  executeJavaScript(code: string): Promise<unknown>;
+}
+
+/** The subset of an Electron `WebContents` the cosmetic handlers touch. */
+interface CosmeticSender {
+  /** The session that issued the request; matched against the attached set. */
+  readonly session: Session;
+  /** The top frame, used to detect a top-frame sender for `insertCSS`. */
+  readonly mainFrame: CosmeticFrame | null;
+  /** Inserts a user-origin stylesheet into the top frame. */
+  insertCSS(css: string, options?: { cssOrigin?: "user" | "author" }): Promise<string>;
+}
+
+/** The subset of an Electron IPC invoke event the cosmetic handlers read. */
+interface CosmeticIpcEvent {
+  /** The web contents that sent the message. */
+  readonly sender: CosmeticSender;
+  /** The frame that sent the message; `null` after navigation/destruction. */
+  readonly senderFrame: CosmeticFrame | null;
+  /** The renderer frame id, forwarded to the engine as caller context. */
+  readonly frameId: number;
+  /** The renderer process id, forwarded to the engine as caller context. */
+  readonly processId: number;
+}
+
+/** The response headers shape the CSP callback reads and rewrites. */
+interface CspDetails {
+  /** The response's URL. */
+  readonly url: string;
+  /** The Electron resource type (e.g. `"mainFrame"`, `"subFrame"`, `"image"`). */
+  readonly resourceType: string;
+  /** The response status line, passed back through unchanged. */
+  readonly statusLine: string;
+  /** The response headers, keyed by name to a value array. */
+  readonly responseHeaders?: Record<string, string[]>;
+}
+
+/** The `onHeadersReceived` callback shape the CSP hook invokes. */
+type CspCallback = (response: {
+  responseHeaders?: Record<string, string[]>;
+  statusLine?: string;
+}) => void;
 
 /**
  * A long-lived content blocker. One instance lives for the whole app lifetime;
@@ -69,6 +174,14 @@ export interface Blocker {
    */
   refresh(): Promise<boolean>;
   /**
+   * Terminal transition: detaches every attached session (best-effort, first
+   * error rethrown at the end) then removes the wrapper's IPC handlers, so a
+   * detach failure can never leave a handler registered or block a replacement
+   * blocker's first attach. After `dispose`, {@link Blocker.attach | attach}
+   * throws and {@link Blocker.attachedSessions | attachedSessions} is empty.
+   */
+  dispose(): void;
+  /**
    * The active engine's origin: `"cache"`, `"remote"`, `"none"`, or a
    * `"fixture"`-prefixed value. Changes on a successful swap.
    */
@@ -87,6 +200,12 @@ interface BlockerInternals {
   cacheFile?: string;
   /** Filesystem seam used to persist the engine cache. */
   fs?: BlockerFs;
+  /** Electron `ipcMain` seam; resolved lazily from real `ipcMain` when absent. */
+  ipc?: BlockerIpc;
+  /** Path of the frame preload; defaults to the bundled `cosmetic-preload.cjs`. */
+  preloadPath?: string;
+  /** Scriptlet resource text applied to the engine with `updateResources`. */
+  resources?: string;
 }
 
 /** How long a remote engine build may run before a refresh is abandoned. */
@@ -98,6 +217,25 @@ const REFRESH_TIMEOUT_MS = 15_000;
  * exceeds this is refused before it is buffered.
  */
 const MAX_LIST_BYTES = 64 * 1024 * 1024;
+
+/**
+ * The library's two cosmetic IPC channels, hardcoded to match the preload. The
+ * preload invokes {@link INJECT_CHANNEL} to receive CSS/scriptlets and
+ * {@link MUTATION_CHANNEL} to learn whether to start a MutationObserver.
+ */
+const INJECT_CHANNEL = "@ghostery/adblocker/inject-cosmetic-filters";
+const MUTATION_CHANNEL = "@ghostery/adblocker/is-mutation-observer-enabled";
+
+/**
+ * Process-wide ownership shared across every blocker instance. `sessionOwners`
+ * records which blocker owns a session's hooks and preload; `ipcHolder` records
+ * which blocker holds the IPC handlers; `preloadRegistry` records the single
+ * preload id registered for each session's process lifetime, so a session
+ * carries at most one adblocker preload no matter how many blockers attach it.
+ */
+const sessionOwners = new Map<Session, BlockerImpl>();
+let ipcHolder: BlockerImpl | null = null;
+const preloadRegistry = new Map<Session, string>();
 
 /**
  * Races `promise` against a timer that rejects after `ms`. On timeout the shared
@@ -141,7 +279,8 @@ function guardedFetch(fetchImpl: typeof fetch, controller: AbortController): typ
  * and a single `bridge` is subscribed to the current engine's `request-blocked`
  * event, so a refresh only reassigns `this.engine`, moves the bridge, and
  * updates `listVersion` — no session re-registration and no caller
- * re-subscription.
+ * re-subscription. The CSP and cosmetic-injection callbacks likewise read
+ * `this.engine` at call time, so they follow a refresh with no re-attach.
  */
 class BlockerImpl implements Blocker {
   private engine: ElectronBlocker;
@@ -149,6 +288,23 @@ class BlockerImpl implements Blocker {
   private readonly attached = new Set<Session>();
   private readonly blockedListeners: Array<(event: BlockedEvent) => void> = [];
   private readonly internals: BlockerInternals;
+  /**
+   * Per-sender set of the top-frame stylesheets inserted via `insertCSS` since
+   * the current page load, so a mutation-driven rescan returning an already
+   * inserted stylesheet is not applied again (Electron keeps each sheet until
+   * navigation, so a repeat would stack a duplicate). Cosmetic injection is
+   * cumulative — the first run inserts the base and hostname hides and each
+   * dom-update inserts only its DOM-matched delta — so sheets are only ever
+   * added, never removed, and the set is reset on each page's first run. Keyed
+   * weakly by the sending WebContents.
+   */
+  private readonly insertedCss = new WeakMap<CosmeticSender, Set<string>>();
+  /** Absolute path of the frame preload registered on every attached session. */
+  private readonly preloadPath: string;
+  /** The resolved IPC seam, set on the first attach that registers handlers. */
+  private ipc: BlockerIpc | null = null;
+  /** Set by {@link BlockerImpl.dispose}; a disposed blocker refuses to attach. */
+  private disposed = false;
 
   /**
    * The stable bridge subscribed to the current engine's `request-blocked`
@@ -180,27 +336,180 @@ class BlockerImpl implements Blocker {
     this.engine = engine;
     this.listVersion = listVersion;
     this.internals = internals;
+    this.preloadPath =
+      internals.preloadPath ??
+      fileURLToPath(new URL("../preload/cosmetic-preload.cjs", import.meta.url));
     this.engine.on("request-blocked", this.bridge);
   }
 
-  /** Enables blocking on `session`; idempotent per session. */
+  /**
+   * Resolves the IPC seam: the injected one when present, otherwise lazily from
+   * Electron's `ipcMain`. Only invoked on the first attach, so under Vitest —
+   * which always injects `internals.ipc` — the `electron` require never runs.
+   */
+  private resolveIpc(): BlockerIpc {
+    if (this.internals.ipc !== undefined) {
+      return this.internals.ipc;
+    }
+    const { ipcMain } = createRequire(import.meta.url)("electron") as typeof import("electron");
+    return {
+      handle: (channel, listener) => ipcMain.handle(channel, listener),
+      removeHandler: (channel) => ipcMain.removeHandler(channel),
+    };
+  }
+
+  /**
+   * Enables blocking on `session`; idempotent per session. Registers, on an
+   * unattached session and in order: (0) ownership; (1) the IPC handlers on the
+   * blocker's first attach ever; (2) `onBeforeRequest`; (3) `onHeadersReceived`
+   * (the CSP hook); (4) the frame preload (once per session for the life of the
+   * process). Failure-atomic: if any step throws, the steps already done for
+   * this session are undone in reverse (the IPC handlers stay once registered)
+   * and the error is rethrown, so `attachedSessions()` never lists a session
+   * with partial hooks. The wrapper is the sole owner of `onBeforeRequest` and
+   * `onHeadersReceived` on every attached session.
+   */
   public attach(session: Electron.Session): void {
+    if (this.disposed) {
+      throw new Error("adblock: cannot attach a disposed blocker");
+    }
     if (this.attached.has(session)) {
       return;
     }
-    session.webRequest.onBeforeRequest({ urls: ["<all_urls>"] }, (details, callback) => {
-      this.engine.onBeforeRequest(details, callback);
-    });
-    this.attached.add(session);
+
+    // STEP 0: claim ownership before touching the session or the IPC seam, so a
+    // conflicting attach throws with nothing registered.
+    const owner = sessionOwners.get(session);
+    if (owner !== undefined && owner !== this) {
+      throw new Error("adblock: session is owned by another blocker");
+    }
+    if (ipcHolder !== null && ipcHolder !== this) {
+      throw new Error("adblock: IPC handlers are held by another blocker");
+    }
+    const tookOwnership = owner === undefined;
+    sessionOwners.set(session, this);
+
+    const undo: Array<() => void> = [];
+    try {
+      // STEP 1: register the IPC handlers on the first attach ever. They stay
+      // registered for the blocker's lifetime, so there is no undo entry.
+      if (ipcHolder === null) {
+        const ipc = this.resolveIpc();
+        ipc.handle(INJECT_CHANNEL, this.onInject);
+        ipc.handle(MUTATION_CHANNEL, this.onMutation);
+        this.ipc = ipc;
+        // eslint-disable-next-line @typescript-eslint/no-this-alias -- module-level registry of the single blocker holding the IPC handlers
+        ipcHolder = this;
+      }
+
+      // STEP 2: network blocking, delegating to the current engine.
+      session.webRequest.onBeforeRequest({ urls: ["<all_urls>"] }, (details, callback) => {
+        this.engine.onBeforeRequest(details, callback);
+      });
+      undo.push(() => session.webRequest.onBeforeRequest(null));
+
+      // STEP 3: CSP injection.
+      session.webRequest.onHeadersReceived({ urls: ["<all_urls>"] }, this.onHeadersReceived);
+      undo.push(() => session.webRequest.onHeadersReceived(null));
+
+      // STEP 4: the frame preload, registered at most once per session process.
+      if (!preloadRegistry.has(session)) {
+        const id = session.registerPreloadScript({ type: "frame", filePath: this.preloadPath });
+        preloadRegistry.set(session, id);
+        undo.push(() => {
+          session.unregisterPreloadScript(id);
+          preloadRegistry.delete(session);
+        });
+      }
+
+      // STEP 5: the session is now fully attached.
+      this.attached.add(session);
+    } catch (err) {
+      for (let i = undo.length - 1; i >= 0; i -= 1) {
+        try {
+          undo[i]!();
+        } catch {
+          // Best-effort rollback: swallow so the original error surfaces.
+        }
+      }
+      if (tookOwnership) {
+        sessionOwners.delete(session);
+      }
+      throw err;
+    }
   }
 
-  /** Disables blocking on `session`; idempotent. */
+  /**
+   * Disables blocking on `session`; idempotent. Removes exactly what attach
+   * installed, in reverse order, best-effort: every removal is attempted even
+   * when an earlier one throws, the session leaves the attached set and
+   * ownership either way, and the first error is rethrown at the end. A failed
+   * preload unregister keeps the registry entry so the preload is reused rather
+   * than duplicated by the next attach of that session.
+   */
   public detach(session: Electron.Session): void {
     if (!this.attached.has(session)) {
       return;
     }
-    session.webRequest.onBeforeRequest(null);
+    let firstErr: unknown;
+    try {
+      const id = preloadRegistry.get(session);
+      if (id !== undefined) {
+        // A throwing unregister must NOT delete the registry entry: keeping it
+        // makes the next attach reuse the id instead of duplicating the preload.
+        session.unregisterPreloadScript(id);
+        preloadRegistry.delete(session);
+      }
+    } catch (e) {
+      firstErr ??= e;
+    }
+    try {
+      session.webRequest.onHeadersReceived(null);
+    } catch (e) {
+      firstErr ??= e;
+    }
+    try {
+      session.webRequest.onBeforeRequest(null);
+    } catch (e) {
+      firstErr ??= e;
+    }
     this.attached.delete(session);
+    sessionOwners.delete(session);
+    if (firstErr !== undefined) {
+      throw firstErr;
+    }
+  }
+
+  /**
+   * Terminal transition; see {@link Blocker.dispose}. Every step is attempted
+   * even when an earlier one throws, and the first error is rethrown at the end.
+   */
+  public dispose(): void {
+    let firstErr: unknown;
+    for (const s of [...this.attached]) {
+      try {
+        this.detach(s);
+      } catch (e) {
+        firstErr ??= e;
+      }
+    }
+    if (ipcHolder === this) {
+      try {
+        this.ipc?.removeHandler(INJECT_CHANNEL);
+      } catch (e) {
+        firstErr ??= e;
+      }
+      try {
+        this.ipc?.removeHandler(MUTATION_CHANNEL);
+      } catch (e) {
+        firstErr ??= e;
+      }
+      ipcHolder = null;
+    }
+    this.disposed = true;
+    if (firstErr !== undefined) {
+      throw firstErr;
+    }
   }
 
   /** The sessions currently attached, in insertion order. */
@@ -221,6 +530,152 @@ class BlockerImpl implements Blocker {
       }
     };
   }
+
+  /**
+   * The CSP hook, a stable field reading the current engine at call time. For a
+   * `mainFrame`/`subFrame` response it asks the engine for
+   * `getCSPDirectives(request)` and, when directives are returned, appends them
+   * as one additional value to the response's `Content-Security-Policy` header
+   * array (creating the header when absent), leaving every other header —
+   * including `Content-Security-Policy-Report-Only` and existing CSP values —
+   * untouched. Any other resource type, or a frame response with no directives,
+   * passes the original headers and status line straight through.
+   */
+  private readonly onHeadersReceived = (details: CspDetails, callback: CspCallback): void => {
+    if (details.resourceType === "mainFrame" || details.resourceType === "subFrame") {
+      // Both frame types are queried as a `main_frame` request: the library's
+      // `getCSPDirectives` gates on `request.isMainFrame()` and returns
+      // `undefined` for a `sub_frame` request, so a subframe is normalized to a
+      // main-frame request to be "treated like a main frame" — otherwise a
+      // `$csp` rule would never reach any subframe document response.
+      const directives = this.engine.getCSPDirectives(
+        Request.fromRawDetails({ url: details.url, type: "main_frame" }),
+      );
+      if (directives !== undefined) {
+        const headers: Record<string, string[]> = { ...(details.responseHeaders ?? {}) };
+        const existingKey = Object.keys(headers).find(
+          (name) => name.toLowerCase() === "content-security-policy",
+        );
+        if (existingKey !== undefined) {
+          headers[existingKey] = [...headers[existingKey]!, directives];
+        } else {
+          headers["Content-Security-Policy"] = [directives];
+        }
+        callback({ responseHeaders: headers, statusLine: details.statusLine });
+        return;
+      }
+    }
+    // Non-frame response, or no matching directives: pass the original headers
+    // and status line through unchanged, never an empty object.
+    callback({ responseHeaders: details.responseHeaders, statusLine: details.statusLine });
+  };
+
+  /**
+   * The `inject-cosmetic-filters` handler, a stable field reading the current
+   * engine at call time. Validates the sender, asks the engine for the frame's
+   * cosmetic filters, and injects styles (top frame via `insertCSS`, child
+   * frame via a `<style data-zeo-cosmetic>` element) plus each scriptlet through
+   * the sending frame's one-argument `executeJavaScript`. Rejected senders
+   * inject nothing and resolve `undefined`.
+   */
+  private readonly onInject = async (
+    event: CosmeticIpcEvent,
+    url: string,
+    msg?: CosmeticMessage,
+  ): Promise<void> => {
+    const frame = event.senderFrame;
+    if (frame === null || frame.isDestroyed()) {
+      return;
+    }
+    if (!this.attached.has(event.sender.session)) {
+      return;
+    }
+    if (url !== frame.url) {
+      return;
+    }
+
+    const isFirstRun = msg === undefined;
+    const request = Request.fromRawDetails({ url });
+    const { active, styles, scripts } = this.engine.getCosmeticsFilters({
+      url,
+      hostname: request.hostname,
+      domain: request.domain,
+      classes: msg?.classes,
+      ids: msg?.ids,
+      hrefs: msg?.hrefs,
+      getBaseRules: isFirstRun,
+      getInjectionRules: isFirstRun,
+      getExtendedRules: false,
+      getRulesFromHostname: isFirstRun,
+      getRulesFromDOM: !isFirstRun,
+      callerContext: {
+        frameId: event.frameId,
+        processId: event.processId,
+        lifecycle: msg?.lifecycle,
+      },
+    });
+
+    if (!active) {
+      return;
+    }
+
+    if (styles.length > 0) {
+      if (frame === event.sender.mainFrame) {
+        // Cosmetic injection is cumulative: the first run inserts the base and
+        // hostname hides, and each later dom-update inserts only its DOM-matched
+        // delta — the base rules are never re-emitted. Electron keeps every
+        // inserted sheet until navigation, so re-inserting a stylesheet already
+        // applied to this page would stack a duplicate on a mutation-heavy page,
+        // but removing an earlier sheet would drop hides a dom-update does not
+        // re-send. So track the stylesheets inserted since this page loaded and
+        // skip only an exact repeat, never removing. The first run (no DOM
+        // message) marks a fresh page, so its set starts empty.
+        let inserted = this.insertedCss.get(event.sender);
+        if (isFirstRun || inserted === undefined) {
+          inserted = new Set();
+          this.insertedCss.set(event.sender, inserted);
+        }
+        if (!inserted.has(styles)) {
+          // Record before the await so two closely-spaced identical rescans
+          // cannot both pass the guard and double-insert.
+          inserted.add(styles);
+          await event.sender.insertCSS(styles, { cssOrigin: "user" });
+        }
+      } else {
+        // Child frames have no insertCSS; append a single, reused <style>
+        // element to the frame's head, replacing its contents on updates.
+        await frame.executeJavaScript(styleElementScript(styles));
+      }
+    }
+
+    for (const script of scripts) {
+      // One argument only, so a scriptlet cannot reach gesture-gated APIs. A
+      // scriptlet that throws must not reject the handler (which would surface as
+      // a rejected invoke in the sending frame and skip the remaining scriptlets),
+      // so each runs in its own try/catch, matching the library.
+      try {
+        await frame.executeJavaScript(script);
+      } catch (err) {
+        console.error("[adblock] cosmetic scriptlet failed:", err);
+      }
+    }
+  };
+
+  /**
+   * The `is-mutation-observer-enabled` handler, a stable field. Validates the
+   * sender (no url check) and returns the current engine's
+   * `enableMutationObserver`; a rejected sender resolves `false`.
+   */
+  private readonly onMutation = async (event: CosmeticIpcEvent): Promise<boolean> => {
+    const frame = event.senderFrame;
+    if (frame === null || frame.isDestroyed()) {
+      return false;
+    }
+    if (!this.attached.has(event.sender.session)) {
+      return false;
+    }
+    return this.engine.config.enableMutationObserver;
+  };
 
   /**
    * Rebuilds the engine from the remote lists and swaps it in atomically on
@@ -245,6 +700,12 @@ class BlockerImpl implements Blocker {
     } catch {
       return false;
     }
+    // Resource text is engine-scoped: the rebuilt engine has none, so re-apply
+    // the configured scriptlet resources before the swap or `##+js(...)` rules
+    // stop resolving after the first refresh.
+    if (this.internals.resources !== undefined) {
+      newEngine.updateResources(this.internals.resources, "zeo");
+    }
     // Atomic swap: move the bridge old->new, repoint the engine, bump the
     // version. Session hooks read `this.engine`, so they follow with no work.
     this.engine.unsubscribe("request-blocked", this.bridge);
@@ -267,6 +728,25 @@ class BlockerImpl implements Blocker {
   }
 }
 
+/**
+ * Builds the child-frame `<style data-zeo-cosmetic>` injection script. The
+ * element is found-or-created once and its `textContent` is replaced (not
+ * duplicated) on later update calls; `styles` is embedded with `JSON.stringify`
+ * so arbitrary CSS cannot break out of the string literal.
+ */
+function styleElementScript(styles: string): string {
+  return `(() => {
+  const id = "data-zeo-cosmetic";
+  let el = document.head && document.head.querySelector("style[" + id + "]");
+  if (!el) {
+    el = document.createElement("style");
+    el.setAttribute(id, "");
+    (document.head || document.documentElement).appendChild(el);
+  }
+  el.textContent = ${JSON.stringify(styles)};
+})();`;
+}
+
 /** Options for {@link createBlocker}. */
 export interface CreateBlockerOptions {
   /** Path the serialized engine is read from at startup and written to on refresh. */
@@ -282,6 +762,13 @@ export interface CreateBlockerOptions {
    * Filesystem seam for the engine cache; defaults to `node:fs/promises`.
    */
   fs?: BlockerFs;
+  /**
+   * Electron/cosmetic seams. `ipc` overrides the lazy `ipcMain` resolution,
+   * `preloadPath` overrides the bundled frame preload, and `resources` is
+   * scriptlet resource text applied to the initial engine with
+   * `updateResources`. All are for tests and the fixture path.
+   */
+  internals?: { ipc?: BlockerIpc; preloadPath?: string; resources?: string };
 }
 
 /**
@@ -314,6 +801,11 @@ export async function createBlocker(options: CreateBlockerOptions): Promise<Bloc
     listVersion = "none";
   }
 
+  const internals = options.internals ?? {};
+  if (internals.resources !== undefined) {
+    engine.updateResources(internals.resources, "zeo");
+  }
+
   const lists = options.lists;
   const remoteBuild = (controller: AbortController): Promise<ElectronBlocker> => {
     // Every fetch the build issues carries the refresh's abort signal and the
@@ -328,6 +820,9 @@ export async function createBlocker(options: CreateBlockerOptions): Promise<Bloc
     remoteBuild,
     cacheFile: options.cacheFile,
     fs,
+    ipc: internals.ipc,
+    preloadPath: internals.preloadPath,
+    resources: internals.resources,
   });
   // Kick off exactly one background refresh; do not await it before resolving.
   blocker.ready = blocker.refresh();
@@ -343,9 +838,23 @@ export async function createBlocker(options: CreateBlockerOptions): Promise<Bloc
  * The optional `listVersion` is a backward-compatible superset of the PRD's
  * `(filters)` signature: callers (e.g. main's `ZEO_ADBLOCK_FILTERS` path) pass
  * `fixture:<basename>` so the active origin is visible; it defaults to
- * `"fixture"` when omitted.
+ * `"fixture"` when omitted. The optional `internals` supplies the Electron/
+ * cosmetic seams; when `internals.resources` is set it is applied to the parsed
+ * engine with `updateResources` before the blocker is constructed, so fixture
+ * scriptlets resolve.
  */
-export function createBlockerFromFilters(filters: string, listVersion = "fixture"): Blocker {
+export function createBlockerFromFilters(
+  filters: string,
+  listVersion = "fixture",
+  internals: { ipc?: BlockerIpc; preloadPath?: string; resources?: string } = {},
+): Blocker {
   const engine = ElectronBlocker.parse(filters);
-  return new BlockerImpl(engine, listVersion, {});
+  if (internals.resources !== undefined) {
+    engine.updateResources(internals.resources, "zeo");
+  }
+  return new BlockerImpl(engine, listVersion, {
+    ipc: internals.ipc,
+    preloadPath: internals.preloadPath,
+    resources: internals.resources,
+  });
 }

@@ -50,6 +50,15 @@ import { loadStore, scheduleSave, flush, readBlockingEnabled, writeBlockingEnabl
 // file's directory (out/preload/index.cjs, out/renderer/index.html).
 const moduleDir = dirname(fileURLToPath(import.meta.url));
 
+/**
+ * Absolute path to the cosmetic-filtering frame preload, shipped as a sibling of
+ * the main bundle (out/preload/cosmetic-preload.cjs, copied by
+ * scripts/copy-renderer.mjs). Passed to the blocker via `internals.preloadPath`;
+ * the wrapper registers it on each attached profile session. Resolved the same
+ * way as the renderer preload above.
+ */
+const cosmeticPreloadPath = join(moduleDir, "../preload/cosmetic-preload.cjs");
+
 /** Default url/title used by the renderer's URL-less new-tab button. */
 const DEFAULT_URL = "https://example.com";
 
@@ -242,6 +251,13 @@ async function setBlockingEnabled(enabled: boolean): Promise<void> {
   if (enabled === blocking.enabled) {
     return;
   }
+  // PRD 5.3 §3 failure state: with no engine attached (setup failed, blocker
+  // stayed null), enabling blocking cannot take effect. Reject BEFORE any change
+  // so the persisted value, sessions, and in-memory state are all untouched; the
+  // app never reports blocking enabled with no engine.
+  if (enabled && blocker === null) {
+    throw new Error("content blocking is unavailable: no filter engine is loaded");
+  }
   writeBlockingEnabled(enabled);
   const sessions = profileSessions();
   const done: Electron.Session[] = [];
@@ -329,7 +345,18 @@ function createViewFor(tab: Tab, spaceId: string, urlOverride?: string): void {
     return;
   }
   const view = new WebContentsView({
-    webPreferences: { partition: "persist:" + store.spaceProfileId(spaceId) },
+    webPreferences: {
+      partition: "persist:" + store.spaceProfileId(spaceId),
+      // Run the adblock cosmetic frame preload in cross-origin child frames too:
+      // Electron only lets a child frame send IPC (the preload's
+      // inject-cosmetic-filters invoke) when nodeIntegrationInSubFrames is
+      // enabled, so without this an iframe's ads are never hidden (PRD 5.3). This
+      // does NOT weaken isolation — sandbox and contextIsolation keep their secure
+      // defaults, so page scripts still get nothing; it only lets the isolated
+      // preload run and invoke in subframes, and the wrapper validates
+      // event.senderFrame on every message.
+      nodeIntegrationInSubFrames: true,
+    },
   });
   views.set(tab.id, { view, spaceId });
   // Reverse index for blocked-request attribution: this view's webContents id
@@ -1759,13 +1786,26 @@ app.whenReady().then(async () => {
     blocking = initialBlockingState(enabled, "none");
 
     const filtersFile = process.env.ZEO_ADBLOCK_FILTERS;
-    if (filtersFile !== undefined && filtersFile !== "") {
+    if (process.env.ZEO_E2E === "1" && filtersFile !== undefined && filtersFile !== "") {
       // Test/e2e hook, checked FIRST: build the engine from a fixture list only —
-      // no cache read/write, no remote fetch, no daily refresh. It is a test hook,
-      // so a bad path must degrade gracefully (logged in the catch) not brick the
-      // app.
+      // no cache read/write, no remote fetch, no daily refresh. It also requires
+      // ZEO_E2E === "1", so a packaged production build ignores the env var and
+      // never takes the fixture path even if ZEO_ADBLOCK_FILTERS is set. It is a
+      // test hook, so a bad path must degrade gracefully (logged in the catch) not
+      // brick the app.
       const text = readFileSync(filtersFile, "utf8");
-      blocker = createBlockerFromFilters(text, "fixture:" + basename(filtersFile));
+      // ZEO_ADBLOCK_RESOURCES (fixture path only): scriptlet resource text in the
+      // library's resources format, applied to the parsed engine so fixture
+      // scriptlets (##+js(...)) resolve. Read only here, alongside the filters.
+      const resourcesFile = process.env.ZEO_ADBLOCK_RESOURCES;
+      const resources =
+        resourcesFile !== undefined && resourcesFile !== ""
+          ? readFileSync(resourcesFile, "utf8")
+          : undefined;
+      blocker = createBlockerFromFilters(text, "fixture:" + basename(filtersFile), {
+        preloadPath: cosmeticPreloadPath,
+        resources,
+      });
     } else {
       // Kick off the real engine load and race it against a 3 s cap. createBlocker's
       // promise covers only the fast local step (cache or empty engine); if the cap
@@ -1774,6 +1814,7 @@ app.whenReady().then(async () => {
       const p = createBlocker({
         cacheFile: join(app.getPath("userData"), "adblock-engine.bin"),
         fetch,
+        internals: { preloadPath: cosmeticPreloadPath },
       });
       const capped = await Promise.race([
         p.then((b) => ({ won: true as const, blocker: b })),
@@ -1840,14 +1881,22 @@ app.whenReady().then(async () => {
     // left pointing at a blocker we are about to drop the reference to (a
     // partial attachBlockerToAllSessions above could leave some attached).
     if (blocker) {
-      for (const s of blocker.attachedSessions()) {
-        blocker.detach(s);
+      // Terminal transition: dispose() detaches every session AND removes the
+      // wrapper's IPC handlers, so a replacement blocker (e.g. next launch) can
+      // take them. A thrown error is caught and logged once; startup continues.
+      try {
+        blocker.dispose();
+      } catch (disposeErr) {
+        console.error("[blocking] dispose during startup cleanup failed:", disposeErr);
       }
     }
     blocker = null;
-    // Keep the blocking slice seeded to a sane value even when readBlockingEnabled
-    // threw before it was set above, so fullSnapshot() never dereferences undefined.
-    blocking = initialBlockingState(blocking.enabled, "none");
+    // PRD 5.3 §3 failure state: with no engine attached, report blocking disabled
+    // for this launch; the persisted flag is left as-is (no writeBlockingEnabled)
+    // so the next launch retries. Seeding false also keeps the slice sane when
+    // readBlockingEnabled threw before it was set above, so fullSnapshot() never
+    // dereferences undefined.
+    blocking = initialBlockingState(false, "none");
   }
 
   buildMenu();

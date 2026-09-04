@@ -103,5 +103,27 @@ export default tseslint.config(
       ],
     },
   },
+  {
+    // The @zeo/adblock cosmetic frame preload is a hand-written CommonJS script
+    // that runs in a sandboxed browser frame: it uses `require("electron")` plus
+    // DOM globals (window/document/MutationObserver), so it needs the CommonJS
+    // source type and browser globals rather than the default ESM/Node setup.
+    files: ["packages/adblock/preload/**/*.cjs"],
+    languageOptions: {
+      sourceType: "commonjs",
+      globals: {
+        window: "readonly",
+        document: "readonly",
+        MutationObserver: "readonly",
+        requestIdleCallback: "readonly",
+        setTimeout: "readonly",
+        require: "readonly",
+        module: "readonly",
+      },
+    },
+    rules: {
+      "@typescript-eslint/no-require-imports": "off",
+    },
+  },
   prettier,
 );
