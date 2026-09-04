@@ -1786,11 +1786,13 @@ app.whenReady().then(async () => {
     blocking = initialBlockingState(enabled, "none");
 
     const filtersFile = process.env.ZEO_ADBLOCK_FILTERS;
-    if (filtersFile !== undefined && filtersFile !== "") {
+    if (process.env.ZEO_E2E === "1" && filtersFile !== undefined && filtersFile !== "") {
       // Test/e2e hook, checked FIRST: build the engine from a fixture list only —
-      // no cache read/write, no remote fetch, no daily refresh. It is a test hook,
-      // so a bad path must degrade gracefully (logged in the catch) not brick the
-      // app.
+      // no cache read/write, no remote fetch, no daily refresh. It also requires
+      // ZEO_E2E === "1", so a packaged production build ignores the env var and
+      // never takes the fixture path even if ZEO_ADBLOCK_FILTERS is set. It is a
+      // test hook, so a bad path must degrade gracefully (logged in the catch) not
+      // brick the app.
       const text = readFileSync(filtersFile, "utf8");
       // ZEO_ADBLOCK_RESOURCES (fixture path only): scriptlet resource text in the
       // library's resources format, applied to the parsed engine so fixture

@@ -111,6 +111,8 @@ interface CosmeticSender {
   readonly mainFrame: CosmeticFrame | null;
   /** Inserts a user-origin stylesheet into the top frame. */
   insertCSS(css: string, options?: { cssOrigin?: "user" | "author" }): Promise<string>;
+  /** Removes a previously inserted stylesheet by its returned key. */
+  removeInsertedCSS(key: string): Promise<void>;
 }
 
 /** The subset of an Electron IPC invoke event the cosmetic handlers read. */
@@ -288,6 +290,13 @@ class BlockerImpl implements Blocker {
   private readonly attached = new Set<Session>();
   private readonly blockedListeners: Array<(event: BlockedEvent) => void> = [];
   private readonly internals: BlockerInternals;
+  /**
+   * Per-sender record of the last top-frame stylesheet inserted via
+   * `insertCSS`, so a mutation-driven rescan returning identical CSS is not
+   * inserted again (Electron keeps each sheet until navigation or
+   * `removeInsertedCSS`). Keyed weakly by the sending WebContents.
+   */
+  private readonly insertedCss = new WeakMap<CosmeticSender, { css: string; key: string }>();
   /** Absolute path of the frame preload registered on every attached session. */
   private readonly preloadPath: string;
   /** The resolved IPC seam, set on the first attach that registers handlers. */
@@ -610,7 +619,18 @@ class BlockerImpl implements Blocker {
 
     if (styles.length > 0) {
       if (frame === event.sender.mainFrame) {
-        await event.sender.insertCSS(styles, { cssOrigin: "user" });
+        // Electron keeps every inserted sheet until navigation, so a
+        // mutation-driven rescan returning identical CSS would stack duplicate
+        // sheets. Skip an unchanged rescan, and remove the previous sheet before
+        // inserting a changed one.
+        const prev = this.insertedCss.get(event.sender);
+        if (prev === undefined || prev.css !== styles) {
+          if (prev !== undefined) {
+            await event.sender.removeInsertedCSS(prev.key);
+          }
+          const key = await event.sender.insertCSS(styles, { cssOrigin: "user" });
+          this.insertedCss.set(event.sender, { css: styles, key });
+        }
       } else {
         // Child frames have no insertCSS; append a single, reused <style>
         // element to the frame's head, replacing its contents on updates.
@@ -669,6 +689,12 @@ class BlockerImpl implements Blocker {
       newEngine = await withTimeout(build(controller), REFRESH_TIMEOUT_MS, controller);
     } catch {
       return false;
+    }
+    // Resource text is engine-scoped: the rebuilt engine has none, so re-apply
+    // the configured scriptlet resources before the swap or `##+js(...)` rules
+    // stop resolving after the first refresh.
+    if (this.internals.resources !== undefined) {
+      newEngine.updateResources(this.internals.resources, "zeo");
     }
     // Atomic swap: move the bridge old->new, repoint the engine, bump the
     // version. Session hooks read `this.engine`, so they follow with no work.

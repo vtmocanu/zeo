@@ -82,8 +82,24 @@ if (window.location.href.startsWith("devtools://") === false) {
           if (!enabled) {
             return;
           }
+          const schedule =
+            typeof requestIdleCallback === "function"
+              ? (fn) => requestIdleCallback(fn)
+              : (fn) => setTimeout(fn, 0);
+          let pending = false;
           const observer = new MutationObserver(() => {
-            send({ ...scan(), lifecycle: "dom-update" });
+            // Coalesce a burst of mutations into one full-document scan + IPC
+            // send per idle turn: mutation-heavy pages (infinite scroll, ad
+            // rotation) would otherwise walk the whole document and round-trip
+            // to main many times per second on the frame's main thread.
+            if (pending) {
+              return;
+            }
+            pending = true;
+            schedule(() => {
+              pending = false;
+              send({ ...scan(), lifecycle: "dom-update" });
+            });
           });
           observer.observe(document.documentElement, {
             subtree: true,

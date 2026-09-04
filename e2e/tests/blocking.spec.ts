@@ -927,8 +927,10 @@ test.describe("PRD 5.3 CSP + cosmetic filtering (offline)", () => {
       const offCosmetic = await tabWindow(app, "probe=off-cos");
       await waitForMarker(offCosmetic);
       // The ad slot renders (a bare <div> defaults to block) and the scriptlet
-      // did not run.
-      expect(await adSlotDisplay(offCosmetic)).not.toBe("none");
+      // did not run. Assert the exact value, not just `not "none"`: the
+      // `"missing"` sentinel would also satisfy a `not.toBe("none")` check even
+      // if the fixture ever lost its `.zeo-ad-slot`.
+      expect(await adSlotDisplay(offCosmetic)).toBe("block");
       expect(await scriptletRan(offCosmetic)).toBe(false);
 
       await createTab(sidebar, `${server.base}/csp.html?probe=off-csp`);
@@ -1081,11 +1083,13 @@ test.describe("PRD 5.3 CSP + cosmetic filtering (offline)", () => {
         expect((await blockingState(first.sidebar)).enabled).toBe(false);
 
         // The blocker is null, so NO filtering happens: a cosmetic.html tab keeps
-        // its ad slot visible and the scriptlet never runs.
+        // its ad slot visible and the scriptlet never runs. Assert the exact
+        // `"block"` value so a missing `.zeo-ad-slot` (the `"missing"` sentinel)
+        // cannot vacuously satisfy the check.
         await createTab(first.sidebar, `${server.localhostBase}/cosmetic.html?probe=fail`);
         const page = await tabWindow(first.app, "probe=fail");
         await waitForMarker(page);
-        expect(await adSlotDisplay(page)).not.toBe("none");
+        expect(await adSlotDisplay(page)).toBe("block");
         expect(await scriptletRan(page)).toBe(false);
       } finally {
         await first.app.close();

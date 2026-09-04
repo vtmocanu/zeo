@@ -208,9 +208,14 @@ function makeFakeEvent(options: {
 }): {
   event: unknown;
   insertCSS: ReturnType<typeof vi.fn>;
+  removeInsertedCSS: ReturnType<typeof vi.fn>;
   frame: FakeFrame;
 } {
-  const insertCSS = vi.fn(() => Promise.resolve(""));
+  // Return a distinct non-empty key per call so the wrapper's dedup logic has a
+  // real key to track and later pass to removeInsertedCSS.
+  let nextKey = 0;
+  const insertCSS = vi.fn(() => Promise.resolve(`key-${(nextKey += 1)}`));
+  const removeInsertedCSS = vi.fn(() => Promise.resolve());
   const mainFrame: FakeFrame = {
     url: options.kind === "top" ? options.frameUrl : "https://top.example/",
     destroyed: false,
@@ -231,12 +236,12 @@ function makeFakeEvent(options: {
   frame.destroyed = options.destroyed ?? false;
   const senderFrame = options.senderFrameNull === true ? null : frame;
   const event = {
-    sender: { session: options.session, mainFrame, insertCSS },
+    sender: { session: options.session, mainFrame, insertCSS, removeInsertedCSS },
     senderFrame,
     frameId: 7,
     processId: 3,
   };
-  return { event, insertCSS, frame };
+  return { event, insertCSS, removeInsertedCSS, frame };
 }
 
 /**
@@ -1015,6 +1020,109 @@ describe("cosmetic IPC handlers", () => {
     expect(String(frame.executeJavaScript.mock.calls[1]![0])).toContain("zeoScriptlet");
   });
 
+  test("a destroyed sender frame injects nothing and resolves undefined then false", async () => {
+    const ipc = makeFakeIpc();
+    const blocker = makeCosmeticBlocker(ipc.ipc);
+    const { session } = attachSession(blocker);
+    const { event, insertCSS, frame } = makeFakeEvent({
+      session,
+      frameUrl: PAGE_URL,
+      kind: "top",
+      destroyed: true,
+    });
+
+    // Both handlers reject a destroyed frame before touching the engine.
+    expect(await ipc.invoke(INJECT, event, PAGE_URL, undefined)).toBeUndefined();
+    expect(await ipc.invoke(MUTATION, event)).toBe(false);
+    expect(insertCSS).not.toHaveBeenCalled();
+    expect(frame.executeJavaScript).not.toHaveBeenCalled();
+  });
+
+  test("a child-frame dom-update injects a DOM-matched class via a data-zeo-cosmetic style, never insertCSS", async () => {
+    // A generic (host-less) class-hiding rule: the engine returns it only when
+    // the class token arrives on a dom-update message (getRulesFromDOM), never
+    // on the first run.
+    const ipc = makeFakeIpc();
+    const blocker = track(
+      createBlockerFromFilters("##.some-class", "fixture", { ipc: ipc.ipc, preloadPath: "p.cjs" }),
+    );
+    const { session } = attachSession(blocker);
+    const { event, insertCSS, frame } = makeFakeEvent({ session, frameUrl: PAGE_URL, kind: "child" });
+
+    // First run carries no DOM tokens, so the generic rule yields no styles.
+    await ipc.invoke(INJECT, event, PAGE_URL, undefined);
+    expect(frame.executeJavaScript).not.toHaveBeenCalled();
+
+    // The dom-update supplies the class token, so the rule now matches and is
+    // written into the single reused <style data-zeo-cosmetic> element.
+    await ipc.invoke(INJECT, event, PAGE_URL, {
+      classes: ["some-class"],
+      ids: [],
+      hrefs: [],
+      lifecycle: "dom-update",
+    });
+
+    expect(frame.executeJavaScript).toHaveBeenCalledTimes(1);
+    const styleCall = String(frame.executeJavaScript.mock.calls[0]![0]);
+    expect(styleCall).toContain("data-zeo-cosmetic");
+    expect(styleCall).toContain(".some-class");
+    expect(insertCSS).not.toHaveBeenCalled();
+  });
+
+  test("identical top-frame CSS on a rescan is not inserted a second time", async () => {
+    const ipc = makeFakeIpc();
+    const blocker = makeCosmeticBlocker(ipc.ipc);
+    const { session } = attachSession(blocker);
+    const { event, insertCSS, removeInsertedCSS } = makeFakeEvent({
+      session,
+      frameUrl: PAGE_URL,
+      kind: "top",
+    });
+
+    // Two runs of the same host-scoped rule yield identical styles; the second
+    // is deduped, so no second sheet is inserted and the first is not removed.
+    await ipc.invoke(INJECT, event, PAGE_URL, undefined);
+    await ipc.invoke(INJECT, event, PAGE_URL, undefined);
+
+    expect(insertCSS).toHaveBeenCalledTimes(1);
+    expect(insertCSS).toHaveBeenCalledWith(HIDE_STYLES, { cssOrigin: "user" });
+    expect(removeInsertedCSS).not.toHaveBeenCalled();
+  });
+
+  test("changed top-frame CSS removes the previous sheet before inserting the new one", async () => {
+    // A host-scoped rule (first run) and a generic class rule (dom-update) yield
+    // different stylesheets, so the rescan must remove the first sheet by its
+    // key before inserting the second.
+    const ipc = makeFakeIpc();
+    const blocker = track(
+      createBlockerFromFilters("example.com##.ad-slot\n##.some-class", "fixture", {
+        ipc: ipc.ipc,
+        preloadPath: "p.cjs",
+      }),
+    );
+    const { session } = attachSession(blocker);
+    const { event, insertCSS, removeInsertedCSS } = makeFakeEvent({
+      session,
+      frameUrl: PAGE_URL,
+      kind: "top",
+    });
+
+    await ipc.invoke(INJECT, event, PAGE_URL, undefined);
+    const firstKey = await insertCSS.mock.results[0]!.value;
+    await ipc.invoke(INJECT, event, PAGE_URL, {
+      classes: ["some-class"],
+      ids: [],
+      hrefs: [],
+      lifecycle: "dom-update",
+    });
+
+    expect(insertCSS).toHaveBeenCalledTimes(2);
+    expect(insertCSS.mock.calls[0]![0]).toBe(HIDE_STYLES);
+    expect(insertCSS.mock.calls[1]![0]).toBe(".some-class { display: none !important; }");
+    expect(removeInsertedCSS).toHaveBeenCalledTimes(1);
+    expect(removeInsertedCSS).toHaveBeenCalledWith(firstKey);
+  });
+
   test("an accepted sender's mutation query returns the engine's setting", async () => {
     const ipc = makeFakeIpc();
     const blocker = makeCosmeticBlocker(ipc.ipc);
@@ -1185,5 +1293,39 @@ describe("refresh keeps the same callbacks working against the new engine", () =
     const { event, insertCSS } = makeFakeEvent({ session, frameUrl: PAGE_URL, kind: "top" });
     await ipc.invoke(INJECT, event, PAGE_URL, undefined);
     expect(insertCSS).toHaveBeenCalledWith(HIDE_STYLES, { cssOrigin: "user" });
+  });
+
+  test("scriptlet resources survive a refresh so ##+js rules still resolve", async () => {
+    // The rebuilt engine has no resource text of its own (the fetched
+    // resources.json is empty), so refresh must re-apply the configured
+    // resources or the scriptlet rule stops resolving after the first refresh.
+    const newList = [HIDE_FILTER, SCRIPTLET_FILTER].join("\n");
+    const fs: BlockerFs = {
+      readFile: async () => {
+        throw new Error("ENOENT");
+      },
+      writeFile: vi.fn(),
+    };
+    const ipc = makeFakeIpc();
+    const blocker = track(
+      await createBlocker({
+        cacheFile: "engine.bin",
+        fetch: fetchReturning(newList),
+        lists: ["https://example.test/list.txt"],
+        fs,
+        internals: { ipc: ipc.ipc, preloadPath: "p.cjs", resources: RESOURCES },
+      }),
+    );
+    const { session } = attachSession(blocker);
+
+    expect(await awaitReady(blocker)).toBe(true);
+    expect(blocker.listVersion).toBe("remote");
+
+    // The same registered inject handler runs the scriptlet against the rebuilt
+    // engine, because refresh re-applied the resources before the swap.
+    const { event, frame } = makeFakeEvent({ session, frameUrl: PAGE_URL, kind: "top" });
+    await ipc.invoke(INJECT, event, PAGE_URL, undefined);
+    const ran = frame.executeJavaScript.mock.calls.map((c) => String(c[0]!));
+    expect(ran.some((code) => code.includes("zeoScriptlet"))).toBe(true);
   });
 });

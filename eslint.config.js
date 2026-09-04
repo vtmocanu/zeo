@@ -115,6 +115,8 @@ export default tseslint.config(
         window: "readonly",
         document: "readonly",
         MutationObserver: "readonly",
+        requestIdleCallback: "readonly",
+        setTimeout: "readonly",
         require: "readonly",
         module: "readonly",
       },
