@@ -251,6 +251,13 @@ async function setBlockingEnabled(enabled: boolean): Promise<void> {
   if (enabled === blocking.enabled) {
     return;
   }
+  // PRD 5.3 §3 failure state: with no engine attached (setup failed, blocker
+  // stayed null), enabling blocking cannot take effect. Reject BEFORE any change
+  // so the persisted value, sessions, and in-memory state are all untouched; the
+  // app never reports blocking enabled with no engine.
+  if (enabled && blocker === null) {
+    throw new Error("content blocking is unavailable: no filter engine is loaded");
+  }
   writeBlockingEnabled(enabled);
   const sessions = profileSessions();
   const done: Electron.Session[] = [];
@@ -1871,9 +1878,12 @@ app.whenReady().then(async () => {
       }
     }
     blocker = null;
-    // Keep the blocking slice seeded to a sane value even when readBlockingEnabled
-    // threw before it was set above, so fullSnapshot() never dereferences undefined.
-    blocking = initialBlockingState(blocking.enabled, "none");
+    // PRD 5.3 §3 failure state: with no engine attached, report blocking disabled
+    // for this launch; the persisted flag is left as-is (no writeBlockingEnabled)
+    // so the next launch retries. Seeding false also keeps the slice sane when
+    // readBlockingEnabled threw before it was set above, so fullSnapshot() never
+    // dereferences undefined.
+    blocking = initialBlockingState(false, "none");
   }
 
   buildMenu();
