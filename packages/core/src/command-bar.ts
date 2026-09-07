@@ -42,4 +42,10 @@ export interface CommandBarState {
    * (the clicked index would otherwise resolve against different rows).
    */
   revision: number;
+  /**
+   * Which surface the single overlay `WebContentsView` renders: the command bar
+   * (`"bar"`) or the find bar (`"find"`). The two are mutually exclusive surfaces
+   * of that one overlay; defaults to `"bar"`.
+   */
+  surface: "bar" | "find";
 }

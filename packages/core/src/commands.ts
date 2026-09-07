@@ -36,7 +36,10 @@ export type CommandId =
   | "zoom.reset"
   | "settings.openGeneral"
   | "settings.openProfiles"
-  | "settings.openHistory";
+  | "settings.openHistory"
+  | "find.open"
+  | "find.next"
+  | "find.previous";
 
 /**
  * One registry entry: its {@link CommandId}, human title, search `keywords`,
@@ -59,8 +62,10 @@ export interface CommandDescriptor {
  * `zoomFactor`, the active tab's host's current zoom factor
  * (`TabsState.zoom.byHost[siteHost]`, or `1.0`/{@link DEFAULT_ZOOM_FACTOR} when
  * the host has no entry or the tab is non-http(s)) — or `null` when no tab is
- * active; the number of spaces; and `settingsOpen`, whether the settings view is
- * currently open.
+ * active; the number of spaces; `settingsOpen`, whether the settings view is
+ * currently open; and `find`, whether the find session is `open` and whether it
+ * currently `hasQuery` (a non-empty committed query), which gate the directional
+ * find commands.
  */
 export interface CommandContext {
   activeTab: {
@@ -73,6 +78,7 @@ export interface CommandContext {
   } | null;
   spaceCount: number;
   settingsOpen: boolean;
+  find: { open: boolean; hasQuery: boolean };
 }
 
 /**
@@ -109,6 +115,9 @@ export const COMMANDS: readonly CommandDescriptor[] = [
   { id: "settings.openGeneral", title: "Open General Settings", keywords: ["settings", "general", "search", "engine", "preferences"], accelerator: null, menu: null },
   { id: "settings.openProfiles", title: "Open Profile Settings", keywords: ["settings", "profiles", "profile"], accelerator: null, menu: null },
   { id: "settings.openHistory", title: "Open History Settings", keywords: ["settings", "history", "clear"], accelerator: null, menu: null },
+  { id: "find.open", title: "Find in Page", keywords: ["find", "search", "page", "text"], accelerator: "CmdOrCtrl+F", menu: "view" },
+  { id: "find.next", title: "Find Next", keywords: ["find", "next", "search"], accelerator: "CmdOrCtrl+G", menu: "view" },
+  { id: "find.previous", title: "Find Previous", keywords: ["find", "previous", "search"], accelerator: "CmdOrCtrl+Shift+G", menu: "view" },
 ];
 
 /**
@@ -125,7 +134,9 @@ export const COMMANDS: readonly CommandDescriptor[] = [
  * is allowlisted; `settings.close` needs the settings view open. `zoom.in` and
  * `zoom.out` need an active tab with a non-null http(s) `siteHost`; `zoom.reset`
  * needs that too AND a current `zoomFactor` other than the default `1.0` (there
- * is nothing to reset when the host is already at actual size).
+ * is nothing to reset when the host is already at actual size). `find.open`
+ * needs an active tab; `find.next` and `find.previous` need the find session
+ * open with a non-empty query (`context.find.open && context.find.hasQuery`).
  */
 export function isCommandEnabled(id: CommandId, context: CommandContext): boolean {
   switch (id) {
@@ -177,6 +188,11 @@ export function isCommandEnabled(id: CommandId, context: CommandContext): boolea
         context.activeTab.siteHost !== null &&
         context.activeTab.zoomFactor !== DEFAULT_ZOOM_FACTOR
       );
+    case "find.open":
+      return context.activeTab !== null;
+    case "find.next":
+    case "find.previous":
+      return context.find.open && context.find.hasQuery;
     default: {
       const exhaustive: never = id;
       return exhaustive;
