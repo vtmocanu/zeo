@@ -3102,6 +3102,8 @@ test.describe("zeo desktop app", () => {
     "settings.open",
     "history.open",
     "history.clear",
+    "zoom.in",
+    "zoom.out",
   ];
 
   // §5 bullet 1 — commands mode opens empty, lists only enabled command rows in
