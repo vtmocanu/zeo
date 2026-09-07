@@ -19,6 +19,7 @@ import type {
   TabContextMenuResult,
   TabsState,
   ZeoApi,
+  ZoomState,
 } from "@zeo/core";
 
 // The typed bridge exposed on window.zeo. It implements ZeoApi exactly and
@@ -99,6 +100,12 @@ const api = {
     get: (): Promise<Settings> => ipcRenderer.invoke(IPC.settingsGet),
     setSearchEngine: (id: SearchEngineId): Promise<void> =>
       ipcRenderer.invoke(IPC.settingsSetSearchEngine, id),
+  },
+  zoom: {
+    zoomIn: (): Promise<void> => ipcRenderer.invoke(IPC.zoomIn),
+    zoomOut: (): Promise<void> => ipcRenderer.invoke(IPC.zoomOut),
+    reset: (): Promise<void> => ipcRenderer.invoke(IPC.zoomReset),
+    state: (): Promise<ZoomState> => ipcRenderer.invoke(IPC.zoomState),
   },
   onStateChange: (listener: (state: TabsState) => void): (() => void) => {
     const handler = (_event: Electron.IpcRendererEvent, state: TabsState): void => listener(state);

@@ -38,8 +38,10 @@ import type {
 
 /**
  * The schema: the four core tables (profiles, spaces, tabs, meta), the
- * blocking_allowlist table added at schema version 3, plus the two history
- * tables (history_entries, history_visits) added at schema version 4.
+ * blocking_allowlist table added at schema version 3, the two history
+ * tables (history_entries, history_visits) added at schema version 4, the
+ * searchEngine column added at schema version 5, plus the site_zoom table added
+ * at schema version 6 — eight tables in all.
  * The PRIMARY KEYs (no duplicate ids), the foreign
  * keys, and `PRAGMA foreign_keys=ON` are the well-formedness contract the core
  * codec relies on: every on-disk state is guaranteed loadable. `spaces.activeTabId`
@@ -47,6 +49,9 @@ import type {
  * express "same space AND non-archived"; their integrity is enforced by the write
  * path plus the codec's repair-on-load.
  */
+const SITE_ZOOM_DDL =
+  "CREATE TABLE site_zoom (host TEXT PRIMARY KEY, factor REAL NOT NULL, updatedAt INTEGER NOT NULL);";
+
 const DDL = `
 CREATE TABLE profiles (
   id TEXT PRIMARY KEY, name TEXT NOT NULL, createdAt INTEGER NOT NULL, position INTEGER NOT NULL
@@ -83,13 +88,14 @@ CREATE TABLE history_visits (
 );
 CREATE INDEX history_visits_visitedAt ON history_visits(visitedAt);
 CREATE INDEX history_entries_lastVisitedAt ON history_entries(lastVisitedAt);
+${SITE_ZOOM_DDL}
 `;
 
 /**
  * The ordered, in-place upgrade steps keyed by the version they PRODUCE: the
  * `v` entry is run to move a database from version `v-1` to `v`. {@link migrate}
  * runs every step from the on-disk version + 1 up through {@link SCHEMA_VERSION},
- * so a future 4→5 upgrade is added by appending a `5` entry here. Each step is a
+ * so a future 6→7 upgrade is added by appending a `7` entry here. Each step is a
  * plain SQL blob run inside the migrate transaction; the step MUST leave
  * `meta.schemaVersion` set to its own key.
  */
@@ -114,6 +120,7 @@ const MIGRATION_STEPS: Record<number, string> = {
   5:
     "ALTER TABLE meta ADD COLUMN searchEngine TEXT NOT NULL DEFAULT 'duckduckgo';" +
     "UPDATE meta SET schemaVersion = 5 WHERE id = 0;",
+  6: SITE_ZOOM_DDL + "UPDATE meta SET schemaVersion = 6 WHERE id = 0;",
 };
 
 /** The module-level database handle, `null` until {@link loadStore} opens it. */
@@ -133,7 +140,7 @@ function dbPath(): string {
 /**
  * Reads the schema version currently on disk and applies {@link migrationAction}:
  * `"abort"` throws {@link UnsupportedSchemaVersionError}, `"create"` builds the
- * fresh schema (all seven tables) and seeds the single meta row, `"migrate"` runs the
+ * fresh schema (all eight tables) and seeds the single meta row, `"migrate"` runs the
  * ordered {@link MIGRATION_STEPS} from the on-disk version + 1 through
  * {@link SCHEMA_VERSION} inside a single transaction (so a partially-applied
  * upgrade never lands), and `"noop"` leaves an up-to-date database untouched.
@@ -521,6 +528,51 @@ export function insertAllowlistHost(host: string, createdAt: number): void {
 export function deleteAllowlistHost(host: string): void {
   const database = requireDb();
   database.prepare("DELETE FROM blocking_allowlist WHERE host = ?").run(host);
+}
+
+/**
+ * Reads the full per-site zoom map (host → factor) from `site_zoom`, folding the
+ * rows into a plain `Record<string, number>`. `site_zoom` never carries a row for
+ * a host at the default factor (1.0), so an absent host means the default. Loaded
+ * once before the first window is created to seed `TabsState.zoom.byHost`; an
+ * empty table yields `{}`. Throws when the database is not open.
+ */
+export function readSiteZoom(): Record<string, number> {
+  const database = requireDb();
+  // SQLite-row boundary: .all() is typed `unknown`, cast to the known shape.
+  const rows = database
+    .prepare("SELECT host, factor FROM site_zoom")
+    .all() as { host: string; factor: number }[];
+  const byHost: Record<string, number> = {};
+  for (const row of rows) {
+    byHost[row.host] = row.factor;
+  }
+  return byHost;
+}
+
+/**
+ * Inserts or replaces the `site_zoom` row for `host`, storing its zoom `factor`
+ * and `updatedAt` timestamp (`ON CONFLICT(host)` overwrites both). Synchronous
+ * (better-sqlite3). Throws when the database is not open, so a caller's ordered
+ * zoom-write contract sees the failure before it changes anything else.
+ */
+export function upsertSiteZoom(host: string, factor: number, updatedAt: number): void {
+  const database = requireDb();
+  database
+    .prepare(
+      "INSERT INTO site_zoom(host,factor,updatedAt) VALUES (?,?,?) " +
+        "ON CONFLICT(host) DO UPDATE SET factor=excluded.factor, updatedAt=excluded.updatedAt",
+    )
+    .run(host, factor, updatedAt);
+}
+
+/**
+ * Deletes the `site_zoom` row for `host`; a no-op when the host is absent.
+ * Synchronous (better-sqlite3). Throws when the database is not open.
+ */
+export function deleteSiteZoom(host: string): void {
+  const database = requireDb();
+  database.prepare("DELETE FROM site_zoom WHERE host = ?").run(host);
 }
 
 /**

@@ -5,6 +5,7 @@ import type { CommandBarMode, CommandBarState } from "./command-bar.js";
 import type { CommandDescriptor, CommandId } from "./commands.js";
 import type { BlockingState } from "./blocking.js";
 import type { HistoryEntry, HistoryVisit } from "./history.js";
+import type { ZoomState } from "./zoom.js";
 import type { SettingsSectionId, SearchEngineId } from "./settings.js";
 
 /**
@@ -45,12 +46,14 @@ export interface StoreSnapshot extends SpacesState, TabsSlice {}
  * code written against the pre-space snapshot keeps working unchanged; `blocking`
  * carries the content-blocking counts main attaches before broadcast, and
  * `settingsOpen` (attached by main, not part of the pure store snapshot)
- * reflects whether the settings view is currently open. `settings` rides the
- * broadcast like `blocking`, carrying the current {@link Settings} (the chosen
- * search engine) so every settings change reaches renderers without a separate
- * channel; `settingsSection` is the currently-targeted settings section main
- * pushes to the settings view (the section-open commands set it), which the PRD
- * calls the pushed `section`.
+ * reflects whether the settings view is currently open. `zoom` carries the
+ * per-host zoom factors and rides the `stateChange` broadcast exactly like
+ * `blocking` — main attaches it before every broadcast, so it is never absent.
+ * `settings` rides the broadcast the same way, carrying the current
+ * {@link Settings} (the chosen search engine) so every settings change reaches
+ * renderers without a separate channel; `settingsSection` is the
+ * currently-targeted settings section main pushes to the settings view (the
+ * section-open commands set it), which the PRD calls the pushed `section`.
  *
  * `settingsSectionNonce` is a monotonically increasing counter main bumps each
  * time a section-open command (or a cold `settings.open`) targets a section, so
@@ -63,6 +66,7 @@ export interface StoreSnapshot extends SpacesState, TabsSlice {}
 export interface TabsState extends StoreSnapshot {
   blocking: BlockingState;
   settingsOpen: boolean;
+  zoom: ZoomState;
   settings: Settings;
   settingsSection: SettingsSectionId;
   settingsSectionNonce: number;
@@ -308,6 +312,22 @@ export interface SettingsApi {
 }
 
 /**
+ * Zoom commands the renderer invokes over IPC, handled in main. All three
+ * mutating calls act on the ACTIVE tab of the active space: `zoomIn`/`zoomOut`
+ * step the active tab's host up/down the Chromium zoom ladder and `reset`
+ * returns it to the default factor. Each REJECTS and changes nothing when there
+ * is no active tab or the active tab's current URL is not http(s). `state()`
+ * reads back the current {@link ZoomState}. Zoom rides the `stateChange`
+ * broadcast on `TabsState.zoom` — there is no dedicated change channel.
+ */
+export interface ZoomApi {
+  zoomIn(): Promise<void>;
+  zoomOut(): Promise<void>;
+  reset(): Promise<void>;
+  state(): Promise<ZoomState>;
+}
+
+/**
  * The full bridge surface exposed on `window.zeo` by the preload script.
  *
  * `onStateChange` registers a listener for main-pushed state updates and
@@ -322,6 +342,7 @@ export interface ZeoApi {
   commands: CommandsApi;
   blocking: BlockingApi;
   history: HistoryApi;
+  zoom: ZoomApi;
   settings: SettingsApi;
   onStateChange(listener: (state: TabsState) => void): () => void;
   /** Registers a listener for main-pushed command-bar state updates and returns
@@ -380,6 +401,10 @@ export const IPC = {
   historyDeleteUrl: "zeo:history:delete-url",
   historyClear: "zeo:history:clear",
   historyStats: "zeo:history:stats",
+  zoomIn: "zeo:zoom:in",
+  zoomOut: "zeo:zoom:out",
+  zoomReset: "zeo:zoom:reset",
+  zoomState: "zeo:zoom:state",
   settingsGet: "zeo:settings:get",
   settingsSetSearchEngine: "zeo:settings:set-search-engine",
   stateChange: "zeo:state-change",

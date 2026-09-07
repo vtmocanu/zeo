@@ -13,6 +13,7 @@ import {
   DEFAULT_SEARCH_ENGINE_ID,
   defaultSpaceName,
   formatRelativeArchived,
+  formatZoomPercent,
   hostMatchesAllowlist,
   siteKeyForUrl,
 } from "@zeo/core";
@@ -267,7 +268,9 @@ function useTabDrag(pinned: Tab[], unpinned: Tab[]) {
  * injected `window.zeo` bridge. No business logic, no Node/Electron imports.
  * Shows a blocked-count shield when `blockedCount > 0`; when the tab's site is
  * `allowlisted` the shield instead marks blocking as disabled for `host` (no
- * count). The count shield is dimmed when blocking is globally disabled.
+ * count). The count shield is dimmed when blocking is globally disabled. Shows a
+ * clickable zoom badge (sibling of the shield) when `zoomFactor !== 1.0`;
+ * clicking it dispatches `zoom.reset` to return the host to actual size.
  */
 function TabRow({
   tab,
@@ -278,6 +281,7 @@ function TabRow({
   blockingEnabled,
   allowlisted,
   host,
+  zoomFactor,
   onPointerDown,
 }: {
   tab: Tab;
@@ -288,6 +292,7 @@ function TabRow({
   blockingEnabled: boolean;
   allowlisted: boolean;
   host: string | null;
+  zoomFactor: number;
   onPointerDown: (event: ReactPointerEvent<HTMLLIElement>) => void;
 }) {
   const hasFavicon =
@@ -364,6 +369,21 @@ function TabRow({
           <span aria-hidden="true">🛡</span>
           <span className="tab-item__shield-count">{blockedCount}</span>
         </span>
+      ) : null}
+      {zoomFactor !== 1.0 ? (
+        <button
+          type="button"
+          className="tab-item__zoom"
+          data-testid="tab-zoom"
+          title={`Zoom ${formatZoomPercent(zoomFactor)} — click to reset to actual size`}
+          aria-label={`Zoom ${formatZoomPercent(zoomFactor)}, click to reset to actual size`}
+          onClick={(event) => {
+            event.stopPropagation();
+            void window.zeo?.commands.run("zoom.reset").catch(() => {});
+          }}
+        >
+          {formatZoomPercent(zoomFactor)}
+        </button>
       ) : null}
       <button
         type="button"
@@ -494,6 +514,7 @@ export function App() {
       blockedUnattributed: 0,
       allowlist: [],
     },
+    zoom: { byHost: {} },
   });
   const [showArchived, setShowArchived] = useState(false);
   const [now, setNow] = useState(() => Date.now());
@@ -661,6 +682,10 @@ export function App() {
         const host = siteKeyForUrl(tab.url);
         const allowlisted =
           host !== null && hostMatchesAllowlist(host, state.blocking.allowlist);
+        const zoomFactor =
+          tab.id === state.activeTabId && host !== null
+            ? (state.zoom.byHost[host] ?? 1.0)
+            : 1.0;
         children.push(
           <TabRow
             key={tab.id}
@@ -672,6 +697,7 @@ export function App() {
             blockingEnabled={state.blocking.enabled}
             allowlisted={allowlisted}
             host={host}
+            zoomFactor={zoomFactor}
             onPointerDown={(event) =>
               onRowPointerDown(event, tab, section === "pinned")
             }

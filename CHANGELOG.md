@@ -9,6 +9,18 @@ milestone, a minor bump only for very large breakthroughs.
 
 ## [Unreleased]
 
+## [0.0.18] - 2026-09-07
+
+### Added
+
+- Per-site zoom: each site (keyed by host) has its own zoom factor on the
+  Chromium zoom ladder, shared by every tab on that host and persisted across
+  relaunch (SQLite schema version 6). Zoom the active tab's site in, out, or back
+  to actual size from the keyboard (`Cmd+=`, `Cmd+-`, `Cmd+0`), the View menu, the
+  command bar ("Zoom In" / "Zoom Out" / "Actual Size"), or Ctrl+scroll; a sidebar
+  badge on the active tab shows the current percentage and resets the site to
+  100% when clicked. Pinch-to-zoom is disabled so the applied factor never drifts.
+
 ## [0.0.17] - 2026-09-07
 
 ### Added

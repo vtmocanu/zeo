@@ -26,6 +26,9 @@ import {
   readAllowlist,
   insertAllowlistHost,
   deleteAllowlistHost,
+  readSiteZoom,
+  upsertSiteZoom,
+  deleteSiteZoom,
   closeDb,
   recordVisit,
   updateVisitTitle,
@@ -87,7 +90,8 @@ const V3_DDL =
   V2_DDL +
   "CREATE TABLE blocking_allowlist (host TEXT PRIMARY KEY, createdAt INTEGER NOT NULL);";
 
-/** The schema v4 DDL: the v3 tables plus the two history tables. */
+/** The schema v4 DDL: the v3 tables plus the two history tables. A historical
+ *  fixture predating the searchEngine column and site_zoom table. */
 const V4_DDL =
   V3_DDL +
   `
@@ -107,11 +111,15 @@ CREATE INDEX history_visits_visitedAt ON history_visits(visitedAt);
 CREATE INDEX history_entries_lastVisitedAt ON history_entries(lastVisitedAt);
 `;
 
-/** The current (schema v5) DDL: the v4 tables plus the `meta.searchEngine`
- *  column added by the version-5 migration step. */
+/** The schema v5 DDL: v4 plus the meta.searchEngine column. */
 const V5_DDL =
   V4_DDL +
   "ALTER TABLE meta ADD COLUMN searchEngine TEXT NOT NULL DEFAULT 'duckduckgo';";
+
+/** The current (schema v6) DDL: v5 plus the site_zoom table. */
+const V6_DDL =
+  V5_DDL +
+  "CREATE TABLE site_zoom (host TEXT PRIMARY KEY, factor REAL NOT NULL, updatedAt INTEGER NOT NULL);";
 
 /** True when the `history_visits` table exists in the database. */
 function hasHistoryTable(db: Database.Database): boolean {
@@ -119,6 +127,17 @@ function hasHistoryTable(db: Database.Database): boolean {
     db
       .prepare(
         "SELECT name FROM sqlite_master WHERE type='table' AND name='history_visits'",
+      )
+      .get() !== undefined
+  );
+}
+
+/** True when the `site_zoom` table exists in the database. */
+function hasSiteZoomTable(db: Database.Database): boolean {
+  return (
+    db
+      .prepare(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='site_zoom'",
       )
       .get() !== undefined
   );
@@ -177,7 +196,7 @@ afterEach(() => {
 });
 
 describe("migrate", () => {
-  test("upgrades a v1 database to the current version, adding enabled, the allowlist, history, and the search engine and preserving rows", () => {
+  test("upgrades a v1 database to the current version, adding enabled, the allowlist, history, the search engine, and site_zoom and preserving rows", () => {
     const path = join(tempDir, "v1.db");
     const db = new Database(path);
     db.exec(V1_DDL);
@@ -188,6 +207,7 @@ describe("migrate", () => {
 
     expect(hasEnabledColumn(db)).toBe(false);
     expect(hasHistoryTable(db)).toBe(false);
+    expect(hasSiteZoomTable(db)).toBe(false);
     expect(hasSearchEngineColumn(db)).toBe(false);
 
     migrate(db);
@@ -202,13 +222,14 @@ describe("migrate", () => {
       enabled: number;
       searchEngine: string;
     };
-    expect(meta.schemaVersion).toBe(5);
+    expect(meta.schemaVersion).toBe(6);
     expect(hasEnabledColumn(db)).toBe(true);
     expect(hasAllowlistTable(db)).toBe(true);
     expect(meta.enabled).toBe(1);
     expect(hasHistoryTable(db)).toBe(true);
     expect(hasSearchEngineColumn(db)).toBe(true);
     expect(meta.searchEngine).toBe("duckduckgo");
+    expect(hasSiteZoomTable(db)).toBe(true);
     // Pre-existing rows preserved.
     expect(meta.activeSpaceId).toBe("space-1");
     expect(db.prepare("SELECT id FROM profiles").get()).toEqual({ id: "p1" });
@@ -217,7 +238,7 @@ describe("migrate", () => {
     db.close();
   });
 
-  test("upgrades a v2 database to the current version, adding the allowlist and history and preserving rows", () => {
+  test("upgrades a v2 database to the current version, adding the allowlist, history, the search engine, and site_zoom and preserving rows", () => {
     const path = join(tempDir, "v2.db");
     const db = new Database(path);
     db.exec(V2_DDL);
@@ -229,16 +250,18 @@ describe("migrate", () => {
 
     expect(hasAllowlistTable(db)).toBe(false);
     expect(hasHistoryTable(db)).toBe(false);
+    expect(hasSiteZoomTable(db)).toBe(false);
 
     migrate(db);
 
     const meta = db
       .prepare("SELECT schemaVersion, activeSpaceId, enabled FROM meta WHERE id=0")
       .get() as { schemaVersion: number; activeSpaceId: string; enabled: number };
-    expect(meta.schemaVersion).toBe(5);
+    expect(meta.schemaVersion).toBe(6);
     expect(hasAllowlistTable(db)).toBe(true);
     expect(hasHistoryTable(db)).toBe(true);
     expect(hasSearchEngineColumn(db)).toBe(true);
+    expect(hasSiteZoomTable(db)).toBe(true);
     expect(
       db
         .prepare(
@@ -255,8 +278,8 @@ describe("migrate", () => {
     db.close();
   });
 
-  test("upgrades a v3 database to the current version, adding the history tables and the search engine and preserving the allowlist and rows", () => {
-    const path = join(tempDir, "v3-to-v5.db");
+  test("upgrades a v3 database to the current version, adding the history tables, the search engine, and site_zoom and preserving the allowlist and rows", () => {
+    const path = join(tempDir, "v3-to-current.db");
     const db = new Database(path);
     db.exec(V3_DDL);
     // Seed enabled=0 so the migration is confirmed to preserve the flag.
@@ -269,15 +292,17 @@ describe("migrate", () => {
     ).run();
 
     expect(hasHistoryTable(db)).toBe(false);
+    expect(hasSiteZoomTable(db)).toBe(false);
 
     migrate(db);
 
     const meta = db
       .prepare("SELECT schemaVersion, activeSpaceId, enabled FROM meta WHERE id=0")
       .get() as { schemaVersion: number; activeSpaceId: string; enabled: number };
-    expect(meta.schemaVersion).toBe(5);
+    expect(meta.schemaVersion).toBe(6);
     expect(hasHistoryTable(db)).toBe(true);
     expect(hasSearchEngineColumn(db)).toBe(true);
+    expect(hasSiteZoomTable(db)).toBe(true);
     // Pre-existing allowlist, rows, and the enabled flag preserved.
     expect(hasAllowlistTable(db)).toBe(true);
     expect(db.prepare("SELECT host FROM blocking_allowlist").get()).toEqual({
@@ -289,8 +314,8 @@ describe("migrate", () => {
     db.close();
   });
 
-  test("upgrades a v4 database to v5, adding the searchEngine column and preserving rows", () => {
-    const path = join(tempDir, "v4-to-v5.db");
+  test("upgrades a v4 database to the current version, adding the searchEngine column and site_zoom table and preserving rows", () => {
+    const path = join(tempDir, "v4-to-current.db");
     const db = new Database(path);
     db.exec(V4_DDL);
     // Seed enabled=0 so the migration is confirmed to preserve the flag.
@@ -300,6 +325,7 @@ describe("migrate", () => {
     seedRows(db, "space-1");
 
     expect(hasSearchEngineColumn(db)).toBe(false);
+    expect(hasSiteZoomTable(db)).toBe(false);
 
     migrate(db);
 
@@ -313,10 +339,11 @@ describe("migrate", () => {
       enabled: number;
       searchEngine: string;
     };
-    expect(meta.schemaVersion).toBe(5);
+    expect(meta.schemaVersion).toBe(6);
     expect(hasSearchEngineColumn(db)).toBe(true);
     // The new column defaults to duckduckgo on the existing row.
     expect(meta.searchEngine).toBe("duckduckgo");
+    expect(hasSiteZoomTable(db)).toBe(true);
     // Pre-existing rows and the enabled flag preserved.
     expect(meta.activeSpaceId).toBe("space-1");
     expect(meta.enabled).toBe(0);
@@ -326,7 +353,46 @@ describe("migrate", () => {
     db.close();
   });
 
-  test("creates a fresh v5 schema with enabled=1, the allowlist, history tables, and the search engine on an empty database", () => {
+  test("upgrades a v5 database to v6, adding an empty site_zoom table and preserving the search engine and other state", () => {
+    const path = join(tempDir, "v5-to-v6.db");
+    const db = new Database(path);
+    db.exec(V5_DDL);
+    // Seed enabled=0 and a non-default searchEngine so a spurious re-create/migrate
+    // (which would reset them to their defaults) is detectable.
+    db.prepare(
+      "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled,searchEngine) VALUES (0, 5, 'space-9', 0, 'google')",
+    ).run();
+
+    expect(hasSiteZoomTable(db)).toBe(false);
+    expect(hasSearchEngineColumn(db)).toBe(true);
+
+    migrate(db);
+
+    const meta = db
+      .prepare(
+        "SELECT schemaVersion, activeSpaceId, enabled, searchEngine FROM meta WHERE id=0",
+      )
+      .get() as {
+      schemaVersion: number;
+      activeSpaceId: string;
+      enabled: number;
+      searchEngine: string;
+    };
+    expect(meta.schemaVersion).toBe(6);
+    expect(hasSiteZoomTable(db)).toBe(true);
+    // The freshly-created table starts with no rows.
+    const count = db
+      .prepare("SELECT COUNT(*) AS n FROM site_zoom")
+      .get() as { n: number };
+    expect(count.n).toBe(0);
+    // The search engine is preserved (not reset) and other seeded state survives.
+    expect(meta.searchEngine).toBe("google");
+    expect(meta.activeSpaceId).toBe("space-9");
+    expect(meta.enabled).toBe(0);
+    db.close();
+  });
+
+  test("creates a fresh v6 schema with enabled=1, the allowlist, history, and site_zoom tables, and the search engine on an empty database", () => {
     const path = join(tempDir, "fresh.db");
     const db = new Database(path);
 
@@ -335,24 +401,29 @@ describe("migrate", () => {
     const meta = db
       .prepare("SELECT schemaVersion, enabled, searchEngine FROM meta WHERE id=0")
       .get() as { schemaVersion: number; enabled: number; searchEngine: string };
-    expect(meta.schemaVersion).toBe(5);
+    expect(meta.schemaVersion).toBe(6);
     expect(hasEnabledColumn(db)).toBe(true);
     expect(hasAllowlistTable(db)).toBe(true);
     expect(meta.enabled).toBe(1);
     expect(hasHistoryTable(db)).toBe(true);
     expect(hasSearchEngineColumn(db)).toBe(true);
     expect(meta.searchEngine).toBe("duckduckgo");
+    expect(hasSiteZoomTable(db)).toBe(true);
     db.close();
   });
 
-  test("is a no-op on a database already at v5", () => {
-    const path = join(tempDir, "v5.db");
+  test("is a no-op on a database already at the current version (v6)", () => {
+    const path = join(tempDir, "v6.db");
     const db = new Database(path);
-    db.exec(V5_DDL);
+    db.exec(V6_DDL);
     // Seed enabled=0 and a non-default searchEngine so a spurious re-create/migrate
-    // (which would reset them to their defaults) is detectable.
+    // (which would reset them to their defaults) is detectable, and a site_zoom row
+    // so a re-create would be observable.
     db.prepare(
-      "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled,searchEngine) VALUES (0, 5, 'space-9', 0, 'google')",
+      "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled,searchEngine) VALUES (0, 6, 'space-9', 0, 'google')",
+    ).run();
+    db.prepare(
+      "INSERT INTO site_zoom(host,factor,updatedAt) VALUES ('example.com', 1.5, 42)",
     ).run();
 
     migrate(db);
@@ -367,22 +438,26 @@ describe("migrate", () => {
       enabled: number;
       searchEngine: string;
     };
-    expect(meta.schemaVersion).toBe(5);
+    expect(meta.schemaVersion).toBe(6);
     expect(meta.activeSpaceId).toBe("space-9");
     expect(meta.enabled).toBe(0);
     expect(meta.searchEngine).toBe("google");
+    // The existing site_zoom row is left untouched (no re-create wiped it).
+    expect(
+      db.prepare("SELECT host, factor, updatedAt FROM site_zoom").get(),
+    ).toEqual({ host: "example.com", factor: 1.5, updatedAt: 42 });
     db.close();
   });
 });
 
 describe("readAllowlist / insertAllowlistHost / deleteAllowlistHost", () => {
   test("round-trip: insert (ordered), INSERT OR IGNORE on a dup is a no-op, delete removes one", () => {
-    // Hand-build a valid current (v5) database at the path loadStore will open.
+    // Hand-build a valid current (v6) database at the path loadStore will open.
     const path = join(tempDir, "zeo.db");
     const seed = new Database(path);
-    seed.exec(V5_DDL);
+    seed.exec(V6_DDL);
     seed.prepare(
-      "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled) VALUES (0, 5, 'space-x', 1)",
+      "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled) VALUES (0, 6, 'space-x', 1)",
     ).run();
     seedRows(seed, "space-x");
     seed.close();
@@ -413,14 +488,61 @@ describe("readAllowlist / insertAllowlistHost / deleteAllowlistHost", () => {
   });
 });
 
+describe("readSiteZoom / upsertSiteZoom / deleteSiteZoom", () => {
+  // Each test opens the module-level handle on a fresh, migrated (v6) database
+  // via loadStore(), so the helpers act on the same handle production uses.
+  beforeEach(() => {
+    loadStore();
+  });
+
+  test("readSiteZoom on an empty table returns an empty map", () => {
+    expect(readSiteZoom()).toEqual({});
+  });
+
+  test("upsertSiteZoom inserts a row that readSiteZoom returns as {host: factor}", () => {
+    upsertSiteZoom("a.example", 1.5, 100);
+    expect(readSiteZoom()).toEqual({ "a.example": 1.5 });
+
+    // A second host folds into the same map.
+    upsertSiteZoom("b.example", 0.75, 200);
+    expect(readSiteZoom()).toEqual({ "a.example": 1.5, "b.example": 0.75 });
+  });
+
+  test("a second upsertSiteZoom on the same host replaces factor and updatedAt", () => {
+    upsertSiteZoom("a.example", 1.5, 100);
+    upsertSiteZoom("a.example", 2.0, 300);
+    expect(readSiteZoom()).toEqual({ "a.example": 2.0 });
+
+    // The stored updatedAt was overwritten too (single row per host).
+    const database = new Database(join(tempDir, "zeo.db"), { readonly: true });
+    const row = database
+      .prepare("SELECT factor, updatedAt FROM site_zoom WHERE host='a.example'")
+      .get() as { factor: number; updatedAt: number };
+    expect(row).toEqual({ factor: 2.0, updatedAt: 300 });
+    database.close();
+  });
+
+  test("deleteSiteZoom removes a host and is a no-op on an absent host", () => {
+    upsertSiteZoom("a.example", 1.5, 100);
+    upsertSiteZoom("b.example", 0.9, 200);
+
+    deleteSiteZoom("a.example");
+    expect(readSiteZoom()).toEqual({ "b.example": 0.9 });
+
+    // Deleting a host with no row is a silent no-op.
+    expect(() => deleteSiteZoom("missing.example")).not.toThrow();
+    expect(readSiteZoom()).toEqual({ "b.example": 0.9 });
+  });
+});
+
 describe("readBlockingEnabled / writeBlockingEnabled", () => {
   test("writeBlockingEnabled(false) round-trips and leaves schemaVersion/activeSpaceId intact", () => {
-    // Hand-build a valid current (v5) database at the path loadStore will open.
+    // Hand-build a valid current (v6) database at the path loadStore will open.
     const path = join(tempDir, "zeo.db");
     const seed = new Database(path);
-    seed.exec(V5_DDL);
+    seed.exec(V6_DDL);
     seed.prepare(
-      "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled) VALUES (0, 5, 'space-x', 1)",
+      "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled) VALUES (0, 6, 'space-x', 1)",
     ).run();
     seedRows(seed, "space-x");
     seed.close();
@@ -437,7 +559,7 @@ describe("readBlockingEnabled / writeBlockingEnabled", () => {
     const meta = inspect
       .prepare("SELECT schemaVersion, activeSpaceId, enabled FROM meta WHERE id=0")
       .get() as { schemaVersion: number; activeSpaceId: string; enabled: number };
-    expect(meta.schemaVersion).toBe(5);
+    expect(meta.schemaVersion).toBe(6);
     expect(meta.activeSpaceId).toBe("space-x");
     expect(meta.enabled).toBe(0);
     inspect.close();
@@ -445,14 +567,14 @@ describe("readBlockingEnabled / writeBlockingEnabled", () => {
 });
 
 describe("readSearchEngine / writeSearchEngine", () => {
-  /** Hand-builds a valid current (v5) database at the loadStore path, opens the
+  /** Hand-builds a valid current (v6) database at the loadStore path, opens the
    *  module-level handle the accessors use, and returns the db file path. */
   function seedAndLoad(): string {
     const path = join(tempDir, "zeo.db");
     const seed = new Database(path);
-    seed.exec(V5_DDL);
+    seed.exec(V6_DDL);
     seed.prepare(
-      "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled) VALUES (0, 5, 'space-x', 1)",
+      "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled) VALUES (0, 6, 'space-x', 1)",
     ).run();
     seedRows(seed, "space-x");
     seed.close();

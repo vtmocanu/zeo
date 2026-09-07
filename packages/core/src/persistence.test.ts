@@ -318,8 +318,8 @@ describe("repair rules on deserialize", () => {
 });
 
 describe("SCHEMA_VERSION", () => {
-  test("is 5", () => {
-    expect(SCHEMA_VERSION).toBe(5);
+  test("is 6", () => {
+    expect(SCHEMA_VERSION).toBe(6);
   });
 });
 
@@ -330,15 +330,16 @@ describe("migrationAction", () => {
     expect(migrationAction(2)).toBe("migrate");
     expect(migrationAction(3)).toBe("migrate");
     expect(migrationAction(4)).toBe("migrate");
-    expect(migrationAction(5)).toBe("noop");
-    expect(migrationAction(6)).toBe("abort");
+    expect(migrationAction(5)).toBe("migrate");
+    expect(migrationAction(6)).toBe("noop");
+    expect(migrationAction(7)).toBe("abort");
   });
 });
 
 describe("version guard", () => {
   test("deserialize of a newer schema version throws UnsupportedSchemaVersionError", () => {
     const state: PersistedState = {
-      meta: { schemaVersion: 6, activeSpaceId: null },
+      meta: { schemaVersion: 7, activeSpaceId: null },
       profiles: [{ id: "default", name: "Default", createdAt: 1, position: 0 }],
       spaces: [],
       tabs: [],
