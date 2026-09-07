@@ -1025,11 +1025,14 @@ function performSuggestion(s: Suggestion): void {
     }
     case "history": {
       // Accepting a history row (PRD 6.1 §5): create a tab at its url in new-tab
-      // mode, otherwise (navigate/history mode) navigate the active tab.
-      if (commandBar.mode === "new-tab") {
+      // mode, otherwise (navigate/history mode) navigate the active tab. With no
+      // active tab (an empty space, or the active tab was closed while a history-
+      // mode bar stayed open), fall back to creating a tab so accept never throws
+      // on a null id — the same downgrade openCommandBar applies for navigate mode.
+      if (commandBar.mode === "new-tab" || store.activeTabId === null) {
         createTab(s.url);
       } else {
-        navigateTab(store.activeTabId!, s.url);
+        navigateTab(store.activeTabId, s.url);
       }
       return;
     }
