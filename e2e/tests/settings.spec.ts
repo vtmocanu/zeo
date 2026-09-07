@@ -308,6 +308,11 @@ test.describe("PRD 6.5 settings sections + search engine (offline)", () => {
       // Click the Blocking row: it takes DOM focus and becomes the selection.
       await settings.getByTestId("settings-section-blocking").click();
       await expect(settings.locator(SELECTED("blocking"))).toHaveCount(1);
+      // The clicked section button holds DOM focus — the precondition this test
+      // exercises (Enter arriving while a section button is focused). Asserting it
+      // keeps the test from silently decaying into a pass on unfixed code if focus
+      // behavior ever changed.
+      await expect(settings.getByTestId("settings-section-blocking")).toBeFocused();
 
       // ArrowDown moves the highlight blocking -> profiles while focus stays on the
       // clicked Blocking button.
