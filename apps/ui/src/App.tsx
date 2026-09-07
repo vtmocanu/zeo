@@ -490,6 +490,7 @@ export function App() {
       blockedUnattributed: 0,
       allowlist: [],
     },
+    zoom: { byHost: {} },
   });
   const [showArchived, setShowArchived] = useState(false);
   const [now, setNow] = useState(() => Date.now());

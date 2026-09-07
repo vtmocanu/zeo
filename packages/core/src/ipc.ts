@@ -5,6 +5,7 @@ import type { CommandBarMode, CommandBarState } from "./command-bar.js";
 import type { CommandDescriptor, CommandId } from "./commands.js";
 import type { BlockingState } from "./blocking.js";
 import type { HistoryEntry, HistoryVisit } from "./history.js";
+import type { ZoomState } from "./zoom.js";
 
 /**
  * A single space's tab payload, in the pre-space shape. This is what
@@ -44,11 +45,14 @@ export interface StoreSnapshot extends SpacesState, TabsSlice {}
  * code written against the pre-space snapshot keeps working unchanged; `blocking`
  * carries the content-blocking counts main attaches before broadcast, and
  * `settingsOpen` (attached by main, not part of the pure store snapshot)
- * reflects whether the settings view is currently open.
+ * reflects whether the settings view is currently open. `zoom` carries the
+ * per-host zoom factors and rides the `stateChange` broadcast exactly like
+ * `blocking` — main attaches it before every broadcast, so it is never absent.
  */
 export interface TabsState extends StoreSnapshot {
   blocking: BlockingState;
   settingsOpen: boolean;
+  zoom: ZoomState;
 }
 
 /**
@@ -262,6 +266,22 @@ export interface HistoryApi {
 }
 
 /**
+ * Zoom commands the renderer invokes over IPC, handled in main. All three
+ * mutating calls act on the ACTIVE tab of the active space: `zoomIn`/`zoomOut`
+ * step the active tab's host up/down the Chromium zoom ladder and `reset`
+ * returns it to the default factor. Each REJECTS and changes nothing when there
+ * is no active tab or the active tab's current URL is not http(s). `state()`
+ * reads back the current {@link ZoomState}. Zoom rides the `stateChange`
+ * broadcast on `TabsState.zoom` — there is no dedicated change channel.
+ */
+export interface ZoomApi {
+  zoomIn(): Promise<void>;
+  zoomOut(): Promise<void>;
+  reset(): Promise<void>;
+  state(): Promise<ZoomState>;
+}
+
+/**
  * The full bridge surface exposed on `window.zeo` by the preload script.
  *
  * `onStateChange` registers a listener for main-pushed state updates and
@@ -276,6 +296,7 @@ export interface ZeoApi {
   commands: CommandsApi;
   blocking: BlockingApi;
   history: HistoryApi;
+  zoom: ZoomApi;
   onStateChange(listener: (state: TabsState) => void): () => void;
   /** Registers a listener for main-pushed command-bar state updates and returns
    *  an unsubscribe function, mirroring onStateChange. */
@@ -332,5 +353,9 @@ export const IPC = {
   historyRecent: "zeo:history:recent",
   historyDeleteUrl: "zeo:history:delete-url",
   historyClear: "zeo:history:clear",
+  zoomIn: "zeo:zoom:in",
+  zoomOut: "zeo:zoom:out",
+  zoomReset: "zeo:zoom:reset",
+  zoomState: "zeo:zoom:state",
   stateChange: "zeo:state-change",
 } as const;

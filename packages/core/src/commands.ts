@@ -6,6 +6,8 @@
  * suggestions, and main dispatches all of them through a single handler map.
  */
 
+import { DEFAULT_ZOOM_FACTOR } from "./zoom.js";
+
 /** The stable identifier of every registered command. */
 export type CommandId =
   | "tab.new"
@@ -28,7 +30,10 @@ export type CommandId =
   | "settings.open"
   | "settings.close"
   | "history.open"
-  | "history.clear";
+  | "history.clear"
+  | "zoom.in"
+  | "zoom.out"
+  | "zoom.reset";
 
 /**
  * One registry entry: its {@link CommandId}, human title, search `keywords`,
@@ -47,9 +52,12 @@ export interface CommandDescriptor {
  * The enablement inputs {@link isCommandEnabled} reads: the active tab's pin and
  * navigation-history flags plus its allowlist state — `siteHost` (the allowlist
  * key from `siteKeyForUrl(tab.url)`, or `null` for a non-http(s) tab) and
- * `siteAllowlisted` (whether that host is covered by the allowlist) — or `null`
- * when no tab is active; the number of spaces; and `settingsOpen`, whether the
- * settings view is currently open.
+ * `siteAllowlisted` (whether that host is covered by the allowlist) — and
+ * `zoomFactor`, the active tab's host's current zoom factor
+ * (`TabsState.zoom.byHost[siteHost]`, or `1.0`/{@link DEFAULT_ZOOM_FACTOR} when
+ * the host has no entry or the tab is non-http(s)) — or `null` when no tab is
+ * active; the number of spaces; and `settingsOpen`, whether the settings view is
+ * currently open.
  */
 export interface CommandContext {
   activeTab: {
@@ -58,6 +66,7 @@ export interface CommandContext {
     canGoForward: boolean;
     siteHost: string | null;
     siteAllowlisted: boolean;
+    zoomFactor: number;
   } | null;
   spaceCount: number;
   settingsOpen: boolean;
@@ -91,6 +100,9 @@ export const COMMANDS: readonly CommandDescriptor[] = [
   { id: "settings.close", title: "Close Settings", keywords: ["settings"], accelerator: null, menu: null },
   { id: "history.open", title: "Show History", keywords: ["history", "recent", "visited"], accelerator: "CmdOrCtrl+Y", menu: "view" },
   { id: "history.clear", title: "Clear Browsing History", keywords: ["history", "clear", "delete"], accelerator: null, menu: "view" },
+  { id: "zoom.in", title: "Zoom In", keywords: ["zoom", "in", "larger", "bigger"], accelerator: "CmdOrCtrl+=", menu: "view" },
+  { id: "zoom.out", title: "Zoom Out", keywords: ["zoom", "out", "smaller"], accelerator: "CmdOrCtrl+-", menu: "view" },
+  { id: "zoom.reset", title: "Actual Size", keywords: ["zoom", "reset", "actual", "default", "100"], accelerator: "CmdOrCtrl+0", menu: "view" },
 ];
 
 /**
@@ -103,7 +115,10 @@ export const COMMANDS: readonly CommandDescriptor[] = [
  * the matching history flag. `space.delete` needs more than one space.
  * `blocking.allowSite` needs an active tab with an http(s) `siteHost` that is
  * not yet allowlisted; `blocking.disallowSite` needs an active tab whose site
- * is allowlisted; `settings.close` needs the settings view open.
+ * is allowlisted; `settings.close` needs the settings view open. `zoom.in` and
+ * `zoom.out` need an active tab with a non-null http(s) `siteHost`; `zoom.reset`
+ * needs that too AND a current `zoomFactor` other than the default `1.0` (there
+ * is nothing to reset when the host is already at actual size).
  */
 export function isCommandEnabled(id: CommandId, context: CommandContext): boolean {
   switch (id) {
@@ -143,6 +158,15 @@ export function isCommandEnabled(id: CommandId, context: CommandContext): boolea
       return context.activeTab !== null && context.activeTab.canGoBack;
     case "tab.forward":
       return context.activeTab !== null && context.activeTab.canGoForward;
+    case "zoom.in":
+    case "zoom.out":
+      return context.activeTab !== null && context.activeTab.siteHost !== null;
+    case "zoom.reset":
+      return (
+        context.activeTab !== null &&
+        context.activeTab.siteHost !== null &&
+        context.activeTab.zoomFactor !== DEFAULT_ZOOM_FACTOR
+      );
     default: {
       const exhaustive: never = id;
       return exhaustive;

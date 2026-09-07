@@ -6,6 +6,7 @@ import {
   formatAccelerator,
 } from "./commands.js";
 import type { CommandId, CommandContext } from "./commands.js";
+import { DEFAULT_ZOOM_FACTOR } from "./zoom.js";
 
 const ALL_IDS: CommandId[] = [
   "tab.new",
@@ -29,6 +30,9 @@ const ALL_IDS: CommandId[] = [
   "settings.close",
   "history.open",
   "history.clear",
+  "zoom.in",
+  "zoom.out",
+  "zoom.reset",
 ];
 
 /**
@@ -56,6 +60,7 @@ function activeTab(
     canGoForward: false,
     siteHost: "example.com",
     siteAllowlisted: false,
+    zoomFactor: DEFAULT_ZOOM_FACTOR,
     ...over,
   };
 }
@@ -227,6 +232,52 @@ describe("isCommandEnabled — allowlist and settings commands", () => {
   test("settings.close needs the settings view open", () => {
     expect(isCommandEnabled("settings.close", context({ settingsOpen: true }))).toBe(true);
     expect(isCommandEnabled("settings.close", context({ settingsOpen: false }))).toBe(false);
+  });
+});
+
+describe("zoom commands", () => {
+  test("all three are view-menu commands with the ladder accelerators", () => {
+    for (const [id, accelerator] of [
+      ["zoom.in", "CmdOrCtrl+="],
+      ["zoom.out", "CmdOrCtrl+-"],
+      ["zoom.reset", "CmdOrCtrl+0"],
+    ] as const) {
+      const entry = COMMANDS.find((c) => c.id === id);
+      expect(entry).toBeDefined();
+      expect(entry?.menu).toBe("view");
+      expect(entry?.accelerator).toBe(accelerator);
+    }
+  });
+
+  test("zoom.in and zoom.out need an active tab with a non-null http(s) siteHost", () => {
+    for (const id of ["zoom.in", "zoom.out"] as const) {
+      expect(isCommandEnabled(id, context({ activeTab: activeTab({ siteHost: "example.com" }) }))).toBe(true);
+      expect(isCommandEnabled(id, context({ activeTab: activeTab({ siteHost: null }) }))).toBe(false);
+      expect(isCommandEnabled(id, context({ activeTab: null }))).toBe(false);
+    }
+  });
+
+  test("zoom.in and zoom.out ignore the current factor", () => {
+    for (const id of ["zoom.in", "zoom.out"] as const) {
+      expect(isCommandEnabled(id, context({ activeTab: activeTab({ zoomFactor: 1.0 }) }))).toBe(true);
+      expect(isCommandEnabled(id, context({ activeTab: activeTab({ zoomFactor: 1.25 }) }))).toBe(true);
+    }
+  });
+
+  test("zoom.reset toggles on the active host's factor crossing 1.0", () => {
+    // Disabled at the default factor: nothing to reset.
+    expect(
+      isCommandEnabled("zoom.reset", context({ activeTab: activeTab({ siteHost: "example.com", zoomFactor: 1.0 }) })),
+    ).toBe(false);
+    // Enabled once the host sits at a non-default factor.
+    expect(
+      isCommandEnabled("zoom.reset", context({ activeTab: activeTab({ siteHost: "example.com", zoomFactor: 1.25 }) })),
+    ).toBe(true);
+    // Disabled again when there is no http(s) host, regardless of the factor.
+    expect(
+      isCommandEnabled("zoom.reset", context({ activeTab: activeTab({ siteHost: null, zoomFactor: 1.25 }) })),
+    ).toBe(false);
+    expect(isCommandEnabled("zoom.reset", context({ activeTab: null }))).toBe(false);
   });
 });
 

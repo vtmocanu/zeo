@@ -31,6 +31,10 @@ import {
   isHistoryUrl,
   historyKey,
   historyTerms,
+  zoomIn,
+  zoomOut,
+  setHostZoom,
+  DEFAULT_ZOOM_FACTOR,
 } from "@zeo/core";
 import type {
   BlockingState,
@@ -50,6 +54,7 @@ import type {
   Tab,
   TabContextMenuResult,
   TabsState,
+  ZoomState,
 } from "@zeo/core";
 import { createBlocker, createBlockerFromFilters } from "@zeo/adblock";
 import type { Blocker } from "@zeo/adblock";
@@ -69,6 +74,9 @@ import {
   deleteHistoryUrl,
   clearHistory,
   pruneHistory,
+  readSiteZoom,
+  upsertSiteZoom,
+  deleteSiteZoom,
 } from "./db.js";
 
 // The built main is emitted by electron-vite as ESM (out/main/index.js, the
@@ -205,6 +213,12 @@ let blocker: Blocker | null = null;
  */
 let blocking: BlockingState = initialBlockingState(true, "none");
 /**
+ * The per-site zoom slice main owns and attaches to every broadcast snapshot.
+ * Seeded here empty and replaced at startup from {@link readSiteZoom}; every
+ * later change flows through {@link applyZoom}, the single host-state write path.
+ */
+let zoom: ZoomState = { byHost: {} };
+/**
  * The live per-site allowlist, loaded from {@link readAllowlist} before the
  * blocker is created and mutated by {@link allowSite}/{@link disallowSite}. The
  * installed bypass predicate reads this set directly, so an allowlist edit takes
@@ -275,7 +289,64 @@ function fullSnapshot(): TabsState {
     ...store.snapshot(),
     blocking: { ...blocking, listVersion: blocker?.listVersion ?? blocking.listVersion },
     settingsOpen,
+    zoom,
   };
+}
+
+/** Sets the on-screen zoom factor for one view. The ONLY caller of
+ *  `setZoomFactor`; never persists or broadcasts. No-op on a destroyed view. */
+function applyViewZoom(view: WebContentsView, factor: number): void {
+  if (view.webContents.isDestroyed()) {
+    return;
+  }
+  view.webContents.setZoomFactor(factor);
+}
+
+/** The single write path for a host's persisted zoom factor. Resolves the tab's
+ *  view and host; a null host (non-http(s)) just forces the view to 1.0 and
+ *  touches no state. Otherwise computes the would-be ZoomState; if the host's
+ *  stored factor is unchanged it is a FULL no-op. Else it persists first (upsert
+ *  for a non-default factor, delete when the reducer removed the host), and only
+ *  on success replaces the in-memory zoom, re-applies to every LIVE view on that
+ *  host, and broadcasts. A DB write failure aborts with no state/view/broadcast
+ *  change. No-op for an unknown/destroyed tab view. */
+function applyZoom(tabId: string, factor: number): void {
+  const view = views.get(tabId)?.view;
+  if (view === undefined || view.webContents.isDestroyed()) {
+    return;
+  }
+  const host = siteKeyForUrl(view.webContents.getURL());
+  if (host === null) {
+    applyViewZoom(view, DEFAULT_ZOOM_FACTOR);
+    return;
+  }
+  const next = setHostZoom(zoom, host, factor);
+  const after = next.byHost[host];
+  if (zoom.byHost[host] === after) {
+    return; // idempotent: the host's factor is unchanged
+  }
+  try {
+    if (after === undefined) {
+      deleteSiteZoom(host);
+    } else {
+      upsertSiteZoom(host, after, Date.now());
+    }
+  } catch (err) {
+    console.error("[zoom] failed to persist zoom for", host, err);
+    return; // abort: leave persisted state, in-memory zoom, and views consistent
+  }
+  zoom = next;
+  const applied = after ?? DEFAULT_ZOOM_FACTOR;
+  for (const tracked of views.values()) {
+    const v = tracked.view;
+    if (v.webContents.isDestroyed()) {
+      continue;
+    }
+    if (siteKeyForUrl(v.webContents.getURL()) === host) {
+      applyViewZoom(v, applied);
+    }
+  }
+  broadcast();
 }
 
 /**
@@ -620,6 +691,9 @@ function createViewFor(tab: Tab, spaceId: string, urlOverride?: string): void {
     },
   });
   views.set(tab.id, { view, spaceId });
+  // Disable pinch-to-zoom so the visual viewport never drifts from the applied
+  // per-site factor; zoom is driven only by setZoomFactor via applyViewZoom.
+  view.webContents.setVisualZoomLevelLimits(1, 1);
   // Reverse index for blocked-request attribution: this view's webContents id
   // maps to its tab. Removed in destroyView. The parallel forward index records
   // the same id keyed by tab so teardown can drop the reverse entry even after
@@ -704,6 +778,24 @@ function createViewFor(tab: Tab, spaceId: string, urlOverride?: string): void {
   });
   view.webContents.on("did-navigate-in-page", () => {
     recordNavigation(tab.id);
+  });
+
+  // Apply the host's stored zoom on the first commit and every later navigation.
+  view.webContents.on("did-navigate", () => {
+    const host = siteKeyForUrl(view.webContents.getURL());
+    applyViewZoom(
+      view,
+      host === null ? DEFAULT_ZOOM_FACTOR : (zoom.byHost[host] ?? DEFAULT_ZOOM_FACTOR),
+    );
+  });
+  // Ctrl+wheel zoom: snap onto the ladder and route through the host write path.
+  view.webContents.on("zoom-changed", (_event, zoomDirection) => {
+    const host = siteKeyForUrl(view.webContents.getURL());
+    if (host === null) {
+      return;
+    }
+    const current = zoom.byHost[host] ?? DEFAULT_ZOOM_FACTOR;
+    applyZoom(tab.id, zoomDirection === "in" ? zoomIn(current) : zoomOut(current));
   });
 
   // History flags (canGoBack/canGoForward) settle only after a load finishes, so
@@ -907,10 +999,34 @@ function commandContextOf(): CommandContext {
       canGoForward: wc?.navigationHistory.canGoForward() ?? false,
       siteHost,
       siteAllowlisted: siteHost !== null && hostMatchesAllowlist(siteHost, allowlist),
+      zoomFactor: siteHost !== null ? (zoom.byHost[siteHost] ?? DEFAULT_ZOOM_FACTOR) : DEFAULT_ZOOM_FACTOR,
     },
     spaceCount,
     settingsOpen,
   };
+}
+
+/** Steps or resets the ACTIVE tab's host zoom. Rejects (changing nothing) when
+ *  there is no active tab, no live view, or the tab's current URL is not
+ *  http(s). Backs the ZoomApi IPC handlers and the zoom.* command handlers. */
+function zoomActiveTab(direction: "in" | "out" | "reset"): Promise<void> {
+  const activeTabId = store.activeTabId;
+  if (activeTabId === null) {
+    return Promise.reject(new Error("no active tab"));
+  }
+  const view = views.get(activeTabId)?.view;
+  if (view === undefined || view.webContents.isDestroyed()) {
+    return Promise.reject(new Error("no active tab view"));
+  }
+  const host = siteKeyForUrl(view.webContents.getURL());
+  if (host === null) {
+    return Promise.reject(new Error("active tab is not http(s)"));
+  }
+  const current = zoom.byHost[host] ?? DEFAULT_ZOOM_FACTOR;
+  const factor =
+    direction === "in" ? zoomIn(current) : direction === "out" ? zoomOut(current) : DEFAULT_ZOOM_FACTOR;
+  applyZoom(activeTabId, factor);
+  return Promise.resolve();
 }
 
 /**
@@ -1000,6 +1116,15 @@ const commandHandlers: Record<CommandId, () => void> = {
       layoutOverlay();
       pushCommandBar();
     }
+  },
+  "zoom.in": () => {
+    zoomActiveTab("in").catch((err) => console.error("[zoom] zoom.in failed:", err));
+  },
+  "zoom.out": () => {
+    zoomActiveTab("out").catch((err) => console.error("[zoom] zoom.out failed:", err));
+  },
+  "zoom.reset": () => {
+    zoomActiveTab("reset").catch((err) => console.error("[zoom] zoom.reset failed:", err));
   },
 };
 
@@ -2099,6 +2224,17 @@ ipcMain.handle(
 
 ipcMain.handle(IPC.blockingRefresh, (): Promise<boolean> => refreshLists());
 
+// --- Zoom ---------------------------------------------------------------------
+// zoomIn/zoomOut/reset act on the active tab of the active space and reject when
+// there is no active tab or the active tab's url is non-http(s); each routes
+// through the shared zoomActiveTab helper (and applyZoom, the single host-state
+// write path). zoomState reads back the current ZoomState off the broadcast
+// snapshot; zoom changes ride the existing stateChange broadcast.
+ipcMain.handle(IPC.zoomIn, (): Promise<void> => zoomActiveTab("in"));
+ipcMain.handle(IPC.zoomOut, (): Promise<void> => zoomActiveTab("out"));
+ipcMain.handle(IPC.zoomReset, (): Promise<void> => zoomActiveTab("reset"));
+ipcMain.handle(IPC.zoomState, (): ZoomState => fullSnapshot().zoom);
+
 // --- History ------------------------------------------------------------------
 // search/recent read the SQLite history tables on demand (history is never part
 // of TabsState and never broadcast); deleteUrl/clear mutate them. A read error is
@@ -2355,6 +2491,10 @@ app.whenReady().then(async () => {
       "none",
       [...allowlist].sort((a, b) => a.localeCompare(b)),
     );
+    // Seed TabsState.zoom.byHost from the DB before any window/tab view exists;
+    // an empty site_zoom table yields { byHost: {} }. Every later change flows
+    // through applyZoom.
+    zoom = { byHost: readSiteZoom() };
 
     const filtersFile = process.env.ZEO_ADBLOCK_FILTERS;
     if (process.env.ZEO_E2E === "1" && filtersFile !== undefined && filtersFile !== "") {

@@ -29,6 +29,7 @@ export type {
   CommandsApi,
   BlockingApi,
   HistoryApi,
+  ZoomApi,
   ZeoApi,
   TabContextMenuItem,
   TabContextMenuResult,
