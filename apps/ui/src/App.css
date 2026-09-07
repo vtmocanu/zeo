@@ -282,6 +282,35 @@ body {
   background: #2a2a38;
 }
 
+/* Per-site zoom badge on the active tab's row. Sibling of the shield, sized to
+   match it, but interactive: a click resets the host to actual size. Reset the
+   button chrome and use tabular figures so the percentage stays aligned. */
+.tab-item__zoom {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  border: none;
+  background: transparent;
+  color: #9a9ab0;
+  font-size: 11px;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 4px;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+
+.tab-item__zoom:hover {
+  background: #2a2a38;
+  color: #c8c8dc;
+}
+
+.tab-item__zoom:focus-visible {
+  outline: 2px solid #6b6bff;
+  outline-offset: -2px;
+}
+
 .sidebar__empty {
   padding: 12px;
   font-size: 12px;
