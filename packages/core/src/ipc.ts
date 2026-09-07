@@ -51,12 +51,21 @@ export interface StoreSnapshot extends SpacesState, TabsSlice {}
  * channel; `settingsSection` is the currently-targeted settings section main
  * pushes to the settings view (the section-open commands set it), which the PRD
  * calls the pushed `section`.
+ *
+ * `settingsSectionNonce` is a monotonically increasing counter main bumps each
+ * time a section-open command (or a cold `settings.open`) targets a section, so
+ * the settings renderer re-selects the pushed `settingsSection` on every such
+ * request even when the section id is unchanged (a discrete user intent to
+ * reveal that section must win over a stale local selection). An unrelated
+ * broadcast carries the same nonce as the previous one, so it never disturbs the
+ * renderer's local keyboard selection.
  */
 export interface TabsState extends StoreSnapshot {
   blocking: BlockingState;
   settingsOpen: boolean;
   settings: Settings;
   settingsSection: SettingsSectionId;
+  settingsSectionNonce: number;
 }
 
 /**

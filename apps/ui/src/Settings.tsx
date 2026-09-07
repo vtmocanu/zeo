@@ -33,11 +33,13 @@ import "./App.css";
  * mutations go back through the bridge, so a value main rejected is never kept.
  *
  * Section selection is split: `selected` (the shown body) follows the pushed
- * `settingsSection` — the section-open commands set it — while `highlight` is the
- * renderer-local keyboard cursor. `ArrowDown`/`ArrowUp` move the highlight
+ * `settingsSection` on every section-open request — main bumps
+ * `settingsSectionNonce` each time a section-open command fires, so a re-invoked
+ * open re-selects even when the section id is unchanged — while `highlight` is
+ * the renderer-local keyboard cursor. `ArrowDown`/`ArrowUp` move the highlight
  * through {@link SETTINGS_SECTIONS}, `Enter` selects the highlight, and clicking a
- * row selects and highlights it. An unrelated broadcast (unchanged
- * `settingsSection`) never disturbs the user's local selection.
+ * row selects and highlights it. An unrelated broadcast (unchanged nonce) never
+ * disturbs the user's local selection.
  *
  * `Escape` anywhere in the view dispatches the `settings.close` command; the
  * `Cmd+,` toggle is owned by the main process, not here.
@@ -48,9 +50,12 @@ export function Settings() {
   // The section whose body is shown, and the renderer-local keyboard cursor.
   const [selected, setSelected] = useState<SettingsSectionId>("general");
   const [highlight, setHighlight] = useState<SettingsSectionId>("general");
-  // The last `settingsSection` seen from state, so only a genuine change (or the
-  // very first snapshot) drives selection — never an unrelated rebroadcast.
-  const lastSectionRef = useRef<SettingsSectionId | null>(null);
+  // The last `settingsSectionNonce` seen from state, so only a genuine
+  // section-open request (main bumps the nonce, including the very first
+  // snapshot) drives selection — never an unrelated rebroadcast, which carries an
+  // unchanged nonce. A re-invoked section-open command re-selects even when the
+  // section id is unchanged. Seeded to a sentinel that no real nonce equals.
+  const lastNonceRef = useRef<number | null>(null);
 
   useEffect(() => {
     // Guard so a bare browser dev-open (no bridge) doesn't throw. In Electron
@@ -79,14 +84,18 @@ export function Settings() {
   }, []);
 
   useEffect(() => {
-    // A section-open command changes `settingsSection`; adopt it as the selected
-    // and highlighted section. The very first snapshot (ref still null) selects
-    // its section too — main defaults it to "general" when none was pushed.
+    // A section-open command bumps `settingsSectionNonce`; adopt the pushed
+    // `settingsSection` as the selected and highlighted section. This re-selects
+    // even when the section id is unchanged (a re-invoked open of the same
+    // section), because a section-open is a discrete user intent to reveal it.
+    // The very first snapshot (ref still the sentinel) selects its section too —
+    // main defaults it to "general" when none was pushed. An unrelated broadcast
+    // carries the same nonce and so never overrides the local selection.
     if (!state) {
       return;
     }
-    if (state.settingsSection !== lastSectionRef.current) {
-      lastSectionRef.current = state.settingsSection;
+    if (state.settingsSectionNonce !== lastNonceRef.current) {
+      lastNonceRef.current = state.settingsSectionNonce;
       setSelected(state.settingsSection);
       setHighlight(state.settingsSection);
     }
@@ -110,25 +119,34 @@ export function Settings() {
   }, []);
 
   useEffect(() => {
-    // Section-list keyboard navigation. It is deliberately NOT hijacked while a
-    // form control is focused, so typing a profile name or pressing Enter in a
-    // rename field is never stolen; the section-list buttons trigger their own
-    // click on Enter, so selection still works when one is focused.
+    // Section-list keyboard navigation. ArrowUp/ArrowDown move the highlight
+    // through the section list and must keep working when a section-list
+    // <button> is focused (a fresh open focuses one), so they are skipped only in
+    // a text-cursor context (INPUT/TEXTAREA/SELECT) where an arrow moves the
+    // caret. Enter selects the highlighted section, but a focused button or field
+    // handles Enter natively (activate the button, submit the field), so Enter is
+    // skipped for BUTTON as well as the text-cursor contexts.
     const onNavigate = (event: KeyboardEvent): void => {
       const target = event.target;
-      if (
-        target instanceof HTMLElement &&
-        ["INPUT", "TEXTAREA", "SELECT", "BUTTON"].includes(target.tagName)
-      ) {
-        return;
-      }
+      const tagName = target instanceof HTMLElement ? target.tagName : "";
+      const inTextField =
+        tagName === "INPUT" || tagName === "TEXTAREA" || tagName === "SELECT";
       if (event.key === "ArrowDown") {
+        if (inTextField) {
+          return;
+        }
         event.preventDefault();
         setHighlight((current) => nextSection(current));
       } else if (event.key === "ArrowUp") {
+        if (inTextField) {
+          return;
+        }
         event.preventDefault();
         setHighlight((current) => prevSection(current));
       } else if (event.key === "Enter") {
+        if (inTextField || tagName === "BUTTON") {
+          return;
+        }
         event.preventDefault();
         setSelected(highlight);
       }

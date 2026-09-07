@@ -249,6 +249,14 @@ let settings: Settings = { searchEngine: "duckduckgo" };
  */
 let settingsSection: SettingsSectionId = "general";
 /**
+ * Monotonically increasing per-open nonce for the pushed {@link settingsSection}.
+ * Bumped whenever a section-open command (or a cold {@link openSettings}) targets
+ * a section, so the settings renderer re-selects that section on every such
+ * request even when the section id is unchanged; an unrelated broadcast leaves it
+ * untouched, so it never disturbs the renderer's local keyboard selection.
+ */
+let settingsSectionNonce = 0;
+/**
  * Reverse index `webContents.id -> tabId` for attributing a blocked request to
  * the tab that issued it. Populated in {@link createViewFor}, dropped in
  * {@link destroyView}.
@@ -297,6 +305,7 @@ function fullSnapshot(): TabsState {
     settingsOpen,
     settings,
     settingsSection,
+    settingsSectionNonce,
   };
 }
 
@@ -621,13 +630,18 @@ function openSettings(): void {
 
 /**
  * Opens the settings view with `section` selected (PRD 6.5 §7). Sets the pushed
- * {@link settingsSection}, then opens: a cold open path broadcasts (carrying the
- * new section), while {@link openSettings} on an already-open view only refocuses
- * and does not broadcast, so the new section is pushed explicitly with an extra
- * {@link broadcast} in that warm case. Backs the per-section open commands.
+ * {@link settingsSection} and bumps {@link settingsSectionNonce} so the renderer
+ * re-selects the section even when it is unchanged (a re-invoked section-open
+ * command must reveal that section whether the view was closed or already open on
+ * another section), then opens: a cold open path broadcasts (carrying the new
+ * section+nonce), while {@link openSettings} on an already-open view only
+ * refocuses and does not broadcast, so the new section+nonce is pushed explicitly
+ * with an extra {@link broadcast} in that warm case. Backs the per-section open
+ * commands.
  */
 function openSettingsAt(section: SettingsSectionId): void {
   settingsSection = section;
+  settingsSectionNonce++;
   const wasOpen = settingsOpen;
   openSettings();
   if (wasOpen) {
@@ -1047,10 +1061,12 @@ const commandHandlers: Record<CommandId, () => void> = {
     }
   },
   "settings.open": () => {
-    // A cold open selects General; when already open, leave the current section
-    // unchanged (preserving PRD 5.2's focus-only behavior).
+    // A cold open selects General and bumps the nonce so the renderer re-selects
+    // it; when already open, leave the section and nonce unchanged (a plain Cmd+,
+    // then just focuses, preserving PRD 5.2's focus-only behavior).
     if (!settingsOpen) {
       settingsSection = "general";
+      settingsSectionNonce++;
     }
     openSettings();
   },
