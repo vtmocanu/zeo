@@ -866,3 +866,88 @@ body {
   background: #4a262f;
   color: #ffb3b3;
 }
+
+/* Find bar ---------------------------------------------------------------- */
+
+/* The find surface of the overlay WebContentsView (selected when
+   CommandBarState.surface === "find"). Main sizes the overlay to 360×44 and
+   anchors it top-right of the page region, so this is a single horizontal row
+   that FILLS the viewport. Reuses the command bar's dark surface tokens. */
+.find-bar {
+  height: 100vh;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  background: #1e1e28;
+  color: #e6e6ee;
+  border: 1px solid #2c2c3a;
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+}
+
+/* The query input fills the row. Transparent so the bar's surface shows
+   through and no default outline, mirroring .command-bar__input's focus model. */
+.find-bar__input {
+  appearance: none;
+  flex: 1 1 auto;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  padding: 6px 4px;
+  font-size: 14px;
+  font-family: inherit;
+}
+
+.find-bar__input::placeholder {
+  color: #7a7a90;
+}
+
+.find-bar__input:focus {
+  outline: none;
+}
+
+/* The "active/total" counter. Muted like the command bar's secondary text and
+   tabular/monospace so the digits stay aligned as the count changes. */
+.find-bar__count {
+  flex: 0 0 auto;
+  white-space: nowrap;
+  color: #7a7a90;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  font-family:
+    ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+}
+
+/* Compact icon buttons (previous / next / close) sized to fit the 44px row. */
+.find-bar__button {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: #a0a0b4;
+  font-size: 13px;
+  line-height: 1;
+  cursor: default;
+}
+
+.find-bar__button:hover {
+  background: #34344a;
+  color: #e6e6ee;
+}
+
+.find-bar__button:focus-visible {
+  outline: none;
+  border-color: #6b6bff;
+}
