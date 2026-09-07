@@ -58,6 +58,7 @@ CREATE TABLE meta (
   id INTEGER PRIMARY KEY CHECK (id = 0), schemaVersion INTEGER NOT NULL, activeSpaceId TEXT,
   enabled INTEGER NOT NULL DEFAULT 1
 );
+CREATE TABLE blocking_allowlist (host TEXT PRIMARY KEY, createdAt INTEGER NOT NULL);
 `;
 
 /**
@@ -72,6 +73,9 @@ const MIGRATION_STEPS: Record<number, string> = {
   2:
     "ALTER TABLE meta ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1;" +
     "UPDATE meta SET schemaVersion = 2 WHERE id = 0;",
+  3:
+    "CREATE TABLE blocking_allowlist (host TEXT PRIMARY KEY, createdAt INTEGER NOT NULL);" +
+    "UPDATE meta SET schemaVersion = 3 WHERE id = 0;",
 };
 
 /** The module-level database handle, `null` until {@link loadStore} opens it. */
@@ -177,6 +181,44 @@ export function readBlockingEnabled(): boolean {
 export function writeBlockingEnabled(enabled: boolean): void {
   const database = requireDb();
   database.prepare("UPDATE meta SET enabled=? WHERE id=0").run(enabled ? 1 : 0);
+}
+
+/**
+ * Reads every host in the per-site content-blocking allowlist, ordered by host.
+ * Like {@link readBlockingEnabled} this lives outside the {@link readState}
+ * full-state read: the allowlist is its own table, not part of the store codec.
+ * Throws when the database is not open.
+ */
+export function readAllowlist(): string[] {
+  const database = requireDb();
+  // SQLite-row boundary: .all() is typed `unknown`, cast to the known shape.
+  const rows = database
+    .prepare("SELECT host FROM blocking_allowlist ORDER BY host")
+    .all() as { host: string }[];
+  return rows.map((row) => row.host);
+}
+
+/**
+ * Inserts a host into the per-site allowlist with its creation timestamp, or
+ * leaves the existing row untouched when the host is already present
+ * (`INSERT OR IGNORE`). Synchronous (better-sqlite3). Throws when the database is
+ * not open, so a caller's ordered allowlist contract sees the failure before it
+ * changes anything else.
+ */
+export function insertAllowlistHost(host: string, createdAt: number): void {
+  const database = requireDb();
+  database
+    .prepare("INSERT OR IGNORE INTO blocking_allowlist(host, createdAt) VALUES (?, ?)")
+    .run(host, createdAt);
+}
+
+/**
+ * Deletes a host from the per-site allowlist; a no-op when the host is absent.
+ * Synchronous (better-sqlite3). Throws when the database is not open.
+ */
+export function deleteAllowlistHost(host: string): void {
+  const database = requireDb();
+  database.prepare("DELETE FROM blocking_allowlist WHERE host = ?").run(host);
 }
 
 /**

@@ -5,6 +5,8 @@ import {
   resetBlockedCount,
   dropBlockedTab,
   initialBlockingState,
+  addAllowlistHost,
+  removeAllowlistHost,
 } from "./blocking.js";
 
 describe("initialBlockingState", () => {
@@ -14,13 +16,25 @@ describe("initialBlockingState", () => {
       listVersion: "v1",
       blockedByTab: {},
       blockedUnattributed: 0,
+      allowlist: [],
     });
     expect(initialBlockingState(false, "v2")).toEqual({
       enabled: false,
       listVersion: "v2",
       blockedByTab: {},
       blockedUnattributed: 0,
+      allowlist: [],
     });
+  });
+
+  test("defaults the allowlist to an empty array", () => {
+    expect(initialBlockingState(true, "v1").allowlist).toEqual([]);
+  });
+
+  test("normalizes the passed allowlist to sorted + deduplicated", () => {
+    expect(
+      initialBlockingState(true, "v1", ["b.com", "a.com", "b.com"]).allowlist,
+    ).toEqual(["a.com", "b.com"]);
   });
 });
 
@@ -88,5 +102,52 @@ describe("dropBlockedTab", () => {
   test("is a no-op returning the same reference when absent", () => {
     const s0 = initialBlockingState(true, "v1");
     expect(dropBlockedTab(s0, "ghost")).toBe(s0);
+  });
+});
+
+describe("addAllowlistHost", () => {
+  test("inserts keeping sorted order with no duplicates", () => {
+    const s0 = initialBlockingState(true, "v1", ["b.com"]);
+    const s1 = addAllowlistHost(s0, "a.com");
+    expect(s1.allowlist).toEqual(["a.com", "b.com"]);
+    const s2 = addAllowlistHost(s1, "c.com");
+    expect(s2.allowlist).toEqual(["a.com", "b.com", "c.com"]);
+  });
+
+  test("returns the same reference when the host is already present", () => {
+    const s0 = initialBlockingState(true, "v1", ["a.com"]);
+    expect(addAllowlistHost(s0, "a.com")).toBe(s0);
+  });
+
+  test("does not mutate the input and leaves blocked counts alone", () => {
+    const s0 = applyBlockedRequest(initialBlockingState(true, "v1"), "a");
+    const s1 = addAllowlistHost(s0, "a.com");
+    expect(s1).not.toBe(s0);
+    expect(s0.allowlist).toEqual([]);
+    expect(s1.blockedByTab).toEqual({ a: 1 });
+  });
+});
+
+describe("removeAllowlistHost", () => {
+  test("removes an existing host and keeps the rest sorted", () => {
+    const s0 = initialBlockingState(true, "v1", ["a.com", "b.com"]);
+    const s1 = removeAllowlistHost(s0, "a.com");
+    expect(s1.allowlist).toEqual(["b.com"]);
+  });
+
+  test("returns the same reference when the host is absent", () => {
+    const s0 = initialBlockingState(true, "v1", ["a.com"]);
+    expect(removeAllowlistHost(s0, "ghost.com")).toBe(s0);
+  });
+
+  test("does not mutate the input and leaves blocked counts alone", () => {
+    const s0 = applyBlockedRequest(
+      initialBlockingState(true, "v1", ["a.com"]),
+      "a",
+    );
+    const s1 = removeAllowlistHost(s0, "a.com");
+    expect(s1).not.toBe(s0);
+    expect(s0.allowlist).toEqual(["a.com"]);
+    expect(s1.blockedByTab).toEqual({ a: 1 });
   });
 });

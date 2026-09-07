@@ -22,7 +22,11 @@ export type CommandId =
   | "space.delete"
   | "bar.open-location"
   | "bar.open-commands"
-  | "blocking.toggle";
+  | "blocking.toggle"
+  | "blocking.allowSite"
+  | "blocking.disallowSite"
+  | "settings.open"
+  | "settings.close";
 
 /**
  * One registry entry: its {@link CommandId}, human title, search `keywords`,
@@ -39,12 +43,22 @@ export interface CommandDescriptor {
 
 /**
  * The enablement inputs {@link isCommandEnabled} reads: the active tab's pin and
- * navigation-history flags (or `null` when no tab is active) and the number of
- * spaces.
+ * navigation-history flags plus its allowlist state — `siteHost` (the allowlist
+ * key from `siteKeyForUrl(tab.url)`, or `null` for a non-http(s) tab) and
+ * `siteAllowlisted` (whether that host is covered by the allowlist) — or `null`
+ * when no tab is active; the number of spaces; and `settingsOpen`, whether the
+ * settings view is currently open.
  */
 export interface CommandContext {
-  activeTab: { pinned: boolean; canGoBack: boolean; canGoForward: boolean } | null;
+  activeTab: {
+    pinned: boolean;
+    canGoBack: boolean;
+    canGoForward: boolean;
+    siteHost: string | null;
+    siteAllowlisted: boolean;
+  } | null;
   spaceCount: number;
+  settingsOpen: boolean;
 }
 
 /**
@@ -69,15 +83,22 @@ export const COMMANDS: readonly CommandDescriptor[] = [
   { id: "bar.open-location", title: "Open Location", keywords: ["open", "location", "url", "address", "go"], accelerator: "CmdOrCtrl+L", menu: "view" },
   { id: "bar.open-commands", title: "Run Command", keywords: ["run", "command", "palette", "actions"], accelerator: "CmdOrCtrl+K", menu: "view" },
   { id: "blocking.toggle", title: "Toggle Content Blocking", keywords: ["block", "ads", "tracking", "adblock"], accelerator: null, menu: "view" },
+  { id: "blocking.allowSite", title: "Disable Blocking on This Site", keywords: ["allow", "whitelist", "allowlist", "site", "ads"], accelerator: null, menu: "view" },
+  { id: "blocking.disallowSite", title: "Enable Blocking on This Site", keywords: ["block", "allowlist", "site", "ads"], accelerator: null, menu: "view" },
+  { id: "settings.open", title: "Open Settings", keywords: ["settings", "preferences", "options"], accelerator: "CmdOrCtrl+,", menu: "view" },
+  { id: "settings.close", title: "Close Settings", keywords: ["settings"], accelerator: null, menu: null },
 ];
 
 /**
  * Whether command `id` is enabled in `context`, pure. Always enabled:
  * `tab.new`, `space.new`, `space.rename`, `bar.open-location`,
- * `bar.open-commands`, `blocking.toggle`. Every other
+ * `bar.open-commands`, `blocking.toggle`, `settings.open`. Every other
  * `tab.*` needs an active tab; on top of that `tab.pin` needs it unpinned,
  * `tab.unpin` pinned, `tab.archive` unpinned, and `tab.back` / `tab.forward`
  * the matching history flag. `space.delete` needs more than one space.
+ * `blocking.allowSite` needs an active tab with an http(s) `siteHost` that is
+ * not yet allowlisted; `blocking.disallowSite` needs an active tab whose site
+ * is allowlisted; `settings.close` needs the settings view open.
  */
 export function isCommandEnabled(id: CommandId, context: CommandContext): boolean {
   switch (id) {
@@ -87,9 +108,20 @@ export function isCommandEnabled(id: CommandId, context: CommandContext): boolea
     case "bar.open-location":
     case "bar.open-commands":
     case "blocking.toggle":
+    case "settings.open":
       return true;
     case "space.delete":
       return context.spaceCount > 1;
+    case "blocking.allowSite":
+      return (
+        context.activeTab !== null &&
+        context.activeTab.siteHost !== null &&
+        !context.activeTab.siteAllowlisted
+      );
+    case "blocking.disallowSite":
+      return context.activeTab !== null && context.activeTab.siteAllowlisted;
+    case "settings.close":
+      return context.settingsOpen;
     case "tab.close":
     case "tab.copy-url":
     case "tab.reload":

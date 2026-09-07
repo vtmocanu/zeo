@@ -275,6 +275,13 @@ body {
   opacity: 0.4;
 }
 
+/* Allowlisted site: blocking is intentionally off for this host. A subtle
+   accent tint distinguishes it from the muted count shield. */
+.tab-item__shield--allowlisted {
+  color: #6b6bff;
+  background: #2a2a38;
+}
+
 .sidebar__empty {
   padding: 12px;
   font-size: 12px;
@@ -575,4 +582,173 @@ body {
     SFMono-Regular,
     Menlo,
     monospace;
+}
+
+/* Settings view --------------------------------------------------------------
+   Mounted in its own WebContentsView (?view=settings) covering the content area.
+   Two columns: a left section list and the panel of controls, on the same dark
+   palette as the sidebar. */
+.settings {
+  display: flex;
+  height: 100vh;
+  color: #e6e6ee;
+  background: #14141c;
+  font-size: 13px;
+}
+
+.settings__sections {
+  flex: 0 0 200px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 16px 12px;
+  background: #1e1e28;
+  border-right: 1px solid #2c2c3a;
+}
+
+.settings__section-item {
+  padding: 8px 12px;
+  border-radius: 6px;
+  color: #9a9ab0;
+}
+
+.settings__section-item--active {
+  color: #e6e6ee;
+  background: #2a2a38;
+}
+
+.settings__panel {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 24px 28px;
+}
+
+.settings__group {
+  margin-bottom: 28px;
+}
+
+.settings__group-title {
+  margin: 0 0 12px;
+  font-size: 15px;
+  font-weight: 600;
+  color: #e6e6ee;
+}
+
+.settings__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.settings__toggle-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.settings__checkbox {
+  width: 16px;
+  height: 16px;
+  accent-color: #6b6bff;
+}
+
+.settings__label {
+  color: #9a9ab0;
+}
+
+.settings__value {
+  color: #e6e6ee;
+  font-variant-numeric: tabular-nums;
+}
+
+.settings__value--muted {
+  color: #9a9ab0;
+}
+
+.settings__input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 8px 10px;
+  color: #e6e6ee;
+  background: #14141c;
+  border: 1px solid #3a3a4c;
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.settings__input:focus {
+  outline: none;
+  border-color: #6b6bff;
+}
+
+.settings__button {
+  flex: 0 0 auto;
+  padding: 8px 12px;
+  color: #e6e6ee;
+  background: #2a2a38;
+  border: 1px solid #3a3a4c;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.settings__button:hover:not(:disabled) {
+  background: #34344a;
+}
+
+.settings__button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.settings__button--ghost {
+  background: transparent;
+  border-color: #2c2c3a;
+  color: #9a9ab0;
+}
+
+.settings__button--ghost:hover:not(:disabled) {
+  background: #2a2a38;
+  color: #e6e6ee;
+}
+
+.settings__error {
+  margin: 0 0 10px;
+  color: #ff6b6b;
+  font-size: 12px;
+}
+
+.settings__empty {
+  margin: 0;
+  color: #7a7a90;
+  font-size: 12px;
+}
+
+.settings__allowlist {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.settings__allowlist-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  background: #1e1e28;
+  border: 1px solid #2c2c3a;
+  border-radius: 6px;
+}
+
+.settings__allowlist-host {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
