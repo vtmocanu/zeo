@@ -1432,8 +1432,10 @@ function recomputeSuggestions(): void {
 function openCommandBar(mode: CommandBarMode): void {
   // Opening any command-bar mode while find is open first closes find, so the
   // overlay's surface is restored to the command bar before it is reconstructed.
+  // Skip find's focus return — this handler re-focuses the overlay itself below,
+  // and an intervening page focus would blur-close the just-opened bar.
   if (find.open) {
-    closeFindSession();
+    closeFindSession(false);
   }
   const effectiveMode: CommandBarMode =
     mode === "navigate" && store.activeTabId === null ? "new-tab" : mode;
@@ -1529,8 +1531,14 @@ function issueFind(text: string, findNext: boolean, forward: boolean): void {
  * bound view, resets the session, restores the overlay to the command-bar
  * surface, hides the overlay, pushes and broadcasts, then returns focus to the
  * active tab's page. Idempotent: a no-op when find is already closed.
+ *
+ * `returnFocus` defaults to true. It is passed `false` when the caller is about
+ * to re-focus the overlay itself (opening the command bar over the same overlay):
+ * focusing the page in between would blur the overlay, and that blur — delivered
+ * asynchronously after the command bar has reopened — would fire the overlay's
+ * blur handler and immediately close the just-opened bar.
  */
-function closeFindSession(): void {
+function closeFindSession(returnFocus = true): void {
   if (!find.open) {
     return;
   }
@@ -1543,6 +1551,9 @@ function closeFindSession(): void {
   overlay?.setVisible(false);
   pushCommandBar();
   broadcast();
+  if (!returnFocus) {
+    return;
+  }
   // Mirror closeCommandBar's focus return: hand focus back to the active tab's
   // page (or the window when there is none).
   const activeTabId = store.activeTabId;
