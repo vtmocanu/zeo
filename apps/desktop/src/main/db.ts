@@ -34,7 +34,9 @@ import type {
 } from "@zeo/core";
 
 /**
- * The four-table schema. The PRIMARY KEYs (no duplicate ids), the two foreign
+ * The schema: the four core tables (profiles, spaces, tabs, meta) plus the two
+ * history tables (history_entries, history_visits) added at schema version 3.
+ * The PRIMARY KEYs (no duplicate ids), the foreign
  * keys, and `PRAGMA foreign_keys=ON` are the well-formedness contract the core
  * codec relies on: every on-disk state is guaranteed loadable. `spaces.activeTabId`
  * and `meta.activeSpaceId` are deliberately NOT foreign keys — a plain FK cannot
@@ -81,7 +83,7 @@ CREATE INDEX history_entries_lastVisitedAt ON history_entries(lastVisitedAt);
  * The ordered, in-place upgrade steps keyed by the version they PRODUCE: the
  * `v` entry is run to move a database from version `v-1` to `v`. {@link migrate}
  * runs every step from the on-disk version + 1 up through {@link SCHEMA_VERSION},
- * so a future 2→3 upgrade is added by appending a `3` entry here. Each step is a
+ * so a future 3→4 upgrade is added by appending a `4` entry here. Each step is a
  * plain SQL blob run inside the migrate transaction; the step MUST leave
  * `meta.schemaVersion` set to its own key.
  */
@@ -119,7 +121,7 @@ function dbPath(): string {
 /**
  * Reads the schema version currently on disk and applies {@link migrationAction}:
  * `"abort"` throws {@link UnsupportedSchemaVersionError}, `"create"` builds the
- * fresh four-table schema and seeds the single meta row, `"migrate"` runs the
+ * fresh schema (all six tables) and seeds the single meta row, `"migrate"` runs the
  * ordered {@link MIGRATION_STEPS} from the on-disk version + 1 through
  * {@link SCHEMA_VERSION} inside a single transaction (so a partially-applied
  * upgrade never lands), and `"noop"` leaves an up-to-date database untouched.

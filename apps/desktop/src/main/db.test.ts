@@ -315,6 +315,29 @@ describe("history helpers", () => {
       expect(entry.title).toBe("Why");
       expect(entry.visitCount).toBe(2);
     });
+
+    test("a newer visit with an empty title does not wipe an existing non-empty title", () => {
+      recordVisit("https://e.com/", "RealTitle", 1000);
+      // The title replacement is guarded on a non-empty new title, so this
+      // newest-but-empty visit still counts and moves lastVisitedAt but must
+      // keep the entry's existing non-empty title.
+      recordVisit("https://e.com/", "", 2000);
+      const entry = searchHistory(["e.com"], 10)[0];
+      expect(entry.title).toBe("RealTitle");
+      expect(entry.visitCount).toBe(2);
+      expect(entry.lastVisitedAt).toBe(2000);
+    });
+
+    test("on equal visitedAt, the larger visit id wins the entry title/lastVisitedAt", () => {
+      // Two visits with the SAME visitedAt: the tie is broken by the larger id
+      // (the later-inserted visit), which owns the entry title.
+      recordVisit("https://tie.com/", "First", 5000);
+      recordVisit("https://tie.com/", "Second", 5000);
+      const entry = searchHistory(["tie.com"], 10)[0];
+      expect(entry.visitCount).toBe(2);
+      expect(entry.lastVisitedAt).toBe(5000);
+      expect(entry.title).toBe("Second");
+    });
   });
 
   describe("updateVisitTitle", () => {
@@ -394,6 +417,15 @@ describe("history helpers", () => {
       // `%` must match the literal-percent title only, not act as a wildcard.
       expect(searchHistory(["%"], 10).map((e) => e.url)).toEqual([
         "https://pct.com/",
+      ]);
+    });
+
+    test("escapes LIKE `_` so it matches a literal underscore, not any single char", () => {
+      recordVisit("https://snake.com/", "a_b snake", 1000);
+      recordVisit("https://other.com/", "axb nomatch", 2000);
+      // `a_b` must match only the literal-underscore title, not "axb".
+      expect(searchHistory(["a_b"], 10).map((e) => e.url)).toEqual([
+        "https://snake.com/",
       ]);
     });
   });
