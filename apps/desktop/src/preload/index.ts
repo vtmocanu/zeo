@@ -75,6 +75,10 @@ const api = {
     setEnabled: (enabled: boolean): Promise<void> =>
       ipcRenderer.invoke(IPC.blockingSetEnabled, enabled),
     state: (): Promise<BlockingState> => ipcRenderer.invoke(IPC.blockingState),
+    allowSite: (host: string): Promise<void> => ipcRenderer.invoke(IPC.blockingAllowSite, host),
+    disallowSite: (host: string): Promise<void> =>
+      ipcRenderer.invoke(IPC.blockingDisallowSite, host),
+    refreshLists: (): Promise<boolean> => ipcRenderer.invoke(IPC.blockingRefresh),
   },
   onStateChange: (listener: (state: TabsState) => void): (() => void) => {
     const handler = (_event: Electron.IpcRendererEvent, state: TabsState): void => listener(state);

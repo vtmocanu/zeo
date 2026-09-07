@@ -22,6 +22,12 @@ import {
   applyUnattributedBlock,
   resetBlockedCount,
   dropBlockedTab,
+  siteKeyForUrl,
+  normalizeAllowlistHost,
+  hostMatchesAllowlist,
+  addAllowlistHost,
+  removeAllowlistHost,
+  settingsBounds,
 } from "@zeo/core";
 import type {
   BlockingState,
@@ -42,7 +48,16 @@ import type {
 } from "@zeo/core";
 import { createBlocker, createBlockerFromFilters } from "@zeo/adblock";
 import type { Blocker } from "@zeo/adblock";
-import { loadStore, scheduleSave, flush, readBlockingEnabled, writeBlockingEnabled } from "./db.js";
+import {
+  loadStore,
+  scheduleSave,
+  flush,
+  readBlockingEnabled,
+  writeBlockingEnabled,
+  readAllowlist,
+  insertAllowlistHost,
+  deleteAllowlistHost,
+} from "./db.js";
 
 // The built main is emitted by electron-vite as ESM (out/main/index.js, the
 // package is "type": "module"), so `__dirname` is not defined — derive it from
@@ -145,6 +160,30 @@ let blocker: Blocker | null = null;
  */
 let blocking: BlockingState = initialBlockingState(true, "none");
 /**
+ * The live per-site allowlist, loaded from {@link readAllowlist} before the
+ * blocker is created and mutated by {@link allowSite}/{@link disallowSite}. The
+ * installed bypass predicate reads this set directly, so an allowlist edit takes
+ * effect with no further wrapper call. Kept in step with `blocking.allowlist`
+ * (the broadcast copy) but is the authoritative membership set the predicate
+ * consults.
+ */
+const allowlist = new Set<string>();
+/**
+ * The in-flight filter-list refresh promise, or `null` when no manual refresh is
+ * running. {@link refreshLists} returns this shared promise so overlapping calls
+ * coalesce onto one `blocker.refresh()`.
+ */
+let refreshInFlight: Promise<boolean> | null = null;
+/**
+ * The settings surface's dedicated {@link WebContentsView}, or `null` before the
+ * first `settings.open`. Created lazily on the default session (same preload as
+ * the sidebar), kept for the window's lifetime, and shown/hidden by
+ * {@link openSettings}/{@link closeSettings}.
+ */
+let settingsView: WebContentsView | null = null;
+/** Whether the settings view is currently open (shown above the tab views). */
+let settingsOpen = false;
+/**
  * Reverse index `webContents.id -> tabId` for attributing a blocked request to
  * the tab that issued it. Populated in {@link createViewFor}, dropped in
  * {@link destroyView}.
@@ -190,6 +229,7 @@ function fullSnapshot(): TabsState {
   return {
     ...store.snapshot(),
     blocking: { ...blocking, listVersion: blocker?.listVersion ?? blocking.listVersion },
+    settingsOpen,
   };
 }
 
@@ -204,7 +244,13 @@ function scheduleBlockingBroadcast(): void {
   }
   blockingBroadcastTimer = setTimeout(() => {
     blockingBroadcastTimer = null;
-    win?.webContents.send(IPC.stateChange, fullSnapshot());
+    const snapshot = fullSnapshot();
+    win?.webContents.send(IPC.stateChange, snapshot);
+    // The settings view mirrors the same snapshot while it exists (even when
+    // hidden — a stale slice on the next open is harmless but avoidable).
+    if (settingsView !== null) {
+      settingsView.webContents.send(IPC.stateChange, snapshot);
+    }
   }, BLOCKING_BROADCAST_MS);
 }
 
@@ -221,6 +267,19 @@ function wireOnBlocked(b: Blocker): void {
         ? applyBlockedRequest(blocking, tabId)
         : applyUnattributedBlock(blocking);
     scheduleBlockingBroadcast();
+  });
+}
+
+/**
+ * Installs the per-site bypass predicate on the blocker. The predicate reads the
+ * live {@link allowlist} set, so allowlist edits take effect with no further
+ * wrapper call. Called wherever {@link wireOnBlocked} is, so every blocker (the
+ * fixture, the cap-winner, and the deferred cap-loser) gets it.
+ */
+function installBypass(b: Blocker): void {
+  b.setBypass((url) => {
+    const host = siteKeyForUrl(url);
+    return host !== null && hostMatchesAllowlist(host, allowlist);
   });
 }
 
@@ -289,6 +348,79 @@ async function setBlockingEnabled(enabled: boolean): Promise<void> {
   broadcast();
 }
 
+/**
+ * Adds `host` to the per-site allowlist on the main thread in the PRD's ordered
+ * contract: (1) normalize — a `null` result rejects with `TypeError` and changes
+ * nothing; (2) an already-present host resolves with no side effect; (3) persist
+ * synchronously — a throw rejects and changes nothing; (4) update the live set
+ * and the broadcast slice through the reducer; (5) broadcast. Resolves once the
+ * change has landed.
+ */
+function allowSite(host: string): Promise<void> {
+  const normalized = normalizeAllowlistHost(host);
+  if (normalized === null) {
+    return Promise.reject(new TypeError("invalid allowlist host"));
+  }
+  if (allowlist.has(normalized)) {
+    return Promise.resolve();
+  }
+  try {
+    insertAllowlistHost(normalized, Date.now());
+  } catch (err) {
+    return Promise.reject(err instanceof Error ? err : new Error(String(err)));
+  }
+  allowlist.add(normalized);
+  blocking = addAllowlistHost(blocking, normalized);
+  broadcast();
+  return Promise.resolve();
+}
+
+/**
+ * Removes `host` from the per-site allowlist, mirroring {@link allowSite}: a
+ * `null` normalization rejects with `TypeError`; an absent host resolves with no
+ * side effect; otherwise the on-disk row is deleted, the live set and the
+ * broadcast slice are updated through the remove reducer, and the change is
+ * broadcast.
+ */
+function disallowSite(host: string): Promise<void> {
+  const normalized = normalizeAllowlistHost(host);
+  if (normalized === null) {
+    return Promise.reject(new TypeError("invalid allowlist host"));
+  }
+  if (!allowlist.has(normalized)) {
+    return Promise.resolve();
+  }
+  try {
+    deleteAllowlistHost(normalized);
+  } catch (err) {
+    return Promise.reject(err instanceof Error ? err : new Error(String(err)));
+  }
+  allowlist.delete(normalized);
+  blocking = removeAllowlistHost(blocking, normalized);
+  broadcast();
+  return Promise.resolve();
+}
+
+/**
+ * Re-fetches the filter lists. Rejects when no engine is loaded
+ * (`blocker === null`); otherwise returns `blocker.refresh()`. While a refresh is
+ * in flight every further call returns the SAME promise, so overlapping manual
+ * refreshes coalesce onto one fetch. Runs whether or not blocking is enabled (the
+ * daily timer, in contrast, keeps skipping while disabled).
+ */
+function refreshLists(): Promise<boolean> {
+  if (blocker === null) {
+    return Promise.reject(new Error("content blocking is unavailable: no filter engine is loaded"));
+  }
+  if (refreshInFlight !== null) {
+    return refreshInFlight;
+  }
+  refreshInFlight = blocker.refresh().finally(() => {
+    refreshInFlight = null;
+  });
+  return refreshInFlight;
+}
+
 /** Bounds of the tab web-view region: everything right of the sidebar. */
 function viewBounds(): Electron.Rectangle {
   if (win === null) {
@@ -332,6 +464,90 @@ function layoutOverlay(): boolean {
     return true;
   }
   return false;
+}
+
+/**
+ * Bounds of the settings view: the whole content area right of the sidebar,
+ * computed by the shared {@link settingsBounds} geometry. Collapses to a
+ * zero-size rect when there is no window.
+ */
+function settingsBoundsRect(): Electron.Rectangle {
+  if (win === null) {
+    return { x: SIDEBAR_WIDTH, y: 0, width: 0, height: 0 };
+  }
+  const [w, h] = win.getContentSize();
+  return settingsBounds(w, h);
+}
+
+/**
+ * Opens the settings view, creating its {@link WebContentsView} lazily on first
+ * use (default session, same preload as the sidebar, loaded with `?view=settings`
+ * — mirroring the command-bar overlay). While open it sits above every tab view
+ * and below the command-bar overlay, so after adding it the overlay is re-raised.
+ * A no-op focus when already open. Broadcasts so `settingsOpen` propagates (and
+ * `settings.close` becomes enabled).
+ */
+function openSettings(): void {
+  if (win === null) {
+    return;
+  }
+  if (settingsOpen && settingsView !== null) {
+    settingsView.webContents.focus();
+    return;
+  }
+  if (settingsView === null) {
+    settingsView = new WebContentsView({
+      webPreferences: {
+        preload: join(moduleDir, "../preload/index.cjs"),
+        contextIsolation: true,
+        sandbox: false,
+        nodeIntegration: false,
+      },
+    });
+    const rendererUrl = process.env.ELECTRON_RENDERER_URL;
+    if (rendererUrl !== undefined && rendererUrl !== "") {
+      settingsView.webContents.loadURL(rendererUrl + "?view=settings").catch(() => {
+        // Dev-server races are retried by the window's loadDev loop; the settings
+        // view shares the same bundle, so a transient failure here is non-fatal.
+      });
+    } else {
+      void settingsView.webContents.loadFile(join(moduleDir, "../renderer/index.html"), {
+        query: { view: "settings" },
+      });
+    }
+  }
+  win.contentView.addChildView(settingsView);
+  settingsView.setBounds(settingsBoundsRect());
+  settingsView.setVisible(true);
+  // Keep the command-bar overlay above the settings view: re-adding it raises it
+  // back to the top of the z-order over the settings view just added.
+  if (overlay !== null) {
+    win.contentView.addChildView(overlay);
+  }
+  settingsOpen = true;
+  settingsView.webContents.focus();
+  broadcast();
+}
+
+/**
+ * Closes the settings view: removes it from the window (keeping the instance for
+ * reuse), hides it, returns focus to the active tab's view (or the window), and
+ * broadcasts so `settingsOpen` clears. A no-op when the settings view is not open.
+ */
+function closeSettings(): void {
+  if (!settingsOpen || settingsView === null || win === null) {
+    return;
+  }
+  win.contentView.removeChildView(settingsView);
+  settingsView.setVisible(false);
+  settingsOpen = false;
+  const activeTabId = store.activeTabId;
+  if (activeTabId !== null && views.has(activeTabId)) {
+    views.get(activeTabId)?.view.webContents.focus();
+  } else {
+    win.webContents.focus();
+  }
+  broadcast();
 }
 
 /**
@@ -448,9 +664,13 @@ function createViewFor(tab: Tab, spaceId: string, urlOverride?: string): void {
       console.error(`tab ${tab.id} failed to load ${urlOverride ?? tab.url}:`, err);
     });
 
-  // Keep the command-bar overlay above every tab view: re-adding it as a child
-  // raises it to the top of the z-order over the view just added. Null-guarded so
-  // the first createViewFor (which may run before the overlay is created) is safe.
+  // Keep the z-order tab views < settings view < command-bar overlay: re-adding a
+  // child raises it to the top over the view just added. Re-raise the open
+  // settings view first, then the overlay. Null-guarded so the first createViewFor
+  // (which may run before either is created) is safe.
+  if (settingsOpen && settingsView !== null) {
+    win.contentView.addChildView(settingsView);
+  }
   if (overlay !== null) {
     win.contentView.addChildView(overlay);
   }
@@ -533,17 +753,21 @@ function commandContextOf(): CommandContext {
   const spaceCount = store.spaces().length;
   const activeTabId = store.activeTabId;
   if (activeTabId === null) {
-    return { activeTab: null, spaceCount };
+    return { activeTab: null, spaceCount, settingsOpen };
   }
   const tab = store.list().find((t) => t.id === activeTabId);
   const wc = views.get(activeTabId)?.view.webContents;
+  const siteHost = siteKeyForUrl(tab?.url ?? "");
   return {
     activeTab: {
       pinned: tab?.pinned ?? false,
       canGoBack: wc?.navigationHistory.canGoBack() ?? false,
       canGoForward: wc?.navigationHistory.canGoForward() ?? false,
+      siteHost,
+      siteAllowlisted: siteHost !== null && hostMatchesAllowlist(siteHost, allowlist),
     },
     spaceCount,
+    settingsOpen,
   };
 }
 
@@ -590,6 +814,37 @@ const commandHandlers: Record<CommandId, () => void> = {
       console.error("[blocking] toggle failed:", err);
     });
   },
+  "blocking.allowSite": () => {
+    const ctx = commandContextOf();
+    if (ctx.activeTab?.siteHost) {
+      allowSite(ctx.activeTab.siteHost).catch((err) => {
+        console.error("[blocking] allowSite failed:", err);
+      });
+    }
+  },
+  "blocking.disallowSite": () => {
+    const ctx = commandContextOf();
+    const host = ctx.activeTab?.siteHost;
+    if (!host) {
+      return;
+    }
+    // Remove the LONGEST allowlist entry that the active site matches, so
+    // allowlisting `www.example.com` via the parent entry `example.com` and then
+    // re-enabling removes the entry actually covering the host.
+    let best: string | null = null;
+    for (const entry of allowlist) {
+      if (hostMatchesAllowlist(host, [entry]) && (best === null || entry.length > best.length)) {
+        best = entry;
+      }
+    }
+    if (best !== null) {
+      disallowSite(best).catch((err) => {
+        console.error("[blocking] disallowSite failed:", err);
+      });
+    }
+  },
+  "settings.open": () => openSettings(),
+  "settings.close": () => closeSettings(),
 };
 
 /**
@@ -1144,7 +1399,13 @@ function setActive(id: string | null): void {
 
 /** Pushes the current store snapshot to the renderer, then schedules a save. */
 function broadcast(): void {
-  win?.webContents.send(IPC.stateChange, fullSnapshot());
+  const snapshot = fullSnapshot();
+  win?.webContents.send(IPC.stateChange, snapshot);
+  // The settings view mirrors the same snapshot while it exists (even when
+  // hidden), so its blocking/allowlist rows follow every change.
+  if (settingsView !== null) {
+    settingsView.webContents.send(IPC.stateChange, snapshot);
+  }
   scheduleSave(store);
   // Every active-tab/active-space/store change can change command enablement and
   // the pin/unpin menu label, so refresh the menu (and the open bar) here.
@@ -1432,6 +1693,9 @@ function createWindow(seed: boolean): void {
     if (active !== null) {
       views.get(active)?.view.setBounds(viewBounds());
     }
+    if (settingsOpen && settingsView !== null) {
+      settingsView.setBounds(settingsBoundsRect());
+    }
     if (commandBar.open) {
       // A resize that grows a too-short window can bring a previously collapsed
       // (all-zero rect) overlay back into view. Focus is returned to the overlay
@@ -1468,6 +1732,13 @@ function createWindow(seed: boolean): void {
     }
     views.clear();
     overlay = null;
+    // Drop the settings view with the window it was parented to; a later
+    // createWindow + settings.open recreates it lazily.
+    if (settingsView !== null && !settingsView.webContents.isDestroyed()) {
+      settingsView.webContents.close();
+    }
+    settingsView = null;
+    settingsOpen = false;
     win = null;
   });
 
@@ -1597,6 +1868,19 @@ ipcMain.handle(IPC.blockingSetEnabled, (_event, enabled: boolean): Promise<void>
 );
 
 ipcMain.handle(IPC.blockingState, (): BlockingState => fullSnapshot().blocking);
+
+// allowSite/disallowSite run the ordered allowlist contract on the main thread
+// and reject the invoke on a bad host or a persistence failure; refreshLists
+// re-fetches the filter lists (coalescing overlapping calls) and rejects when no
+// engine is loaded.
+ipcMain.handle(IPC.blockingAllowSite, (_event, host: string): Promise<void> => allowSite(host));
+
+ipcMain.handle(
+  IPC.blockingDisallowSite,
+  (_event, host: string): Promise<void> => disallowSite(host),
+);
+
+ipcMain.handle(IPC.blockingRefresh, (): Promise<boolean> => refreshLists());
 
 // --- Space commands -----------------------------------------------------------
 // The renderer's single UI bridge drives these; tab WebContentsViews have no
@@ -1783,7 +2067,17 @@ app.whenReady().then(async () => {
     // Read the persisted enabled flag (needs the store's open db handle) and seed
     // the blocking slice before any window or tab view exists.
     const enabled = readBlockingEnabled();
-    blocking = initialBlockingState(enabled, "none");
+    // Load the persisted allowlist into the live set BEFORE the blocker is created,
+    // so the bypass predicate (which reads the set) is correct from the first
+    // request. Seed the broadcast slice from the same set, sorted for stable order.
+    for (const h of readAllowlist()) {
+      allowlist.add(h);
+    }
+    blocking = initialBlockingState(
+      enabled,
+      "none",
+      [...allowlist].sort((a, b) => a.localeCompare(b)),
+    );
 
     const filtersFile = process.env.ZEO_ADBLOCK_FILTERS;
     if (process.env.ZEO_E2E === "1" && filtersFile !== undefined && filtersFile !== "") {
@@ -1835,6 +2129,7 @@ app.whenReady().then(async () => {
               attachBlockerToAllSessions(b);
             }
             wireOnBlocked(b);
+            installBypass(b);
             scheduleBlockingBroadcast();
           })
           .catch(() => {});
@@ -1874,6 +2169,7 @@ app.whenReady().then(async () => {
     }
     if (blocker) {
       wireOnBlocked(blocker);
+      installBypass(blocker);
     }
   } catch (err) {
     console.error("[blocking] startup failed; continuing without content blocking:", err);
@@ -1896,7 +2192,11 @@ app.whenReady().then(async () => {
     // so the next launch retries. Seeding false also keeps the slice sane when
     // readBlockingEnabled threw before it was set above, so fullSnapshot() never
     // dereferences undefined.
-    blocking = initialBlockingState(false, "none");
+    blocking = initialBlockingState(
+      false,
+      "none",
+      [...allowlist].sort((a, b) => a.localeCompare(b)),
+    );
   }
 
   buildMenu();
