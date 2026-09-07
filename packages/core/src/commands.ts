@@ -33,7 +33,10 @@ export type CommandId =
   | "history.clear"
   | "zoom.in"
   | "zoom.out"
-  | "zoom.reset";
+  | "zoom.reset"
+  | "settings.openGeneral"
+  | "settings.openProfiles"
+  | "settings.openHistory";
 
 /**
  * One registry entry: its {@link CommandId}, human title, search `keywords`,
@@ -103,13 +106,17 @@ export const COMMANDS: readonly CommandDescriptor[] = [
   { id: "zoom.in", title: "Zoom In", keywords: ["zoom", "in", "larger", "bigger"], accelerator: "CmdOrCtrl+=", menu: "view" },
   { id: "zoom.out", title: "Zoom Out", keywords: ["zoom", "out", "smaller"], accelerator: "CmdOrCtrl+-", menu: "view" },
   { id: "zoom.reset", title: "Actual Size", keywords: ["zoom", "reset", "actual", "default", "100"], accelerator: "CmdOrCtrl+0", menu: "view" },
+  { id: "settings.openGeneral", title: "Open General Settings", keywords: ["settings", "general", "search", "engine", "preferences"], accelerator: null, menu: null },
+  { id: "settings.openProfiles", title: "Open Profile Settings", keywords: ["settings", "profiles", "profile"], accelerator: null, menu: null },
+  { id: "settings.openHistory", title: "Open History Settings", keywords: ["settings", "history", "clear"], accelerator: null, menu: null },
 ];
 
 /**
  * Whether command `id` is enabled in `context`, pure. Always enabled:
  * `tab.new`, `space.new`, `space.rename`, `bar.open-location`,
  * `bar.open-commands`, `blocking.toggle`, `settings.open`, `history.open`,
- * `history.clear`. Every other
+ * `history.clear`, `settings.openGeneral`, `settings.openProfiles`,
+ * `settings.openHistory`. Every other
  * `tab.*` needs an active tab; on top of that `tab.pin` needs it unpinned,
  * `tab.unpin` pinned, `tab.archive` unpinned, and `tab.back` / `tab.forward`
  * the matching history flag. `space.delete` needs more than one space.
@@ -131,6 +138,9 @@ export function isCommandEnabled(id: CommandId, context: CommandContext): boolea
     case "settings.open":
     case "history.open":
     case "history.clear":
+    case "settings.openGeneral":
+    case "settings.openProfiles":
+    case "settings.openHistory":
       return true;
     case "space.delete":
       return context.spaceCount > 1;

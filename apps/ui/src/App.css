@@ -636,14 +636,30 @@ body {
 }
 
 .settings__section-item {
+  /* Button reset so the clickable rows read like the former static labels. */
+  appearance: none;
+  border: none;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
   padding: 8px 12px;
   border-radius: 6px;
   color: #9a9ab0;
 }
 
-.settings__section-item--active {
+.settings__section-item:hover {
+  color: #e6e6ee;
+}
+
+.settings__section-item--active,
+.settings__section-item--selected {
   color: #e6e6ee;
   background: #2a2a38;
+}
+
+.settings__section-item--highlight {
+  box-shadow: inset 0 0 0 1px #3a3a4c;
 }
 
 .settings__panel {
@@ -780,4 +796,73 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* General section — search-engine radio group. */
+.settings__radio-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.settings__radio-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.settings__radio {
+  width: 16px;
+  height: 16px;
+  accent-color: #6b6bff;
+}
+
+/* Profiles section — one row per profile. */
+.settings__profiles {
+  list-style: none;
+  margin: 0 0 16px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.settings__profile-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  background: #1e1e28;
+  border: 1px solid #2c2c3a;
+  border-radius: 6px;
+}
+
+.settings__profile-id {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #7a7a90;
+  font-size: 12px;
+}
+
+.settings__profile-usage {
+  flex: 0 0 auto;
+  color: #9a9ab0;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* History section — destructive clear confirm. */
+.settings__button--danger {
+  border-color: #5a2a34;
+  background: #3a1e26;
+  color: #ff9a9a;
+}
+
+.settings__button--danger:hover:not(:disabled) {
+  background: #4a262f;
+  color: #ffb3b3;
 }

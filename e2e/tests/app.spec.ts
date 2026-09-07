@@ -3102,8 +3102,15 @@ test.describe("zeo desktop app", () => {
     "settings.open",
     "history.open",
     "history.clear",
+    // PRD 6.4 — zoom.in/zoom.out are enabled (zoom.reset is hidden at the default
+    // factor), sitting in registry order right after history.clear.
     "zoom.in",
     "zoom.out",
+    // PRD 6.5 — the three always-enabled section-open commands trail the registry,
+    // so they close out the commands-mode list in registry order.
+    "settings.openGeneral",
+    "settings.openProfiles",
+    "settings.openHistory",
   ];
 
   // §5 bullet 1 — commands mode opens empty, lists only enabled command rows in

@@ -9,17 +9,35 @@ milestone, a minor bump only for very large breakthroughs.
 
 ## [Unreleased]
 
-## [0.0.19] - 2026-09-07
+## [0.0.18] - 2026-09-07
 
 ### Added
 
 - Per-site zoom: each site (keyed by host) has its own zoom factor on the
   Chromium zoom ladder, shared by every tab on that host and persisted across
-  relaunch (SQLite schema version 5). Zoom the active tab's site in, out, or back
+  relaunch (SQLite schema version 6). Zoom the active tab's site in, out, or back
   to actual size from the keyboard (`Cmd+=`, `Cmd+-`, `Cmd+0`), the View menu, the
   command bar ("Zoom In" / "Zoom Out" / "Actual Size"), or Ctrl+scroll; a sidebar
   badge on the active tab shows the current percentage and resets the site to
   100% when clicked. Pinch-to-zoom is disabled so the applied factor never drifts.
+
+## [0.0.17] - 2026-09-07
+
+### Added
+
+- Settings view: General, Blocking, Profiles and History sections, navigable by
+  keyboard (Up/Down to move the highlight, Enter to select) and openable straight
+  to a section with the "Open General/Profile/History Settings" commands.
+- Default search engine is now a persisted choice from a fixed catalog
+  (DuckDuckGo, Google, Bing, Brave, Startpage), picked in the General section
+  (schema version 5). The command bar's search row names the chosen engine and
+  search navigates there; the choice survives a relaunch. DuckDuckGo remains the
+  default, so behavior is unchanged until you change it.
+- Profiles section: list every profile with the number of spaces using it, and
+  create, rename, or delete a profile (a profile a space still uses cannot be
+  deleted).
+- History section: shows the 90-day retention and the current entry/visit
+  counts, and clears all browsing history behind a confirm step.
 
 ## [0.0.16] - 2026-09-07
 

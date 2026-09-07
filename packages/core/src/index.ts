@@ -30,6 +30,8 @@ export type {
   BlockingApi,
   HistoryApi,
   ZoomApi,
+  Settings,
+  SettingsApi,
   ZeoApi,
   TabContextMenuItem,
   TabContextMenuResult,
@@ -65,8 +67,23 @@ export {
 } from "./zoom.js";
 export { COMMANDS, isCommandEnabled, menuEntries, formatAccelerator } from "./commands.js";
 export type { CommandId, CommandDescriptor, CommandContext, MenuEntry } from "./commands.js";
-export { resolveInput, DEFAULT_SEARCH_ENGINE } from "./resolve-input.js";
+export { resolveInput } from "./resolve-input.js";
 export type { NavigationTarget } from "./resolve-input.js";
+export {
+  SETTINGS_SECTIONS,
+  nextSection,
+  prevSection,
+  SEARCH_ENGINES,
+  DEFAULT_SEARCH_ENGINE_ID,
+  searchEngine,
+  searchUrl,
+} from "./settings.js";
+export type {
+  SettingsSectionId,
+  SettingsSection,
+  SearchEngineId,
+  SearchEngine,
+} from "./settings.js";
 export type { CommandBarMode, CommandBarState } from "./command-bar.js";
 export { suggest, nextSelectedIndex } from "./suggest.js";
 export type { Suggestion, SuggestCatalog, SuggestOptions } from "./suggest.js";

@@ -28,6 +28,7 @@ import {
   addAllowlistHost,
   removeAllowlistHost,
   settingsBounds,
+  searchEngine,
   isHistoryUrl,
   historyKey,
   historyTerms,
@@ -46,6 +47,9 @@ import type {
   HistoryEntry,
   HistoryVisit,
   Profile,
+  SearchEngineId,
+  Settings,
+  SettingsSectionId,
   Space,
   SpaceContextMenuResult,
   SpacesState,
@@ -64,6 +68,8 @@ import {
   flush,
   readBlockingEnabled,
   writeBlockingEnabled,
+  readSearchEngine,
+  writeSearchEngine,
   readAllowlist,
   insertAllowlistHost,
   deleteAllowlistHost,
@@ -73,6 +79,7 @@ import {
   recentVisits,
   deleteHistoryUrl,
   clearHistory,
+  historyStats,
   pruneHistory,
   readSiteZoom,
   upsertSiteZoom,
@@ -243,6 +250,27 @@ let settingsView: WebContentsView | null = null;
 /** Whether the settings view is currently open (shown above the tab views). */
 let settingsOpen = false;
 /**
+ * The persisted settings slice main owns and attaches to every broadcast snapshot.
+ * Seeded with the default here and replaced at startup with the value read by
+ * {@link readSearchEngine}. Main is the sole holder of the current search-engine
+ * choice, threaded into {@link resolveInput} and {@link suggest}.
+ */
+let settings: Settings = { searchEngine: "duckduckgo" };
+/**
+ * The currently-targeted settings section main pushes to the settings view (the
+ * PRD's `section`). The section-open commands set it via {@link openSettingsAt};
+ * `general` by default.
+ */
+let settingsSection: SettingsSectionId = "general";
+/**
+ * Monotonically increasing per-open nonce for the pushed {@link settingsSection}.
+ * Bumped whenever a section-open command (or a cold {@link openSettings}) targets
+ * a section, so the settings renderer re-selects that section on every such
+ * request even when the section id is unchanged; an unrelated broadcast leaves it
+ * untouched, so it never disturbs the renderer's local keyboard selection.
+ */
+let settingsSectionNonce = 0;
+/**
  * Reverse index `webContents.id -> tabId` for attributing a blocked request to
  * the tab that issued it. Populated in {@link createViewFor}, dropped in
  * {@link destroyView}.
@@ -290,6 +318,9 @@ function fullSnapshot(): TabsState {
     blocking: { ...blocking, listVersion: blocker?.listVersion ?? blocking.listVersion },
     settingsOpen,
     zoom,
+    settings,
+    settingsSection,
+    settingsSectionNonce,
   };
 }
 
@@ -461,6 +492,29 @@ async function setBlockingEnabled(enabled: boolean): Promise<void> {
     throw err;
   }
   blocking = { ...blocking, enabled };
+  broadcast();
+}
+
+/**
+ * Changes the default search engine on the main thread in the PRD 6.5 §6 ordered
+ * contract: (1) resolve with no side effect when `id` is already the current
+ * engine; (2) reject with a `TypeError` (changing nothing) when `id` is not a
+ * catalog id; (3) persist with {@link writeSearchEngine} synchronously — a throw
+ * (including the missing-`id = 0`-row / zero-row-affected case) rejects and stops
+ * before step 4, so the in-memory state is unchanged and no broadcast occurs;
+ * (4) update the in-memory `settings` and broadcast. Reachable from the renderer
+ * over IPC.settingsSetSearchEngine with an untrusted payload; the IPC handler
+ * returns this promise, so a rejection surfaces to the renderer's invoke.
+ */
+async function setSearchEngine(id: SearchEngineId): Promise<void> {
+  if (id === settings.searchEngine) {
+    return;
+  }
+  if (searchEngine(id) === undefined) {
+    throw new TypeError(`unknown search engine: ${id}`);
+  }
+  writeSearchEngine(id);
+  settings = { searchEngine: id };
   broadcast();
 }
 
@@ -643,6 +697,27 @@ function openSettings(): void {
   settingsOpen = true;
   settingsView.webContents.focus();
   broadcast();
+}
+
+/**
+ * Opens the settings view with `section` selected (PRD 6.5 §7). Sets the pushed
+ * {@link settingsSection} and bumps {@link settingsSectionNonce} so the renderer
+ * re-selects the section even when it is unchanged (a re-invoked section-open
+ * command must reveal that section whether the view was closed or already open on
+ * another section), then opens: a cold open path broadcasts (carrying the new
+ * section+nonce), while {@link openSettings} on an already-open view only
+ * refocuses and does not broadcast, so the new section+nonce is pushed explicitly
+ * with an extra {@link broadcast} in that warm case. Backs the per-section open
+ * commands.
+ */
+function openSettingsAt(section: SettingsSectionId): void {
+  settingsSection = section;
+  settingsSectionNonce++;
+  const wasOpen = settingsOpen;
+  openSettings();
+  if (wasOpen) {
+    broadcast();
+  }
 }
 
 /**
@@ -1107,7 +1182,19 @@ const commandHandlers: Record<CommandId, () => void> = {
       });
     }
   },
-  "settings.open": () => openSettings(),
+  "settings.open": () => {
+    // A cold open selects General and bumps the nonce so the renderer re-selects
+    // it; when already open, leave the section and nonce unchanged (a plain Cmd+,
+    // then just focuses, preserving PRD 5.2's focus-only behavior).
+    if (!settingsOpen) {
+      settingsSection = "general";
+      settingsSectionNonce++;
+    }
+    openSettings();
+  },
+  "settings.openGeneral": () => openSettingsAt("general"),
+  "settings.openProfiles": () => openSettingsAt("profiles"),
+  "settings.openHistory": () => openSettingsAt("history"),
   "settings.close": () => closeSettings(),
   "history.open": () => openCommandBar("history"),
   "history.clear": () => {
@@ -1246,6 +1333,7 @@ function recomputeSuggestions(): void {
   commandBar.suggestions = suggest(commandBar.query, buildCatalog(), {
     mode: commandBar.mode,
     activeTabId: store.activeTabId,
+    searchEngine: settings.searchEngine,
   });
   commandBar.selectedIndex = commandBar.suggestions.length > 0 ? 0 : -1;
   // A CHANGED list gets a fresh revision so a click bound to a prior list is
@@ -1338,7 +1426,7 @@ function submitCommandBar(text: string, mode?: CommandBarMode): void {
   if (requestedMode === "commands") {
     throw new Error("submit is not valid in commands mode");
   }
-  const target = resolveInput(text);
+  const target = resolveInput(text, settings.searchEngine);
   if (target === null) {
     if (commandBar.open) {
       closeCommandBar();
@@ -2241,6 +2329,16 @@ ipcMain.handle(IPC.zoomOut, (): Promise<void> => zoomActiveTab("out"));
 ipcMain.handle(IPC.zoomReset, (): Promise<void> => zoomActiveTab("reset"));
 ipcMain.handle(IPC.zoomState, (): ZoomState => fullSnapshot().zoom);
 
+// --- Settings -----------------------------------------------------------------
+// get() resolves the current in-memory settings slice; setSearchEngine runs the
+// ordered set-search-engine contract (persist → update → broadcast) and rejects
+// the invoke on an unknown id (TypeError) or a persistence failure.
+ipcMain.handle(IPC.settingsGet, (): Settings => settings);
+
+ipcMain.handle(IPC.settingsSetSearchEngine, (_event, id: SearchEngineId): Promise<void> =>
+  setSearchEngine(id),
+);
+
 // --- History ------------------------------------------------------------------
 // search/recent read the SQLite history tables on demand (history is never part
 // of TabsState and never broadcast); deleteUrl/clear mutate them. A read error is
@@ -2281,6 +2379,8 @@ ipcMain.handle(IPC.historyClear, (): void => {
   clearHistory();
   invalidateAllHistoryKeys();
 });
+
+ipcMain.handle(IPC.historyStats, (): { entries: number; visits: number } => historyStats());
 
 // --- Space commands -----------------------------------------------------------
 // The renderer's single UI bridge drives these; tab WebContentsViews have no
@@ -2486,6 +2586,9 @@ app.whenReady().then(async () => {
     // Read the persisted enabled flag (needs the store's open db handle) and seed
     // the blocking slice before any window or tab view exists.
     const enabled = readBlockingEnabled();
+    // Seed the settings slice from the persisted search-engine choice; main is
+    // the sole holder threaded into resolveInput/suggest.
+    settings = { searchEngine: readSearchEngine() };
     // Load the persisted allowlist into the live set BEFORE the blocker is created,
     // so the bypass predicate (which reads the set) is correct from the first
     // request. Seed the broadcast slice from the same set, sorted for stable order.

@@ -10,6 +10,7 @@ import {
 import type { Tab, TabsState } from "@zeo/core";
 import {
   SIDEBAR_WIDTH,
+  DEFAULT_SEARCH_ENGINE_ID,
   defaultSpaceName,
   formatRelativeArchived,
   formatZoomPercent,
@@ -503,6 +504,9 @@ export function App() {
     activeTabId: null,
     archived: [],
     settingsOpen: false,
+    settings: { searchEngine: DEFAULT_SEARCH_ENGINE_ID },
+    settingsSection: "general",
+    settingsSectionNonce: 0,
     blocking: {
       enabled: true,
       listVersion: "none",
