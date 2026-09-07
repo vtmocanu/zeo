@@ -3098,6 +3098,8 @@ test.describe("zeo desktop app", () => {
     "space.rename",
     "bar.open-location",
     "blocking.toggle",
+    "history.open",
+    "history.clear",
   ];
 
   // §5 bullet 1 — commands mode opens empty, lists only enabled command rows in

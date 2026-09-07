@@ -9,6 +9,18 @@ milestone, a minor bump only for very large breakthroughs.
 
 ## [Unreleased]
 
+## [0.0.16] - 2026-09-07
+
+### Added
+
+- Browsing history: every top-level http(s) navigation is now recorded in
+  SQLite (schema version 3), and the command bar suggests matching visited
+  pages alongside open tabs and spaces. A dedicated history mode — "Show
+  History" (`Cmd+Y`) — lists recent visits and filters them as you type;
+  `Cmd+Backspace` on a selected history row deletes that url, and "Clear
+  Browsing History" empties it. Visits are kept for 90 days and survive a
+  relaunch. History is queried on demand and never leaves the local machine.
+
 ## [0.0.14] - 2026-09-04
 
 ### Added
