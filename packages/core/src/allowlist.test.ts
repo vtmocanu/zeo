@@ -79,9 +79,12 @@ describe("hostMatchesAllowlist", () => {
     expect(hostMatchesAllowlist("example.com", [])).toBe(false);
   });
 
-  test("skips an empty entry so it never acts as a universal wildcard", () => {
+  test("skips an empty entry so a trailing-dot host cannot bypass via the wildcard", () => {
+    // Without the guard, `"example.com.".endsWith("." + "")` is true, so an empty
+    // entry would disable blocking for any trailing-dot FQDN (which siteKeyForUrl
+    // can produce). The guard keeps this false — the case that actually flips.
+    expect(hostMatchesAllowlist("example.com.", [""])).toBe(false);
     expect(hostMatchesAllowlist("example.com", [""])).toBe(false);
-    expect(hostMatchesAllowlist("a.example.com", [""])).toBe(false);
     // A real entry alongside an empty one still matches on its own merits.
     expect(hostMatchesAllowlist("a.example.com", ["", "example.com"])).toBe(true);
   });

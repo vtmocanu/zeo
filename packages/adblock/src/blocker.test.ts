@@ -206,6 +206,7 @@ function makeFakeEvent(options: {
   kind: "top" | "child";
   destroyed?: boolean;
   senderFrameNull?: boolean;
+  topNull?: boolean;
 }): {
   event: unknown;
   insertCSS: ReturnType<typeof vi.fn>;
@@ -238,6 +239,10 @@ function makeFakeEvent(options: {
   };
   const frame = options.kind === "top" ? mainFrame : child;
   frame.destroyed = options.destroyed ?? false;
+  if (options.topNull === true) {
+    // Simulate Electron reporting a live frame whose top it cannot name.
+    frame.top = null;
+  }
   const senderFrame = options.senderFrameNull === true ? null : frame;
   const event = {
     sender: { session: options.session, mainFrame, insertCSS },
@@ -1592,6 +1597,31 @@ describe("bypass predicate", () => {
     expect(frame.executeJavaScript).not.toHaveBeenCalled();
     // The mutation handler likewise reports the observer disabled.
     expect(await ipc.invoke(MUTATION, event)).toBe(false);
+  });
+
+  test("the cosmetic handlers fail closed when a live frame has a null top", async () => {
+    const ipc = makeFakeIpc();
+    const blocker = track(
+      createBlockerFromFilters(HIDE_FILTER, "fixture", { ipc: ipc.ipc, preloadPath: "p.cjs" }),
+    );
+    const { session } = attachSession(blocker);
+    // A predicate that WOULD exempt the frame's own url, if it were ever used.
+    blocker.setBypass((url) => url === PAGE_URL);
+    const engine = (blocker as unknown as { engine: ElectronBlocker }).engine;
+    const spy = vi.spyOn(engine, "getCosmeticsFilters");
+    // Live sender frame, but Electron cannot name its top: docUrl resolves to ""
+    // (not the frame's own url), so the bypass is NOT taken.
+    const { event } = makeFakeEvent({
+      session,
+      frameUrl: PAGE_URL,
+      kind: "top",
+      topNull: true,
+    });
+
+    await ipc.invoke(INJECT, event, PAGE_URL, undefined);
+    expect(spy).toHaveBeenCalledTimes(1);
+    // The mutation handler reports the observer ENABLED (bypass not taken).
+    expect(await ipc.invoke(MUTATION, event)).toBe(true);
   });
 
   test("a throwing predicate filters normally and logs at most once", () => {

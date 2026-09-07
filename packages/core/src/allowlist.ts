@@ -94,9 +94,11 @@ export function hostMatchesAllowlist(
 ): boolean {
   const hostIsIp = isIpLiteral(host);
   for (const entry of entries) {
-    // An empty entry would make `host.endsWith("." + "")` match any dotted host,
-    // silently disabling blocking everywhere. `normalizeAllowlistHost` never
-    // produces one, but guard here so this matcher is safe against any caller.
+    // An empty entry would make `host.endsWith("." + "")` — i.e.
+    // `host.endsWith(".")` — match any trailing-dot FQDN host such as
+    // `example.com.` (which `siteKeyForUrl` can produce), disabling blocking for
+    // it. `normalizeAllowlistHost` never produces an empty entry, but guard here
+    // so this matcher is safe against any caller.
     if (entry === "") {
       continue;
     }
