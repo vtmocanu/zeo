@@ -7,6 +7,7 @@ export type {
   Blocker,
   BlockerFs,
   BlockerIpc,
+  BypassPredicate,
   CreateBlockerOptions,
 } from "./blocker.js";
 export { createBlocker, createBlockerFromFilters } from "./blocker.js";

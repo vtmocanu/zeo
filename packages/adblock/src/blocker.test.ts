@@ -254,6 +254,28 @@ function requestThrough(listener: BeforeRequestListener, url: string): { cancel?
   return response;
 }
 
+/** A fake `WebFrameMain` as the network/CSP bypass check reads it. */
+interface FakeNetworkFrame {
+  url: string;
+  top: FakeNetworkFrame | null;
+  isDestroyed: () => boolean;
+}
+
+/**
+ * Drives a captured network listener with a full `details` object (resource
+ * type and optional owning frame) and returns the engine's response.
+ */
+function requestDetails(
+  listener: BeforeRequestListener,
+  details: { url: string; resourceType: string; frame?: FakeNetworkFrame | null },
+): { cancel?: boolean } {
+  let response: { cancel?: boolean } = {};
+  listener({ id: 1, webContentsId: 42, ...details } as unknown as FakeDetails, (r) => {
+    response = r;
+  });
+  return response;
+}
+
 /** Drives a captured CSP listener and returns the response it produced. */
 function headersThrough(
   listener: HeadersListener,
@@ -876,9 +898,10 @@ describe("attach/detach registration and ownership", () => {
 });
 
 describe("CSP callback", () => {
-  const CSP_FILTERS = ["none.example$csp=script-src 'none'", "self.example$csp=script-src 'self'"].join(
-    "\n",
-  );
+  const CSP_FILTERS = [
+    "none.example$csp=script-src 'none'",
+    "self.example$csp=script-src 'self'",
+  ].join("\n");
   const OK = "HTTP/1.1 200 OK";
 
   function attachCsp(): HeadersListener {
@@ -919,7 +942,10 @@ describe("CSP callback", () => {
     ]);
     expect(out.responseHeaders?.["Content-Security-Policy-Report-Only"]).toEqual(["report-uri /r"]);
     // The input array was not mutated.
-    expect(responseHeaders["Content-Security-Policy"]).toEqual(["default-src 'self'", "img-src 'self'"]);
+    expect(responseHeaders["Content-Security-Policy"]).toEqual([
+      "default-src 'self'",
+      "img-src 'self'",
+    ]);
   });
 
   test("keeps a stricter existing value as its own array entry (case-insensitive header match)", () => {
@@ -1005,7 +1031,11 @@ describe("cosmetic IPC handlers", () => {
     const ipc = makeFakeIpc();
     const blocker = makeCosmeticBlocker(ipc.ipc);
     const { session } = attachSession(blocker);
-    const { event, insertCSS, frame } = makeFakeEvent({ session, frameUrl: PAGE_URL, kind: "child" });
+    const { event, insertCSS, frame } = makeFakeEvent({
+      session,
+      frameUrl: PAGE_URL,
+      kind: "child",
+    });
 
     await ipc.invoke(INJECT, event, PAGE_URL, undefined);
 
@@ -1045,7 +1075,11 @@ describe("cosmetic IPC handlers", () => {
       createBlockerFromFilters("##.some-class", "fixture", { ipc: ipc.ipc, preloadPath: "p.cjs" }),
     );
     const { session } = attachSession(blocker);
-    const { event, insertCSS, frame } = makeFakeEvent({ session, frameUrl: PAGE_URL, kind: "child" });
+    const { event, insertCSS, frame } = makeFakeEvent({
+      session,
+      frameUrl: PAGE_URL,
+      kind: "child",
+    });
 
     // First run carries no DOM tokens, so the generic rule yields no styles.
     await ipc.invoke(INJECT, event, PAGE_URL, undefined);
@@ -1329,5 +1363,233 @@ describe("refresh keeps the same callbacks working against the new engine", () =
     await ipc.invoke(INJECT, event, PAGE_URL, undefined);
     const ran = frame.executeJavaScript.mock.calls.map((c) => String(c[0]!));
     expect(ran.some((code) => code.includes("zeoScriptlet"))).toBe(true);
+  });
+});
+
+describe("bypass predicate", () => {
+  /** A hostname the {@link AD_FILTER} does not match, used as an allowlisted source. */
+  const ALLOWLISTED_SOURCE = "https://allow.example/";
+
+  /** Reaches the blocker's current engine so a test can spy on `onBeforeRequest`. */
+  function engineOf(blocker: Blocker): ElectronBlocker {
+    return (blocker as unknown as { engine: ElectronBlocker }).engine;
+  }
+
+  /** A non-destroyed frame whose top frame carries `topUrl` (its document). */
+  function frameWithTop(topUrl: string): FakeNetworkFrame {
+    return {
+      url: topUrl,
+      top: { url: topUrl, top: null, isDestroyed: () => false },
+      isDestroyed: () => false,
+    };
+  }
+
+  test("a bypassed document skips the engine and answers callback({})", () => {
+    const blocker = track(createBlockerFromFilters(AD_FILTER, "fixture", cosmeticInternals()));
+    const { state } = attachSession(blocker);
+    const spy = vi.spyOn(engineOf(blocker), "onBeforeRequest");
+    blocker.setBypass(() => true);
+
+    // A blocked sub-resource on a bypassed document: engine untouched, answer {}.
+    expect(
+      requestDetails(state.captured!, {
+        url: BLOCKED_URL,
+        resourceType: "image",
+        frame: frameWithTop(ALLOWLISTED_SOURCE),
+      }),
+    ).toEqual({});
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  test("a non-bypassed document reaches the engine and is blocked", () => {
+    const blocker = track(createBlockerFromFilters(AD_FILTER, "fixture", cosmeticInternals()));
+    const { state } = attachSession(blocker);
+    const spy = vi.spyOn(engineOf(blocker), "onBeforeRequest");
+    blocker.setBypass(() => false);
+
+    expect(
+      requestDetails(state.captured!, {
+        url: BLOCKED_URL,
+        resourceType: "image",
+        frame: frameWithTop(ALLOWLISTED_SOURCE),
+      }),
+    ).toEqual({ cancel: true });
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  test("a mainFrame request with no frame keys the bypass on its own url", () => {
+    const blocker = track(createBlockerFromFilters(AD_FILTER, "fixture", cosmeticInternals()));
+    const { state } = attachSession(blocker);
+    const spy = vi.spyOn(engineOf(blocker), "onBeforeRequest");
+    // The predicate accepts only the request's own destination url.
+    blocker.setBypass((url) => url === BLOCKED_URL);
+
+    // No frame, but a main-frame request keys on details.url, so it is bypassed
+    // and the engine is never consulted.
+    expect(
+      requestDetails(state.captured!, { url: BLOCKED_URL, resourceType: "mainFrame" }),
+    ).toEqual({});
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  test("a mainFrame request keys on details.url, not an allowlisted frame url", () => {
+    const blocker = track(createBlockerFromFilters(AD_FILTER, "fixture", cosmeticInternals()));
+    const { state } = attachSession(blocker);
+    const spy = vi.spyOn(engineOf(blocker), "onBeforeRequest");
+    // Only the allowlisted source is bypassed; the blocked destination is not.
+    blocker.setBypass((url) => url === ALLOWLISTED_SOURCE);
+
+    // Provisional navigation: the frame still names the allowlisted source, but
+    // the main-frame check keys on the blocked destination, so the engine is
+    // consulted (the engine does not cancel top-level document navigations, so
+    // the observable is that it was reached at all).
+    requestDetails(state.captured!, {
+      url: BLOCKED_URL,
+      resourceType: "mainFrame",
+      frame: frameWithTop(ALLOWLISTED_SOURCE),
+    });
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  test("a sub-resource with no nameable frame is filtered even when the predicate says true", () => {
+    const blocker = track(createBlockerFromFilters(AD_FILTER, "fixture", cosmeticInternals()));
+    const { state } = attachSession(blocker);
+    const spy = vi.spyOn(engineOf(blocker), "onBeforeRequest");
+    blocker.setBypass(() => true);
+
+    // No frame -> empty document url -> never exempted, so the engine blocks it.
+    expect(requestDetails(state.captured!, { url: BLOCKED_URL, resourceType: "image" })).toEqual({
+      cancel: true,
+    });
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  test("the predicate survives a refresh", async () => {
+    const fs: BlockerFs = {
+      readFile: async () => {
+        throw new Error("ENOENT");
+      },
+      writeFile: vi.fn(),
+    };
+    const blocker = track(
+      await createBlocker({
+        cacheFile: "engine.bin",
+        fetch: fetchReturning(AD_FILTER),
+        lists: ["https://example.test/list.txt"],
+        fs,
+        internals: cosmeticInternals(),
+      }),
+    );
+    const { session, state } = makeFakeSession();
+    blocker.attach(session);
+    blocker.setBypass((url) => url === ALLOWLISTED_SOURCE);
+
+    expect(await awaitReady(blocker)).toBe(true);
+    // The refreshed engine would block this sub-resource; the surviving predicate
+    // (keyed on the frame's top document) skips it instead.
+    expect(
+      requestDetails(state.captured!, {
+        url: BLOCKED_URL,
+        resourceType: "image",
+        frame: frameWithTop(ALLOWLISTED_SOURCE),
+      }),
+    ).toEqual({});
+  });
+
+  test("setBypass(null) restores full filtering", () => {
+    const blocker = track(createBlockerFromFilters(AD_FILTER, "fixture", cosmeticInternals()));
+    const { state } = attachSession(blocker);
+    blocker.setBypass(() => true);
+    expect(
+      requestDetails(state.captured!, {
+        url: BLOCKED_URL,
+        resourceType: "image",
+        frame: frameWithTop(ALLOWLISTED_SOURCE),
+      }),
+    ).toEqual({});
+
+    blocker.setBypass(null);
+    expect(
+      requestDetails(state.captured!, {
+        url: BLOCKED_URL,
+        resourceType: "image",
+        frame: frameWithTop(ALLOWLISTED_SOURCE),
+      }),
+    ).toEqual({ cancel: true });
+  });
+
+  test("the CSP callback passes headers through unchanged for a bypassed frame", () => {
+    const blocker = track(
+      createBlockerFromFilters(
+        "none.example$csp=script-src 'none'",
+        "fixture",
+        cosmeticInternals(),
+      ),
+    );
+    const { state } = attachSession(blocker);
+    blocker.setBypass(() => true);
+    const responseHeaders = { "x-other": ["keep"] };
+
+    const out = headersThrough(state.capturedHeaders!, {
+      url: "https://none.example/",
+      resourceType: "mainFrame",
+      statusLine: "HTTP/1.1 200 OK",
+      responseHeaders,
+    });
+
+    // No CSP appended; the exact input headers object is passed straight through.
+    expect(out.responseHeaders?.["Content-Security-Policy"]).toBeUndefined();
+    expect(out.responseHeaders).toBe(responseHeaders);
+    expect(out.statusLine).toBe("HTTP/1.1 200 OK");
+  });
+
+  test("the inject handler resolves without consulting the engine for a bypassed frame", async () => {
+    const ipc = makeFakeIpc();
+    const blocker = track(
+      createBlockerFromFilters(HIDE_FILTER, "fixture", { ipc: ipc.ipc, preloadPath: "p.cjs" }),
+    );
+    const { session } = attachSession(blocker);
+    blocker.setBypass(() => true);
+    const engine = (blocker as unknown as { engine: ElectronBlocker }).engine;
+    const spy = vi.spyOn(engine, "getCosmeticsFilters");
+    const { event, insertCSS, frame } = makeFakeEvent({ session, frameUrl: PAGE_URL, kind: "top" });
+
+    expect(await ipc.invoke(INJECT, event, PAGE_URL, undefined)).toBeUndefined();
+
+    expect(spy).not.toHaveBeenCalled();
+    expect(insertCSS).not.toHaveBeenCalled();
+    expect(frame.executeJavaScript).not.toHaveBeenCalled();
+    // The mutation handler likewise reports the observer disabled.
+    expect(await ipc.invoke(MUTATION, event)).toBe(false);
+  });
+
+  test("a throwing predicate filters normally and logs at most once", () => {
+    const blocker = track(createBlockerFromFilters(AD_FILTER, "fixture", cosmeticInternals()));
+    const { state } = attachSession(blocker);
+    blocker.setBypass(() => {
+      throw new Error("bypass boom");
+    });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      // Both sub-resource requests are filtered as if no bypass were set.
+      expect(
+        requestDetails(state.captured!, {
+          url: BLOCKED_URL,
+          resourceType: "image",
+          frame: frameWithTop(ALLOWLISTED_SOURCE),
+        }),
+      ).toEqual({ cancel: true });
+      expect(
+        requestDetails(state.captured!, {
+          url: BLOCKED_URL,
+          resourceType: "image",
+          frame: frameWithTop(ALLOWLISTED_SOURCE),
+        }),
+      ).toEqual({ cancel: true });
+      // Logged once despite two throwing calls.
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 });

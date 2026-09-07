@@ -38,6 +38,16 @@ export interface BlockedEvent {
 }
 
 /**
+ * A per-document bypass predicate installed with {@link Blocker.setBypass}. It
+ * receives the resolved document url (the top-frame url a request or response
+ * belongs to, or a main-frame request's own destination url) and returns `true`
+ * to skip all three filtering layers — network, CSP, and cosmetic — for that
+ * document. The adblocker library never sees it; every check happens in the
+ * wrapper's own callbacks.
+ */
+export type BypassPredicate = (documentUrl: string) => boolean;
+
+/**
  * Minimal filesystem seam used for the engine cache, so unit tests can inject
  * fakes instead of touching disk. Mirrors the shape of `node:fs/promises`
  * `readFile`/`writeFile` for the calls this package makes.
@@ -101,6 +111,12 @@ interface CosmeticFrame {
   isDestroyed(): boolean;
   /** Runs `code` in the frame with no user-gesture flag. */
   executeJavaScript(code: string): Promise<unknown>;
+  /**
+   * The top frame of this frame's tree (itself for a top frame), or `null` when
+   * Electron cannot name it. Read by the bypass check to key on the document
+   * url of the whole frame tree, mirroring Electron's `WebFrameMain.top`.
+   */
+  readonly top: CosmeticFrame | null;
 }
 
 /** The subset of an Electron `WebContents` the cosmetic handlers touch. */
@@ -125,6 +141,34 @@ interface CosmeticIpcEvent {
   readonly processId: number;
 }
 
+/**
+ * The subset of an Electron `WebFrameMain` the bypass check reads off a network
+ * or CSP request's owning `frame`. A seam (rather than Electron's type) so unit
+ * tests pass plain fakes; `top` lets the check key on the whole tree's document.
+ */
+interface NetworkFrame {
+  /** The frame's current URL. */
+  readonly url: string;
+  /** Whether the frame has been destroyed (a method, matching Electron). */
+  isDestroyed(): boolean;
+  /** The top frame of this frame's tree, or `null` when unavailable. */
+  readonly top: NetworkFrame | null;
+}
+
+/**
+ * The subset of Electron's `OnBeforeRequestListenerDetails` the bypass check
+ * reads to resolve a request's owning document url. A seam so unit tests pass
+ * plain fakes; the real `frame` is a `WebFrameMain`.
+ */
+interface NetworkDetails {
+  /** The request's URL (the destination, for a main-frame navigation). */
+  readonly url: string;
+  /** The Electron resource type (e.g. `"mainFrame"`, `"subFrame"`, `"image"`). */
+  readonly resourceType: string;
+  /** The frame that owns the request; absent/`null` when Electron cannot name it. */
+  readonly frame?: NetworkFrame | null;
+}
+
 /** The response headers shape the CSP callback reads and rewrites. */
 interface CspDetails {
   /** The response's URL. */
@@ -135,6 +179,12 @@ interface CspDetails {
   readonly statusLine: string;
   /** The response headers, keyed by name to a value array. */
   readonly responseHeaders?: Record<string, string[]>;
+  /**
+   * The frame that owns the response, when present; read only by the bypass
+   * check via {@link BlockerImpl.documentUrlOf} so a subframe response keys on
+   * its top frame's document url.
+   */
+  readonly frame?: NetworkFrame | null;
 }
 
 /** The `onHeadersReceived` callback shape the CSP hook invokes. */
@@ -162,6 +212,17 @@ export interface Blocker {
    * it with no re-subscription.
    */
   onBlocked(listener: (event: BlockedEvent) => void): () => void;
+  /**
+   * Installs (or, with `null`, clears) a per-document bypass predicate. While a
+   * predicate is set, any request, response, or cosmetic injection whose
+   * resolved document url the predicate accepts skips all three filtering layers
+   * as if blocking were off for that document only; `null` restores full
+   * filtering. The predicate survives {@link Blocker.refresh | refresh},
+   * {@link Blocker.attach | attach}, and {@link Blocker.detach | detach}, and is
+   * cleared by {@link Blocker.dispose | dispose}. A predicate that throws counts
+   * as `false` for that call.
+   */
+  setBypass(predicate: BypassPredicate | null): void;
   /**
    * Rebuilds the engine from the configured lists off to the side (bounded by a
    * 15s timeout) and swaps it in on success. A failed build — a fetch error, the
@@ -305,6 +366,18 @@ class BlockerImpl implements Blocker {
   private ipc: BlockerIpc | null = null;
   /** Set by {@link BlockerImpl.dispose}; a disposed blocker refuses to attach. */
   private disposed = false;
+  /**
+   * The current bypass predicate, or `null` for full filtering. Set by
+   * {@link BlockerImpl.setBypass}, read by every filtering callback, and left
+   * untouched by attach/detach/refresh so an allowlist survives an engine swap;
+   * only {@link BlockerImpl.dispose} clears it.
+   */
+  private bypass: BypassPredicate | null = null;
+  /**
+   * Whether a throwing bypass predicate has already been logged, so a predicate
+   * that throws on every call floods the log at most once per blocker instance.
+   */
+  private bypassErrorLogged = false;
 
   /**
    * The stable bridge subscribed to the current engine's `request-blocked`
@@ -402,8 +475,15 @@ class BlockerImpl implements Blocker {
         ipcHolder = this;
       }
 
-      // STEP 2: network blocking, delegating to the current engine.
+      // STEP 2: network blocking, delegating to the current engine. A bypassed
+      // document answers `callback({})` at once: the engine is not consulted, so
+      // no `request-blocked` event fires and allowlisted pages never increment
+      // the blocked count.
       session.webRequest.onBeforeRequest({ urls: ["<all_urls>"] }, (details, callback) => {
+        if (this.checkBypass(this.documentUrlOf(details))) {
+          callback({});
+          return;
+        }
         this.engine.onBeforeRequest(details, callback);
       });
       undo.push(() => session.webRequest.onBeforeRequest(null));
@@ -506,6 +586,7 @@ class BlockerImpl implements Blocker {
       }
       ipcHolder = null;
     }
+    this.bypass = null;
     this.disposed = true;
     if (firstErr !== undefined) {
       throw firstErr;
@@ -531,6 +612,54 @@ class BlockerImpl implements Blocker {
     };
   }
 
+  /** Installs or clears the bypass predicate; see {@link Blocker.setBypass}. */
+  public setBypass(predicate: BypassPredicate | null): void {
+    this.bypass = predicate;
+  }
+
+  /**
+   * Resolves the document url a request or response belongs to, used by the
+   * network and CSP callbacks. A main-frame request keys on its own destination
+   * url (`details.url`), resolved before `details.frame` is read: during a
+   * provisional navigation `frame.url` still names the source document, so a
+   * blocked destination reached from an allowlisted source must key on the
+   * destination. Otherwise, when the owning frame is present and not destroyed,
+   * the top frame's url (falling back to the frame's own url); an owning frame
+   * Electron cannot name yields `""`, which {@link BlockerImpl.checkBypass}
+   * never exempts.
+   */
+  private documentUrlOf(details: NetworkDetails): string {
+    if (details.resourceType === "mainFrame") {
+      return details.url;
+    }
+    const frame = details.frame;
+    if (frame != null && !frame.isDestroyed()) {
+      return frame.top?.url ?? frame.url;
+    }
+    return "";
+  }
+
+  /**
+   * Whether the bypass predicate exempts `documentUrl`. An empty url is never
+   * exempted (so a request whose owning frame Electron cannot name is filtered
+   * normally), and no predicate means no bypass. A predicate that throws counts
+   * as `false` for that call and is logged at most once per blocker instance.
+   */
+  private checkBypass(documentUrl: string): boolean {
+    if (documentUrl === "" || this.bypass === null) {
+      return false;
+    }
+    try {
+      return this.bypass(documentUrl);
+    } catch (err) {
+      if (!this.bypassErrorLogged) {
+        this.bypassErrorLogged = true;
+        console.error("[adblock] bypass predicate threw:", err);
+      }
+      return false;
+    }
+  }
+
   /**
    * The CSP hook, a stable field reading the current engine at call time. For a
    * `mainFrame`/`subFrame` response it asks the engine for
@@ -542,6 +671,12 @@ class BlockerImpl implements Blocker {
    * passes the original headers and status line straight through.
    */
   private readonly onHeadersReceived = (details: CspDetails, callback: CspCallback): void => {
+    // A bypassed frame passes its response through unchanged, with no CSP
+    // appended, before any directive lookup.
+    if (this.checkBypass(this.documentUrlOf(details))) {
+      callback({ responseHeaders: details.responseHeaders, statusLine: details.statusLine });
+      return;
+    }
     if (details.resourceType === "mainFrame" || details.resourceType === "subFrame") {
       // Both frame types are queried as a `main_frame` request: the library's
       // `getCSPDirectives` gates on `request.isMainFrame()` and returns
@@ -591,6 +726,11 @@ class BlockerImpl implements Blocker {
       return;
     }
     if (url !== frame.url) {
+      return;
+    }
+    // A bypassed document gets no cosmetic injection: resolve without consulting
+    // the engine, keyed on the frame tree's top document.
+    if (this.checkBypass(frame.top?.url ?? frame.url)) {
       return;
     }
 
@@ -672,6 +812,11 @@ class BlockerImpl implements Blocker {
       return false;
     }
     if (!this.attached.has(event.sender.session)) {
+      return false;
+    }
+    // A bypassed document stops observing: report the observer disabled so the
+    // preload tears down its MutationObserver.
+    if (this.checkBypass(frame.top?.url ?? frame.url)) {
       return false;
     }
     return this.engine.config.enableMutationObserver;
