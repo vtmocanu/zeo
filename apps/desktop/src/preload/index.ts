@@ -6,6 +6,8 @@ import type {
   CommandBarState,
   CommandDescriptor,
   CommandId,
+  HistoryEntry,
+  HistoryVisit,
   Profile,
   Space,
   SpaceContextMenuResult,
@@ -75,6 +77,15 @@ const api = {
     setEnabled: (enabled: boolean): Promise<void> =>
       ipcRenderer.invoke(IPC.blockingSetEnabled, enabled),
     state: (): Promise<BlockingState> => ipcRenderer.invoke(IPC.blockingState),
+  },
+  history: {
+    search: (query: string, limit?: number): Promise<HistoryEntry[]> =>
+      ipcRenderer.invoke(IPC.historySearch, query, limit),
+    recent: (limit?: number): Promise<HistoryVisit[]> =>
+      ipcRenderer.invoke(IPC.historyRecent, limit),
+    deleteUrl: (url: string): Promise<void> =>
+      ipcRenderer.invoke(IPC.historyDeleteUrl, url),
+    clear: (): Promise<void> => ipcRenderer.invoke(IPC.historyClear),
   },
   onStateChange: (listener: (state: TabsState) => void): (() => void) => {
     const handler = (_event: Electron.IpcRendererEvent, state: TabsState): void => listener(state);
