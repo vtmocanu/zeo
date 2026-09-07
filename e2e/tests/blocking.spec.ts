@@ -25,6 +25,10 @@ interface BridgeState {
   tabs: { id: string }[];
   activeTabId: string | null;
   activeSpaceId: string;
+  // PRD 5.2 — main attaches `settingsOpen` to the full snapshot returned by
+  // `tabs.list()` (fullSnapshot()). Optional here since the field is only
+  // load-bearing for the settings cases below.
+  settingsOpen?: boolean;
 }
 interface BridgeSpace {
   id: string;
@@ -46,6 +50,9 @@ interface BlockingStateShape {
   listVersion: string;
   blockedByTab: Record<string, number>;
   blockedUnattributed: number;
+  // PRD 5.2 — the per-site allowlist of hosts that bypass blocking, kept sorted
+  // by main and mirrored here (JSON over IPC, so a plain string[]).
+  allowlist: string[];
 }
 // PRD 4.2/4.3 — one command-bar suggestion row. The real @zeo/core `Suggestion`
 // is a discriminated union; only the `command` arm carries `id`/`title`, so we
@@ -82,6 +89,9 @@ interface ZeoBridge {
   blocking: {
     setEnabled(enabled: boolean): Promise<void>;
     state(): Promise<BlockingStateShape>;
+    allowSite(host: string): Promise<void>;
+    disallowSite(host: string): Promise<void>;
+    refreshLists(): Promise<boolean>;
   };
   commandBar: {
     open(mode: string): Promise<void>;
@@ -316,6 +326,101 @@ function blockingState(sidebar: Page): Promise<BlockingStateShape> {
     const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
     return zeo.blocking.state();
   });
+}
+
+/**
+ * Add `host` to the per-site allowlist over the sidebar bridge. Returns the raw
+ * invoke promise so a REJECTING call (an invalid host) surfaces to the caller's
+ * `expect(...).rejects` assertion rather than being swallowed.
+ */
+function allowSite(sidebar: Page, host: string): Promise<void> {
+  return sidebar.evaluate((h) => {
+    const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+    return zeo.blocking.allowSite(h);
+  }, host);
+}
+
+/** Remove `host` from the per-site allowlist over the sidebar bridge. */
+function disallowSite(sidebar: Page, host: string): Promise<void> {
+  return sidebar.evaluate((h) => {
+    const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+    return zeo.blocking.disallowSite(h);
+  }, host);
+}
+
+/** Trigger a filter-list refresh over the sidebar bridge; resolves the result. */
+function refreshLists(sidebar: Page): Promise<boolean> {
+  return sidebar.evaluate(() => {
+    const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+    return zeo.blocking.refreshLists();
+  });
+}
+
+/** Navigate tab `id` to `url` over the sidebar bridge (used to reload a tab). */
+function navigateTab(sidebar: Page, id: string, url: string): Promise<void> {
+  return sidebar.evaluate(
+    (args) => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      return zeo.tabs.navigate(args.id, args.url);
+    },
+    { id, url },
+  );
+}
+
+/** Whether the settings view is open, read off `tabs.list()`'s `settingsOpen`. */
+function settingsOpen(sidebar: Page): Promise<boolean> {
+  return sidebar.evaluate(async () => {
+    const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+    const state = await zeo.tabs.list();
+    return state.settingsOpen === true;
+  });
+}
+
+/** Run command `id` over the sidebar bridge (e.g. `settings.open`). */
+function runCommand(sidebar: Page, id: string): Promise<void> {
+  return sidebar.evaluate((cmd) => {
+    const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+    return zeo.commands.run(cmd);
+  }, id);
+}
+
+/**
+ * Wait for the real debounced store save to flush before a relaunch. The
+ * per-site allowlist row is written SYNCHRONOUSLY by `allowSite` (like the
+ * `enabled` flag in the PRD 5.1 relaunch case above), so this is belt-and-braces
+ * — it also lets any pending store save settle. A fixed sleep on a real timer,
+ * mirroring persistence.spec.ts.
+ */
+async function waitForDebouncedSave(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 1300));
+}
+
+/**
+ * The settings {@link Page}: main mounts the settings surface in its own
+ * `WebContentsView` loaded with `?view=settings` (index.ts openSettings), which
+ * — like a tab view — surfaces as a Playwright window (Electron pages come from
+ * every CDP page target, not just BrowserWindow-backed ones; verified in
+ * playwright-core's ElectronApplication._onPage, and the tab-view helpers above
+ * already drive such pages). Poll every open window for the one whose url carries
+ * `view=settings`, guarding a still-loading view's context with try/catch.
+ */
+async function settingsWindow(app: ElectronApplication): Promise<Page> {
+  const deadline = Date.now() + 20_000;
+  while (Date.now() < deadline) {
+    for (const w of app.windows()) {
+      try {
+        if (w.url().includes("view=settings")) {
+          return w;
+        }
+      } catch {
+        // A loading WebContentsView's context can be momentarily destroyed; retry.
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  throw new Error(
+    'No settings WebContentsView window whose url includes "view=settings" was found within 20s',
+  );
 }
 
 // Each test manages its OWN temp userData dir, filter file, and fixture server,
@@ -1177,6 +1282,378 @@ test.describe("PRD 5.3 CSP + cosmetic filtering (offline)", () => {
       await server.close();
       rmSync(userDataDir, { recursive: true, force: true });
       rmSync(fx.dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ===========================================================================
+// PRD 5.2 — per-site allowlist + settings (offline)
+// ===========================================================================
+// The per-site allowlist bypasses ALL three filtering layers (network, CSP, and
+// cosmetic) for an allowlisted host, is editable from the command bar and the
+// settings view, and persists across relaunch. Every case stays on loopback
+// (127.0.0.1 / localhost) so it is deterministic offline like the blocks above.
+test.describe("PRD 5.2 per-site allowlist + settings (offline)", () => {
+  // Case 1: allowlisting the fixture host lets its blocked pixel through on the
+  // next SAME-ORIGIN reload; the count is not reset (only an origin change
+  // resets), the allowlist reads back exactly, and the sidebar shield flips to
+  // the allowlisted state.
+  test("allowlisting a site loads its blocked request on reload, keeps the count, and shows the shield", async () => {
+    const userDataDir = mkdtempSync(join(tmpdir(), "zeo-allow-"));
+    const filters = writeFilterFile();
+    const server = await startFixtureServer();
+    const { app, sidebar } = await launch(userDataDir, filters.file);
+    try {
+      const tab = await createTab(sidebar, `${server.base}/page.html?probe=c1a`);
+      const page1 = await tabWindow(app, "probe=c1a");
+      const probes1 = await readImageProbes(page1);
+      expect(probes1.blocked).toBe("error");
+      expect(server.blockedHits()).toBe(0);
+      await expect
+        .poll(async () => (await blockingState(sidebar)).blockedByTab[tab.id] ?? 0)
+        .toBe(1);
+      const blockedByTabBefore = (await blockingState(sidebar)).blockedByTab[tab.id] ?? 0;
+
+      // Allowlist the fixture host, then reload the SAME origin.
+      await allowSite(sidebar, "127.0.0.1");
+      await navigateTab(sidebar, tab.id, `${server.base}/page.html?probe=c1b`);
+      const page2 = await tabWindow(app, "probe=c1b");
+      const probes2 = await readImageProbes(page2);
+      // Now allowlisted: the previously-blocked image loads and the server sees it.
+      expect(probes2.blocked).toBe("load");
+      expect(server.blockedHits()).toBeGreaterThanOrEqual(1);
+
+      // The tab's blocked count is UNCHANGED: a same-origin reload does not reset
+      // it, and an allowlisted reload blocks nothing so nothing increments.
+      expect((await blockingState(sidebar)).blockedByTab[tab.id] ?? 0).toBe(blockedByTabBefore);
+      // The allowlist is exactly the one host.
+      expect((await blockingState(sidebar)).allowlist).toEqual(["127.0.0.1"]);
+      // The sidebar shield for the tab shows the allowlisted state.
+      await expect(
+        sidebar.locator('[data-testid="tab-shield"][data-allowlisted="true"]'),
+      ).toHaveCount(1);
+    } finally {
+      await app.close();
+      await server.close();
+      rmSync(userDataDir, { recursive: true, force: true });
+      rmSync(filters.dir, { recursive: true, force: true });
+    }
+  });
+
+  // Case 2: on the PRD 5.3 cosmetic/CSP fixtures, allowlisting the host restores
+  // the element hidden by the cosmetic filter (visible after reload) and drops
+  // the injected CSP (the inline script runs again — the mirror of the 5.3 CSP
+  // test's title assertion, asserting the CSP's ABSENCE).
+  test("allowlisting a site restores its hidden cosmetic element and drops the injected CSP", async () => {
+    const userDataDir = mkdtempSync(join(tmpdir(), "zeo-allow-cosmetic-"));
+    const fx = writeCosmeticFixtureFiles();
+    const server = await startCosmeticFixtureServer();
+    const { app, sidebar } = await launchWithResources(userDataDir, fx.filters, fx.resources);
+    try {
+      // Baseline (blocking on): the ad slot is hidden and the CSP blocks the
+      // inline script (the title stays the served default, not "scripted").
+      const cosTab = await createTab(sidebar, `${server.base}/cosmetic.html?probe=c2cos`);
+      const cosPage = await tabWindow(app, "probe=c2cos");
+      await expect
+        .poll(() => adSlotDisplay(cosPage), {
+          message: "expected .zeo-ad-slot hidden before allowlisting",
+        })
+        .toBe("none");
+
+      const cspTab = await createTab(sidebar, `${server.base}/csp.html?probe=c2csp`);
+      const cspPage = await tabWindow(app, "probe=c2csp");
+      await waitForMarker(cspPage);
+      expect(await cspPage.title()).not.toBe("scripted");
+
+      // Allowlist the shared fixture host. The bypass predicate skips ALL layers
+      // — network, CSP, and cosmetic — for that host.
+      await allowSite(sidebar, "127.0.0.1");
+
+      // Reload the cosmetic page (same origin): the hidden element is now VISIBLE
+      // (a bare <div> defaults to block; assert the exact value so a missing node
+      // — the "missing" sentinel — cannot vacuously satisfy the check).
+      await navigateTab(sidebar, cosTab.id, `${server.base}/cosmetic.html?probe=c2cos2`);
+      const cosPage2 = await tabWindow(app, "probe=c2cos2");
+      await expect
+        .poll(() => adSlotDisplay(cosPage2), {
+          message: "expected .zeo-ad-slot visible after allowlisting",
+        })
+        .toBe("block");
+
+      // Reload the CSP page (same origin): NO CSP is injected, so the inline
+      // script runs and renames the title.
+      await navigateTab(sidebar, cspTab.id, `${server.base}/csp.html?probe=c2csp2`);
+      const cspPage2 = await tabWindow(app, "probe=c2csp2");
+      await waitForMarker(cspPage2);
+      expect(await cspPage2.title()).toBe("scripted");
+    } finally {
+      await app.close();
+      await server.close();
+      rmSync(userDataDir, { recursive: true, force: true });
+      rmSync(fx.dir, { recursive: true, force: true });
+    }
+  });
+
+  // Case 3: de-allowlisting restores blocking. After allowlisting + a reload that
+  // lets the pixel through, disallowSite + a same-origin reload drops it again and
+  // the per-tab count increments (same origin -> no reset -> a fresh block counts).
+  test("disallowing a previously allowlisted site drops its blocked request again and increments the count", async () => {
+    const userDataDir = mkdtempSync(join(tmpdir(), "zeo-allow-"));
+    const filters = writeFilterFile();
+    const server = await startFixtureServer();
+    const { app, sidebar } = await launch(userDataDir, filters.file);
+    try {
+      const tab = await createTab(sidebar, `${server.base}/page.html?probe=c3a`);
+      const page1 = await tabWindow(app, "probe=c3a");
+      expect((await readImageProbes(page1)).blocked).toBe("error");
+      await expect
+        .poll(async () => (await blockingState(sidebar)).blockedByTab[tab.id] ?? 0)
+        .toBe(1);
+
+      // Allowlist + reload: the pixel now loads through.
+      await allowSite(sidebar, "127.0.0.1");
+      await navigateTab(sidebar, tab.id, `${server.base}/page.html?probe=c3b`);
+      const page2 = await tabWindow(app, "probe=c3b");
+      expect((await readImageProbes(page2)).blocked).toBe("load");
+      expect((await blockingState(sidebar)).blockedByTab[tab.id] ?? 0).toBe(1);
+
+      // De-allowlist + reload the SAME origin: the pixel is dropped again.
+      const blockedHitsBefore = server.blockedHits();
+      await disallowSite(sidebar, "127.0.0.1");
+      await navigateTab(sidebar, tab.id, `${server.base}/page.html?probe=c3c`);
+      const page3 = await tabWindow(app, "probe=c3c");
+      expect((await readImageProbes(page3)).blocked).toBe("error");
+      // The server saw NO new blocked request (the drop is back on).
+      expect(server.blockedHits()).toBe(blockedHitsBefore);
+      // The count incremented on the re-blocked, same-origin reload.
+      await expect
+        .poll(async () => (await blockingState(sidebar)).blockedByTab[tab.id] ?? 0, {
+          message: "expected the re-enabled block to increment the count",
+        })
+        .toBe(2);
+    } finally {
+      await app.close();
+      await server.close();
+      rmSync(userDataDir, { recursive: true, force: true });
+      rmSync(filters.dir, { recursive: true, force: true });
+    }
+  });
+
+  // Case 4: host validation. An unparseable host REJECTS; a full url is
+  // normalized to its lowercased host and stored.
+  test("allowSite rejects an invalid host and normalizes a url to its host", async () => {
+    const userDataDir = mkdtempSync(join(tmpdir(), "zeo-allow-"));
+    const filters = writeFilterFile();
+    const { app, sidebar } = await launch(userDataDir, filters.file);
+    try {
+      // "not a host" has a space in the authority, so normalization returns null
+      // and the invoke rejects.
+      await expect(allowSite(sidebar, "not a host")).rejects.toThrow();
+      // A scheme + mixed case + path normalizes to the bare lowercased host.
+      await allowSite(sidebar, "HTTP://Example.COM/x");
+      expect((await blockingState(sidebar)).allowlist).toContain("example.com");
+    } finally {
+      await app.close();
+      rmSync(userDataDir, { recursive: true, force: true });
+      rmSync(filters.dir, { recursive: true, force: true });
+    }
+  });
+
+  // Case 5: the command bar allowlists and de-allowlists the ACTIVE site. Query
+  // "allow" lists blocking.allowSite; accepting it adds the active tab's host.
+  // Query "block" then lists blocking.disallowSite and NOT blocking.allowSite
+  // (now disabled because the site is already allowlisted). Driven over the
+  // bridge (not the keyboard) like the toggle test above.
+  test("the command bar allowlists and de-allowlists the active site", async () => {
+    const userDataDir = mkdtempSync(join(tmpdir(), "zeo-allow-"));
+    const filters = writeFilterFile();
+    const server = await startFixtureServer();
+    const { app, sidebar } = await launch(userDataDir, filters.file);
+    try {
+      // The fixture tab is created active, so the command context's active site
+      // host is 127.0.0.1 (derived from the stored url).
+      await createTab(sidebar, `${server.base}/page.html?probe=c5`);
+      await tabWindow(app, "probe=c5");
+
+      // Query "allow": blocking.allowSite is offered (enabled — active http host,
+      // not yet allowlisted).
+      const allowState = await sidebar.evaluate(async () => {
+        const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+        await zeo.commandBar.open("commands");
+        await zeo.commandBar.setQuery("allow");
+        return zeo.commandBar.state();
+      });
+      const allowIdx = allowState.suggestions.findIndex(
+        (s) => s.kind === "command" && s.id === "blocking.allowSite",
+      );
+      expect(
+        allowIdx,
+        "expected a blocking.allowSite command suggestion for query 'allow'",
+      ).toBeGreaterThanOrEqual(0);
+
+      // Accept it: the active tab's host is added to the allowlist.
+      await sidebar.evaluate(async (idx) => {
+        const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+        await zeo.commandBar.accept(idx);
+      }, allowIdx);
+      await expect
+        .poll(async () => (await blockingState(sidebar)).allowlist, {
+          message: "expected the command-bar accept to allowlist the active host",
+        })
+        .toContain("127.0.0.1");
+
+      // Query "block": blocking.disallowSite is now offered and blocking.allowSite
+      // is NOT (it is disabled while the site is allowlisted).
+      const blockState = await sidebar.evaluate(async () => {
+        const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+        await zeo.commandBar.open("commands");
+        await zeo.commandBar.setQuery("block");
+        return zeo.commandBar.state();
+      });
+      expect(
+        blockState.suggestions.findIndex(
+          (s) => s.kind === "command" && s.id === "blocking.disallowSite",
+        ),
+        "expected a blocking.disallowSite command suggestion for query 'block'",
+      ).toBeGreaterThanOrEqual(0);
+      expect(
+        blockState.suggestions.findIndex(
+          (s) => s.kind === "command" && s.id === "blocking.allowSite",
+        ),
+        "expected blocking.allowSite to be absent once the site is allowlisted",
+      ).toBe(-1);
+    } finally {
+      await app.close();
+      await server.close();
+      rmSync(userDataDir, { recursive: true, force: true });
+      rmSync(filters.dir, { recursive: true, force: true });
+    }
+  });
+
+  // Case 6: the allowlist persists across relaunch (its row is written to sqlite
+  // synchronously by allowSite), and the FIRST load of the fixture page after the
+  // relaunch is not filtered — the persisted host bypasses from startup.
+  test("the allowlist persists across relaunch and the first load after relaunch is not filtered", async () => {
+    const userDataDir = mkdtempSync(join(tmpdir(), "zeo-allow-"));
+    const filters = writeFilterFile();
+    const server = await startFixtureServer();
+    try {
+      // --- Launch #1: allowlist the fixture host, then close. ---
+      const first = await launch(userDataDir, filters.file);
+      try {
+        await allowSite(first.sidebar, "127.0.0.1");
+        expect((await blockingState(first.sidebar)).allowlist).toEqual(["127.0.0.1"]);
+        await waitForDebouncedSave();
+      } finally {
+        await first.app.close();
+      }
+
+      // --- Launch #2: same dir; the allowlist is restored and filtering is
+      // bypassed on the very first load of the fixture page. ---
+      const second = await launch(userDataDir, filters.file);
+      try {
+        expect((await blockingState(second.sidebar)).allowlist).toContain("127.0.0.1");
+        await createTab(second.sidebar, `${server.base}/page.html?probe=c6`);
+        const page = await tabWindow(second.app, "probe=c6");
+        const probes = await readImageProbes(page);
+        // Not filtered: the blocked image loads and the server sees the request.
+        expect(probes.blocked).toBe("load");
+        expect(server.blockedHits()).toBeGreaterThanOrEqual(1);
+      } finally {
+        await second.app.close();
+      }
+    } finally {
+      await server.close();
+      rmSync(userDataDir, { recursive: true, force: true });
+      rmSync(filters.dir, { recursive: true, force: true });
+    }
+  });
+
+  // Case 7: the settings view. main mounts it in its own WebContentsView loaded
+  // with ?view=settings, which surfaces as its own Playwright page and IS
+  // reachable/drivable (see settingsWindow — Electron pages come from every CDP
+  // page target, and the tab-view helpers already drive such pages). So this
+  // takes the "settings page reachable" branch: it drives the settings DOM
+  // directly and asserts add/remove/close through it.
+  test("the settings view lists, adds, and removes allowlist entries and closes on Escape", async () => {
+    const userDataDir = mkdtempSync(join(tmpdir(), "zeo-allow-"));
+    const filters = writeFilterFile();
+    const { app, sidebar } = await launch(userDataDir, filters.file);
+    try {
+      // Allowlist a host first so a row is present when the view opens.
+      await allowSite(sidebar, "127.0.0.1");
+
+      await runCommand(sidebar, "settings.open");
+      await expect
+        .poll(() => settingsOpen(sidebar), {
+          message: "expected settingsOpen === true after settings.open",
+        })
+        .toBe(true);
+
+      const settings = await settingsWindow(app);
+      await expect(settings.getByTestId("settings")).toHaveCount(1);
+
+      // The row for the allowlisted host is present.
+      const row = settings.locator('[data-testid="settings-allowlist-row"][data-host="127.0.0.1"]');
+      await expect(row).toHaveCount(1);
+
+      // Remove it via its button -> the list empties (asserted via bridge state).
+      await row.locator('[data-testid="settings-allowlist-remove"]').click();
+      await expect
+        .poll(async () => (await blockingState(sidebar)).allowlist, {
+          message: "expected the allowlist to empty after clicking remove",
+        })
+        .toEqual([]);
+
+      // Type a new host + Enter -> a row appears and the state reflects it.
+      const input = settings.getByTestId("settings-allowlist-input");
+      await input.fill("example.org");
+      await input.press("Enter");
+      await expect(
+        settings.locator('[data-testid="settings-allowlist-row"][data-host="example.org"]'),
+      ).toHaveCount(1);
+      expect((await blockingState(sidebar)).allowlist).toContain("example.org");
+
+      // Escape closes the view (window-level listener -> settings.close command).
+      await settings.keyboard.press("Escape");
+      await expect
+        .poll(() => settingsOpen(sidebar), {
+          message: "expected settingsOpen === false after Escape",
+        })
+        .toBe(false);
+    } finally {
+      await app.close();
+      rmSync(userDataDir, { recursive: true, force: true });
+      rmSync(filters.dir, { recursive: true, force: true });
+    }
+  });
+
+  // Case 8: refreshLists on the fixture blocker.
+  //
+  // NOTE / DISCREPANCY: PRD 5.2 §7 says refreshLists() "resolves true" on the
+  // fixture blocker. The committed implementation builds the fixture engine with
+  // createBlockerFromFilters (apps/desktop/src/main/index.ts), whose refresh()
+  // has NO remote source and is documented (packages/adblock/src/blocker.ts) to
+  // RESOLVE `false` — there is nothing to rebuild from. So the real,
+  // deterministic offline contract is a resolve of `false` (NOT a rejection, and
+  // NOT `true`); asserting `true` would fail against HEAD. This is reported to
+  // main as a PRD/impl mismatch. The load-bearing behavior — refreshLists
+  // resolves without rejecting and leaves the fixture listVersion intact — is
+  // still asserted here.
+  test("refreshLists resolves on the fixture blocker without disturbing the fixture listVersion", async () => {
+    const userDataDir = mkdtempSync(join(tmpdir(), "zeo-allow-"));
+    const filters = writeFilterFile();
+    const { app, sidebar } = await launch(userDataDir, filters.file);
+    try {
+      expect((await blockingState(sidebar)).listVersion.startsWith("fixture:")).toBe(true);
+      // Resolves (does not reject); `false` because the fixture engine has no
+      // remote source to rebuild from.
+      expect(await refreshLists(sidebar)).toBe(false);
+      expect((await blockingState(sidebar)).listVersion.startsWith("fixture:")).toBe(true);
+    } finally {
+      await app.close();
+      rmSync(userDataDir, { recursive: true, force: true });
+      rmSync(filters.dir, { recursive: true, force: true });
     }
   });
 });
