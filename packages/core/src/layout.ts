@@ -41,3 +41,20 @@ export function commandBarBounds(
   height = Math.min(height, contentHeight - y);
   return { x, y, width, height };
 }
+
+/**
+ * The settings view's on-screen rectangle within the window's content area: it
+ * covers the whole PAGE region (the content to the right of the sidebar),
+ * starting at the sidebar's right edge and filling the content height.
+ */
+export function settingsBounds(
+  contentWidth: number,
+  contentHeight: number,
+): { x: number; y: number; width: number; height: number } {
+  return {
+    x: SIDEBAR_WIDTH,
+    y: 0,
+    width: contentWidth - SIDEBAR_WIDTH,
+    height: contentHeight,
+  };
+}

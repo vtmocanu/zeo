@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   commandBarBounds,
+  settingsBounds,
   COMMAND_BAR_HEIGHT,
   SUGGESTION_ROW_HEIGHT,
   SIDEBAR_WIDTH,
@@ -65,5 +66,25 @@ describe("commandBarBounds", () => {
   it("returns an all-zero rect when the window cannot seat the input row", () => {
     // y = round(60 * 0.12) = 7; room = 60 - 7 = 53 < COMMAND_BAR_HEIGHT (56).
     expect(commandBarBounds(1280, 60, 0)).toEqual({ x: 0, y: 0, width: 0, height: 0 });
+  });
+});
+
+describe("settingsBounds", () => {
+  it("covers the page region to the right of the sidebar", () => {
+    expect(settingsBounds(1280, 800)).toEqual({
+      x: SIDEBAR_WIDTH,
+      y: 0,
+      width: 1280 - SIDEBAR_WIDTH,
+      height: 800,
+    });
+  });
+
+  it("tracks a resized content area", () => {
+    expect(settingsBounds(1000, 600)).toEqual({
+      x: SIDEBAR_WIDTH,
+      y: 0,
+      width: 1000 - SIDEBAR_WIDTH,
+      height: 600,
+    });
   });
 });

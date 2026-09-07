@@ -23,21 +23,39 @@ const ALL_IDS: CommandId[] = [
   "bar.open-location",
   "bar.open-commands",
   "blocking.toggle",
+  "blocking.allowSite",
+  "blocking.disallowSite",
+  "settings.open",
+  "settings.close",
 ];
 
-/** Builds a command context, defaulting to no active tab and a single space. */
+/**
+ * Builds a command context, defaulting to no active tab, a single space, and a
+ * closed settings view.
+ */
 function context(partial: Partial<CommandContext> = {}): CommandContext {
   return {
     activeTab: partial.activeTab === undefined ? null : partial.activeTab,
     spaceCount: partial.spaceCount ?? 1,
+    settingsOpen: partial.settingsOpen ?? false,
   };
 }
 
-/** An active-tab descriptor with sensible defaults (unpinned, no history). */
+/**
+ * An active-tab descriptor with sensible defaults (unpinned, no history, an
+ * http(s) site host that is not allowlisted).
+ */
 function activeTab(
   over: Partial<NonNullable<CommandContext["activeTab"]>> = {},
 ): NonNullable<CommandContext["activeTab"]> {
-  return { pinned: false, canGoBack: false, canGoForward: false, ...over };
+  return {
+    pinned: false,
+    canGoBack: false,
+    canGoForward: false,
+    siteHost: "example.com",
+    siteAllowlisted: false,
+    ...over,
+  };
 }
 
 describe("COMMANDS registry", () => {
@@ -148,20 +166,59 @@ describe("isCommandEnabled — space.delete", () => {
   });
 });
 
+describe("isCommandEnabled — allowlist and settings commands", () => {
+  test("blocking.allowSite needs an active tab with a non-allowlisted http(s) host", () => {
+    expect(
+      isCommandEnabled("blocking.allowSite", context({ activeTab: activeTab({ siteHost: "example.com", siteAllowlisted: false }) })),
+    ).toBe(true);
+    expect(
+      isCommandEnabled("blocking.allowSite", context({ activeTab: activeTab({ siteHost: "example.com", siteAllowlisted: true }) })),
+    ).toBe(false);
+    expect(
+      isCommandEnabled("blocking.allowSite", context({ activeTab: activeTab({ siteHost: null }) })),
+    ).toBe(false);
+    expect(
+      isCommandEnabled("blocking.allowSite", context({ activeTab: null })),
+    ).toBe(false);
+  });
+
+  test("blocking.disallowSite needs an active tab whose site is allowlisted", () => {
+    expect(
+      isCommandEnabled("blocking.disallowSite", context({ activeTab: activeTab({ siteAllowlisted: true }) })),
+    ).toBe(true);
+    expect(
+      isCommandEnabled("blocking.disallowSite", context({ activeTab: activeTab({ siteAllowlisted: false }) })),
+    ).toBe(false);
+    expect(
+      isCommandEnabled("blocking.disallowSite", context({ activeTab: null })),
+    ).toBe(false);
+  });
+
+  test("settings.open is always enabled", () => {
+    expect(isCommandEnabled("settings.open", context({ activeTab: null, settingsOpen: false }))).toBe(true);
+    expect(isCommandEnabled("settings.open", context({ activeTab: activeTab(), settingsOpen: true }))).toBe(true);
+  });
+
+  test("settings.close needs the settings view open", () => {
+    expect(isCommandEnabled("settings.close", context({ settingsOpen: true }))).toBe(true);
+    expect(isCommandEnabled("settings.close", context({ settingsOpen: false }))).toBe(false);
+  });
+});
+
 describe("isCommandEnabled — no active tab yields exactly the expected set", () => {
   function enabledIds(ctx: CommandContext): CommandId[] {
     return ALL_IDS.filter((id) => isCommandEnabled(id, ctx)).sort();
   }
 
-  test("with one space: only the six always-enabled commands", () => {
+  test("with one space: only the always-enabled commands", () => {
     expect(enabledIds(context({ activeTab: null, spaceCount: 1 }))).toEqual(
-      ["bar.open-commands", "bar.open-location", "blocking.toggle", "space.new", "space.rename", "tab.new"].sort(),
+      ["bar.open-commands", "bar.open-location", "blocking.toggle", "settings.open", "space.new", "space.rename", "tab.new"].sort(),
     );
   });
 
-  test("with more than one space: the six plus space.delete", () => {
+  test("with more than one space: the always-enabled set plus space.delete", () => {
     expect(enabledIds(context({ activeTab: null, spaceCount: 2 }))).toEqual(
-      ["bar.open-commands", "bar.open-location", "blocking.toggle", "space.delete", "space.new", "space.rename", "tab.new"].sort(),
+      ["bar.open-commands", "bar.open-location", "blocking.toggle", "settings.open", "space.delete", "space.new", "space.rename", "tab.new"].sort(),
     );
   });
 });
