@@ -94,6 +94,12 @@ export function hostMatchesAllowlist(
 ): boolean {
   const hostIsIp = isIpLiteral(host);
   for (const entry of entries) {
+    // An empty entry would make `host.endsWith("." + "")` match any dotted host,
+    // silently disabling blocking everywhere. `normalizeAllowlistHost` never
+    // produces one, but guard here so this matcher is safe against any caller.
+    if (entry === "") {
+      continue;
+    }
     if (hostIsIp || isIpLiteral(entry)) {
       if (host === entry) {
         return true;

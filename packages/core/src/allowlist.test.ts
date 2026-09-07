@@ -78,4 +78,11 @@ describe("hostMatchesAllowlist", () => {
   test("returns false with no entries", () => {
     expect(hostMatchesAllowlist("example.com", [])).toBe(false);
   });
+
+  test("skips an empty entry so it never acts as a universal wildcard", () => {
+    expect(hostMatchesAllowlist("example.com", [""])).toBe(false);
+    expect(hostMatchesAllowlist("a.example.com", [""])).toBe(false);
+    // A real entry alongside an empty one still matches on its own merits.
+    expect(hostMatchesAllowlist("a.example.com", ["", "example.com"])).toBe(true);
+  });
 });

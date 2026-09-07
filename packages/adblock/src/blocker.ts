@@ -624,9 +624,10 @@ class BlockerImpl implements Blocker {
    * provisional navigation `frame.url` still names the source document, so a
    * blocked destination reached from an allowlisted source must key on the
    * destination. Otherwise, when the owning frame is present and not destroyed,
-   * the top frame's url (falling back to the frame's own url); an owning frame
-   * Electron cannot name yields `""`, which {@link BlockerImpl.checkBypass}
-   * never exempts.
+   * the top frame's url; a frame whose top Electron cannot name (a live frame
+   * with a `null` top, or no owning frame at all) yields `""`, which
+   * {@link BlockerImpl.checkBypass} never exempts — the sub-resource is filtered
+   * rather than keyed on its own url, so a `null` top can never fail open.
    */
   private documentUrlOf(details: NetworkDetails): string {
     if (details.resourceType === "mainFrame") {
@@ -634,7 +635,7 @@ class BlockerImpl implements Blocker {
     }
     const frame = details.frame;
     if (frame != null && !frame.isDestroyed()) {
-      return frame.top?.url ?? frame.url;
+      return frame.top?.url ?? "";
     }
     return "";
   }
@@ -729,8 +730,9 @@ class BlockerImpl implements Blocker {
       return;
     }
     // A bypassed document gets no cosmetic injection: resolve without consulting
-    // the engine, keyed on the frame tree's top document.
-    if (this.checkBypass(frame.top?.url ?? frame.url)) {
+    // the engine, keyed on the frame tree's top document. A `null` top yields
+    // `""` (never exempted), so an unnameable top fails closed to full filtering.
+    if (this.checkBypass(frame.top?.url ?? "")) {
       return;
     }
 
@@ -815,8 +817,9 @@ class BlockerImpl implements Blocker {
       return false;
     }
     // A bypassed document stops observing: report the observer disabled so the
-    // preload tears down its MutationObserver.
-    if (this.checkBypass(frame.top?.url ?? frame.url)) {
+    // preload tears down its MutationObserver. A `null` top yields `""` (never
+    // exempted), so an unnameable top fails closed to full filtering.
+    if (this.checkBypass(frame.top?.url ?? "")) {
       return false;
     }
     return this.engine.config.enableMutationObserver;

@@ -196,6 +196,7 @@ interface FakeFrame {
   destroyed: boolean;
   isDestroyed: () => boolean;
   executeJavaScript: ReturnType<typeof vi.fn>;
+  top: FakeFrame | null;
 }
 
 /** A fake IPC invoke event whose sender records `insertCSS`/`executeJavaScript`. */
@@ -221,7 +222,11 @@ function makeFakeEvent(options: {
       return this.destroyed;
     },
     executeJavaScript: vi.fn(() => Promise.resolve(undefined)),
+    top: null,
   };
+  // A top frame's `top` is itself (Electron's WebFrameMain.top), so the bypass
+  // check keys a top-frame sender on its own document url.
+  mainFrame.top = mainFrame;
   const child: FakeFrame = {
     url: options.frameUrl,
     destroyed: options.destroyed ?? false,
@@ -229,6 +234,7 @@ function makeFakeEvent(options: {
       return this.destroyed;
     },
     executeJavaScript: vi.fn(() => Promise.resolve(undefined)),
+    top: mainFrame,
   };
   const frame = options.kind === "top" ? mainFrame : child;
   frame.destroyed = options.destroyed ?? false;
@@ -1461,6 +1467,31 @@ describe("bypass predicate", () => {
     expect(requestDetails(state.captured!, { url: BLOCKED_URL, resourceType: "image" })).toEqual({
       cancel: true,
     });
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  test("a sub-resource whose live frame has a null top fails closed and is filtered", () => {
+    const blocker = track(createBlockerFromFilters(AD_FILTER, "fixture", cosmeticInternals()));
+    const { state } = attachSession(blocker);
+    const spy = vi.spyOn(engineOf(blocker), "onBeforeRequest");
+    // A predicate that would exempt the frame's OWN url, if it were ever used.
+    blocker.setBypass((url) => url === ALLOWLISTED_SOURCE);
+
+    // The owning frame is alive but Electron cannot name its top (top === null).
+    // The document url must resolve to "" (not the frame's own url), so the
+    // request is filtered rather than exempted.
+    const nullTopFrame: FakeNetworkFrame = {
+      url: ALLOWLISTED_SOURCE,
+      top: null,
+      isDestroyed: () => false,
+    };
+    expect(
+      requestDetails(state.captured!, {
+        url: BLOCKED_URL,
+        resourceType: "image",
+        frame: nullTopFrame,
+      }),
+    ).toEqual({ cancel: true });
     expect(spy).toHaveBeenCalledTimes(1);
   });
 
