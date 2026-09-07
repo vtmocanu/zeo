@@ -296,6 +296,35 @@ test.describe("PRD 6.5 settings sections + search engine (offline)", () => {
     }
   });
 
+  // §8 bullet b (focused-button path): Enter selects the HIGHLIGHTED section even
+  // when a section-list <button> holds DOM focus after a mouse click — it must not
+  // re-activate the clicked button. Guards the fix that defers Enter to native
+  // handling only for text fields and action buttons OUTSIDE the section nav.
+  test("Enter selects the highlighted section from a focused section button", async () => {
+    const userDataDir = mkdtempSync(join(tmpdir(), "zeo-settings-"));
+    const { app, sidebar } = await launch(userDataDir);
+    try {
+      const settings = await openSettings(app, sidebar, "settings.open");
+      // Click the Blocking row: it takes DOM focus and becomes the selection.
+      await settings.getByTestId("settings-section-blocking").click();
+      await expect(settings.locator(SELECTED("blocking"))).toHaveCount(1);
+
+      // ArrowDown moves the highlight blocking -> profiles while focus stays on the
+      // clicked Blocking button.
+      await settings.keyboard.press("ArrowDown");
+      await expect(settings.locator(HIGHLIGHT("profiles"))).toHaveCount(1);
+
+      // Enter selects the HIGHLIGHTED Profiles section, not the focused Blocking
+      // button (whose own activation is suppressed by preventDefault).
+      await settings.keyboard.press("Enter");
+      await expect(settings.locator(SELECTED("profiles"))).toHaveCount(1);
+      await expect(settings.getByTestId("settings-profile-create")).toHaveCount(1);
+    } finally {
+      await app.close();
+      rmSync(userDataDir, { recursive: true, force: true });
+    }
+  });
+
   // §8 bullet c: the section re-selection regression the per-open nonce fixes.
   // openProfiles (Profiles shown) -> locally click History -> openProfiles AGAIN
   // must re-reveal Profiles (not leave History shown). Without the nonce bump the
