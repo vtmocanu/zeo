@@ -26,6 +26,8 @@ milestone, a minor bump only for very large breakthroughs.
   version with a manual "Update" refresh, and allowlist management (add, list,
   and remove hosts). `Escape` closes it.
 
+## [0.0.14] - 2026-09-04
+
 ### Added
 
 - Content blocking now applies two more filter-list layers on top of network
