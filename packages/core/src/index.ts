@@ -52,6 +52,16 @@ export {
   normalizeAllowlistHost,
   hostMatchesAllowlist,
 } from "./allowlist.js";
+export type { ZoomState } from "./zoom.js";
+export {
+  ZOOM_FACTORS,
+  DEFAULT_ZOOM_FACTOR,
+  zoomIn,
+  zoomOut,
+  formatZoomPercent,
+  setHostZoom,
+  clearHostZoom,
+} from "./zoom.js";
 export { COMMANDS, isCommandEnabled, menuEntries, formatAccelerator } from "./commands.js";
 export type { CommandId, CommandDescriptor, CommandContext, MenuEntry } from "./commands.js";
 export { resolveInput, DEFAULT_SEARCH_ENGINE } from "./resolve-input.js";
