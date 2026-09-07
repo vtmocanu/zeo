@@ -9,7 +9,22 @@ milestone, a minor bump only for very large breakthroughs.
 
 ## [Unreleased]
 
-## [0.0.14] - 2026-09-04
+## [0.0.15] - 2026-09-07
+
+### Added
+
+- Per-site allowlist: disable content blocking for an individual site without
+  turning it off everywhere. An allowlisted document bypasses all three blocking
+  layers (network, CSP, and cosmetic) while every other site stays filtered.
+  Add or remove a site from the command bar ("Disable Blocking on This Site" /
+  "Enable Blocking on This Site") or from the new settings view. The allowlist is
+  persisted (database schema version 3) and survives a relaunch. The sidebar
+  shield shows an allowlisted state ("Blocking disabled on <host>") for the
+  active tab's site.
+- Settings view (`Cmd+,` / "Open Settings"): the app's first settings surface,
+  with a content-blocking section — a global on/off toggle, the active filter-list
+  version with a manual "Update" refresh, and allowlist management (add, list,
+  and remove hosts). `Escape` closes it.
 
 ### Added
 
