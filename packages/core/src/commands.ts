@@ -26,7 +26,9 @@ export type CommandId =
   | "blocking.allowSite"
   | "blocking.disallowSite"
   | "settings.open"
-  | "settings.close";
+  | "settings.close"
+  | "history.open"
+  | "history.clear";
 
 /**
  * One registry entry: its {@link CommandId}, human title, search `keywords`,
@@ -87,12 +89,15 @@ export const COMMANDS: readonly CommandDescriptor[] = [
   { id: "blocking.disallowSite", title: "Enable Blocking on This Site", keywords: ["block", "allowlist", "site", "ads"], accelerator: null, menu: "view" },
   { id: "settings.open", title: "Open Settings", keywords: ["settings", "preferences", "options"], accelerator: "CmdOrCtrl+,", menu: "view" },
   { id: "settings.close", title: "Close Settings", keywords: ["settings"], accelerator: null, menu: null },
+  { id: "history.open", title: "Show History", keywords: ["history", "recent", "visited"], accelerator: "CmdOrCtrl+Y", menu: "view" },
+  { id: "history.clear", title: "Clear Browsing History", keywords: ["history", "clear", "delete"], accelerator: null, menu: "view" },
 ];
 
 /**
  * Whether command `id` is enabled in `context`, pure. Always enabled:
  * `tab.new`, `space.new`, `space.rename`, `bar.open-location`,
- * `bar.open-commands`, `blocking.toggle`, `settings.open`. Every other
+ * `bar.open-commands`, `blocking.toggle`, `settings.open`, `history.open`,
+ * `history.clear`. Every other
  * `tab.*` needs an active tab; on top of that `tab.pin` needs it unpinned,
  * `tab.unpin` pinned, `tab.archive` unpinned, and `tab.back` / `tab.forward`
  * the matching history flag. `space.delete` needs more than one space.
@@ -109,6 +114,8 @@ export function isCommandEnabled(id: CommandId, context: CommandContext): boolea
     case "bar.open-commands":
     case "blocking.toggle":
     case "settings.open":
+    case "history.open":
+    case "history.clear":
       return true;
     case "space.delete":
       return context.spaceCount > 1;

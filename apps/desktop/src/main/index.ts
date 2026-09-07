@@ -28,6 +28,9 @@ import {
   addAllowlistHost,
   removeAllowlistHost,
   settingsBounds,
+  isHistoryUrl,
+  historyKey,
+  historyTerms,
 } from "@zeo/core";
 import type {
   BlockingState,
@@ -36,6 +39,8 @@ import type {
   CommandContext,
   CommandDescriptor,
   CommandId,
+  HistoryEntry,
+  HistoryVisit,
   Profile,
   Space,
   SpaceContextMenuResult,
@@ -57,6 +62,13 @@ import {
   readAllowlist,
   insertAllowlistHost,
   deleteAllowlistHost,
+  recordVisit,
+  updateVisitTitle,
+  searchHistory,
+  recentVisits,
+  deleteHistoryUrl,
+  clearHistory,
+  pruneHistory,
 } from "./db.js";
 
 // The built main is emitted by electron-vite as ESM (out/main/index.js, the
@@ -146,6 +158,39 @@ const navSeq = new Map<string, number>();
  * title wins over the hostname fallback); reset at the start of each navigate.
  */
 const hasRealTitle = new Set<string>();
+/**
+ * Per-tab {@link historyKey} of the last visit {@link recordNavigation} recorded,
+ * so hash/pushState churn on one page (and a re-fire of the same url) records
+ * once. Cleared on the non-history path and when the real tab is removed.
+ */
+const lastHistoryKey = new Map<string, string>();
+/**
+ * Per-tab id of the visit row {@link recordNavigation} last inserted, the row a
+ * later `page-title-updated` for the tab's current document updates. Written
+ * together with {@link lastHistoryKey} so the recorded key and visit id are
+ * always the pair from one navigation.
+ */
+const lastVisitId = new Map<string, number>();
+/**
+ * Whether a history database error has already been logged this launch. Recording
+ * and prune failures must never break navigation, so their errors are caught and
+ * logged once (guarded by this flag) via {@link logHistoryError}.
+ */
+let historyErrorLogged = false;
+
+/** Number of history candidates the catalog offers `suggest` (PRD 6.1 §5). */
+const HISTORY_CANDIDATES = 20;
+
+/**
+ * Logs a history database error once per launch and swallows it thereafter, so a
+ * failing history write never breaks navigation or the command bar.
+ */
+function logHistoryError(err: unknown): void {
+  if (!historyErrorLogged) {
+    historyErrorLogged = true;
+    console.error("[history] database error; history recording disabled for this launch:", err);
+  }
+}
 
 /**
  * The single app-lifetime {@link Blocker}, or `null` before the engine has
@@ -592,6 +637,16 @@ function createViewFor(tab: Tab, spaceId: string, urlOverride?: string): void {
     hasRealTitle.add(tab.id);
     store.updateMeta(tab.id, { title });
     broadcast();
+    // Update the title on the visit this document's load recorded. The key check
+    // drops a title event that raced a navigation to a DIFFERENT key (the tab has
+    // already left that visit's url). A database error is logged once.
+    if (lastVisitId.has(tab.id) && historyKey(view.webContents.getURL()) === lastHistoryKey.get(tab.id)) {
+      try {
+        updateVisitTitle(lastVisitId.get(tab.id)!, title);
+      } catch (err) {
+        logHistoryError(err);
+      }
+    }
   });
   view.webContents.on("page-favicon-updated", (_event, favicons: string[]) => {
     const faviconUrl = favicons.length > 0 ? favicons[0] : null;
@@ -636,6 +691,21 @@ function createViewFor(tab: Tab, spaceId: string, urlOverride?: string): void {
     }
   });
 
+  // History recording (PRD 6.1 §3). A new document has committed on did-navigate,
+  // so clear hasRealTitle BEFORE recording: a destination that emits no title of
+  // its own is then recorded with titleForUrl, not the torn-down document's stale
+  // title. A same-document (did-navigate-in-page) navigation keeps the document's
+  // title, so it must NOT touch hasRealTitle. Both are dedicated listeners (never
+  // folded into onDidNavigate, which fires on both events and runs before the
+  // blocked-count sibling above).
+  view.webContents.on("did-navigate", () => {
+    hasRealTitle.delete(tab.id);
+    recordNavigation(tab.id);
+  });
+  view.webContents.on("did-navigate-in-page", () => {
+    recordNavigation(tab.id);
+  });
+
   // History flags (canGoBack/canGoForward) settle only after a load finishes, so
   // refresh the menu and the open bar's command enablement then. The
   // did-navigate handlers above already broadcast, covering the url side.
@@ -674,6 +744,78 @@ function createViewFor(tab: Tab, spaceId: string, urlOverride?: string): void {
   if (overlay !== null) {
     win.contentView.addChildView(overlay);
   }
+}
+
+/**
+ * Records a top-level history visit for tab `id` from its view's LIVE url (PRD
+ * 6.1 §3). Called by the tab's `did-navigate` (after clearing `hasRealTitle`) and
+ * `did-navigate-in-page` listeners. Reads `webContents.getURL()` live; when the
+ * url is not a history url (about:blank, data:, …) it clears the tab's
+ * `lastHistoryKey`, `lastVisitId` and `hasRealTitle` so a later return to a
+ * recorded url is a fresh visit, then returns. Otherwise it computes the
+ * `historyKey` and skips when it equals the tab's last recorded key (hash /
+ * pushState churn records once). A new key records a visit — the live document
+ * title when the tab has emitted its own (`hasRealTitle`), else `titleForUrl` —
+ * and stores the returned visit id and key together. A database error is logged
+ * once and never breaks navigation.
+ */
+function recordNavigation(id: string): void {
+  const webContents = views.get(id)?.view.webContents;
+  if (webContents === undefined) {
+    return;
+  }
+  const current = webContents.getURL(); // read live, never a captured value
+  if (!isHistoryUrl(current)) {
+    lastHistoryKey.delete(id);
+    lastVisitId.delete(id);
+    hasRealTitle.delete(id);
+    return;
+  }
+  const key = historyKey(current);
+  if (key === lastHistoryKey.get(id)) {
+    return;
+  }
+  const currentTitle = hasRealTitle.has(id) ? webContents.getTitle() : titleForUrl(key);
+  try {
+    const visitId = recordVisit(key, currentTitle, Date.now());
+    // Set both together so the tab's recorded key and visit id are always the
+    // pair produced by this one navigation.
+    lastVisitId.set(id, visitId);
+    lastHistoryKey.set(id, key);
+  } catch (err) {
+    logHistoryError(err);
+  }
+}
+
+/**
+ * Drops the per-tab history record cache (`lastHistoryKey` + `lastVisitId`) for
+ * every open tab whose last-recorded key is one of `keys`. Called after a stored
+ * history row is removed out of band (a url delete or a prune) so a later
+ * same-key navigation records a fresh visit instead of short-circuiting the
+ * key-equality check in {@link recordNavigation}. `hasRealTitle` is intentionally
+ * left intact — the live document's title flag is still valid.
+ */
+function invalidateHistoryKeys(keys: Iterable<string>): void {
+  const removed = keys instanceof Set ? keys : new Set(keys);
+  if (removed.size === 0) {
+    return;
+  }
+  for (const [id, key] of lastHistoryKey) {
+    if (removed.has(key)) {
+      lastHistoryKey.delete(id);
+      lastVisitId.delete(id);
+    }
+  }
+}
+
+/**
+ * Drops EVERY open tab's per-tab history record cache after `clearHistory` has
+ * wiped all rows, so a reload or same-key navigation records a fresh visit.
+ * `hasRealTitle` is intentionally left intact.
+ */
+function invalidateAllHistoryKeys(): void {
+  lastHistoryKey.clear();
+  lastVisitId.clear();
 }
 
 /** Full new-tab lifecycle: store entry, view, activation, broadcast. */
@@ -845,6 +987,20 @@ const commandHandlers: Record<CommandId, () => void> = {
   },
   "settings.open": () => openSettings(),
   "settings.close": () => closeSettings(),
+  "history.open": () => openCommandBar("history"),
+  "history.clear": () => {
+    try {
+      clearHistory();
+      invalidateAllHistoryKeys();
+    } catch (err) {
+      logHistoryError(err);
+    }
+    if (commandBar.open && commandBar.mode === "history") {
+      recomputeSuggestions();
+      layoutOverlay();
+      pushCommandBar();
+    }
+  },
 };
 
 /**
@@ -920,7 +1076,33 @@ function buildCatalog(): SuggestCatalog {
       // number, but coalesce to satisfy the catalog's `number` field.
       archivedAt: tab.archivedAt ?? 0,
     })),
+    history: historyCandidates(),
   };
+}
+
+/**
+ * The history rows for the current bar `query`/`mode` (PRD 6.1 §5): a non-empty
+ * query in `navigate`, `new-tab` or `history` mode searches history; an empty
+ * query in `history` mode lists the {@link HISTORY_CANDIDATES} most-recent
+ * entries by `lastVisitedAt` (an empty `terms` array); every other case is `[]`.
+ * A database read error is caught and logged once, returning `[]` so a history
+ * failure never breaks the command bar.
+ */
+function historyCandidates(): HistoryEntry[] {
+  const { query, mode } = commandBar;
+  const searchableMode = mode === "navigate" || mode === "new-tab" || mode === "history";
+  try {
+    if (query !== "" && searchableMode) {
+      return searchHistory(historyTerms(query), HISTORY_CANDIDATES);
+    }
+    if (query === "" && mode === "history") {
+      return searchHistory([], HISTORY_CANDIDATES);
+    }
+    return [];
+  } catch (err) {
+    logHistoryError(err);
+    return [];
+  }
 }
 
 /**
@@ -1122,6 +1304,19 @@ function performSuggestion(s: Suggestion): void {
       broadcast();
       return;
     }
+    case "history": {
+      // Accepting a history row (PRD 6.1 §5): create a tab at its url in new-tab
+      // mode, otherwise (navigate/history mode) navigate the active tab. With no
+      // active tab (an empty space, or the active tab was closed while a history-
+      // mode bar stayed open), fall back to creating a tab so accept never throws
+      // on a null id — the same downgrade openCommandBar applies for navigate mode.
+      if (commandBar.mode === "new-tab" || store.activeTabId === null) {
+        createTab(s.url);
+      } else {
+        navigateTab(store.activeTabId, s.url);
+      }
+      return;
+    }
     case "navigate":
     case "search":
     case "command": {
@@ -1182,11 +1377,16 @@ function acceptCommandBar(index?: number, revision?: number): void {
     // executeCommand throws on a stale/disabled command; the throw propagates
     // and the invoke rejects with the bar untouched (do not catch it).
     executeCommand(s.id);
-    // bar.open-location, tab.new, and bar.open-commands re-open or switch the
-    // bar (openCommandBar sets open:true unconditionally; bar.open-commands
-    // switches into commands mode), so closing here would immediately dismiss
-    // the just-opened bar. Every other command closes it.
-    if (s.id !== "bar.open-location" && s.id !== "tab.new" && s.id !== "bar.open-commands") {
+    // bar.open-location, tab.new, bar.open-commands, and history.open re-open or
+    // switch the bar (openCommandBar sets open:true unconditionally; the mode
+    // switches), so closing here would immediately dismiss the just-opened bar.
+    // Every other command closes it.
+    if (
+      s.id !== "bar.open-location" &&
+      s.id !== "tab.new" &&
+      s.id !== "bar.open-commands" &&
+      s.id !== "history.open"
+    ) {
       closeCommandBar();
     }
     return;
@@ -1202,6 +1402,11 @@ function closeTab(id: string): void {
   // Real tab removal: drop the blocked count and the origin marker for good.
   blocking = dropBlockedTab(blocking, id);
   tabOrigin.delete(id);
+  // History per-tab state lives and dies with the real tab (not the view), so
+  // drop it here alongside tabOrigin.
+  lastHistoryKey.delete(id);
+  lastVisitId.delete(id);
+  hasRealTitle.delete(id);
   destroyView(id);
   // MRU re-activation may land on a not-yet-materialized restored sibling tab,
   // so ensure its view exists before showing it (lazy restore).
@@ -1221,6 +1426,11 @@ function removeTab(id: string): void {
   // Real tab removal: drop the blocked count and the origin marker for good.
   blocking = dropBlockedTab(blocking, id);
   tabOrigin.delete(id);
+  // History per-tab state lives and dies with the real tab (not the view), so
+  // drop it here alongside tabOrigin.
+  lastHistoryKey.delete(id);
+  lastVisitId.delete(id);
+  hasRealTitle.delete(id);
   destroyView(id);
   // MRU re-activation may land on a not-yet-materialized restored sibling tab,
   // so ensure its view exists before showing it (lazy restore).
@@ -1249,9 +1459,12 @@ function destroyView(id: string): void {
     views.delete(id);
     // Drop any retry marker so a stale id never lingers past its view.
     failedLoads.delete(id);
-    // Drop the per-tab nav sequence and title-state so a reused id starts fresh.
+    // Drop the per-tab nav sequence so a reused id starts fresh. The history
+    // per-tab state (hasRealTitle, lastHistoryKey, lastVisitId) is NOT dropped
+    // here: a view teardown/recreate (idle unload, remapSpaceProfile, failed-load
+    // retry) must keep those flags — they live/die with the real tab, in
+    // closeTab/removeTab/deleteSpace.
     navSeq.delete(id);
-    hasRealTitle.delete(id);
   }
 }
 
@@ -1311,6 +1524,10 @@ function deleteSpace(id: string): void {
   for (const tabId of removedTabIds) {
     blocking = dropBlockedTab(blocking, tabId);
     tabOrigin.delete(tabId);
+    // History per-tab state lives and dies with the real tab (not the view).
+    lastHistoryKey.delete(tabId);
+    lastVisitId.delete(tabId);
+    hasRealTitle.delete(tabId);
   }
 
   if (wasActive) {
@@ -1882,6 +2099,47 @@ ipcMain.handle(
 
 ipcMain.handle(IPC.blockingRefresh, (): Promise<boolean> => refreshLists());
 
+// --- History ------------------------------------------------------------------
+// search/recent read the SQLite history tables on demand (history is never part
+// of TabsState and never broadcast); deleteUrl/clear mutate them. A read error is
+// allowed to reject the invoke (the renderer catches); the buildCatalog read is
+// guarded separately so a database error never breaks the command bar.
+
+/**
+ * Clamps a renderer-supplied history `limit` to the contract (PRD 6.1 §4):
+ * `undefined` or a non-finite number defaults to 50, everything else is floored
+ * to an integer and clamped to `[1, 500]`.
+ */
+function clampLimit(limit?: number): number {
+  if (limit === undefined || !Number.isFinite(limit)) {
+    return 50;
+  }
+  return Math.min(500, Math.max(1, Math.floor(limit)));
+}
+
+ipcMain.handle(IPC.historySearch, (_event, query: string, limit?: number): HistoryEntry[] =>
+  searchHistory(historyTerms(query), clampLimit(limit)),
+);
+
+ipcMain.handle(IPC.historyRecent, (_event, limit?: number): HistoryVisit[] =>
+  recentVisits(clampLimit(limit)),
+);
+
+ipcMain.handle(IPC.historyDeleteUrl, (_event, url: string): void => {
+  // Reject a non-string url with a TypeError (PRD 6.1 §4) before touching the db.
+  if (typeof url !== "string") {
+    throw new TypeError("history.deleteUrl expects a string");
+  }
+  deleteHistoryUrl(url);
+  // The deleted aggregated url IS a historyKey; drop any open tab's cache for it.
+  invalidateHistoryKeys([url]);
+});
+
+ipcMain.handle(IPC.historyClear, (): void => {
+  clearHistory();
+  invalidateAllHistoryKeys();
+});
+
 // --- Space commands -----------------------------------------------------------
 // The renderer's single UI bridge drives these; tab WebContentsViews have no
 // bridge and cannot dispatch. A thrown Error (unknown/last space) propagates out
@@ -2055,6 +2313,25 @@ app.whenReady().then(async () => {
     // every open tab's lastActiveAt so the most-recently-active one sits at now.
     store.rebaseActivity(Date.now());
   }
+
+  // Prune history older than the retention window once on launch (the db is open
+  // via loadStore above) and then every 24 h. A database error is logged once and
+  // never blocks startup or the recurring timer.
+  try {
+    invalidateHistoryKeys(pruneHistory(Date.now()));
+  } catch (err) {
+    logHistoryError(err);
+  }
+  setInterval(
+    () => {
+      try {
+        invalidateHistoryKeys(pruneHistory(Date.now()));
+      } catch (err) {
+        logHistoryError(err);
+      }
+    },
+    24 * 60 * 60 * 1000,
+  );
 
   // --- Content-blocking startup gate (PRD 5.1 §3) --------------------------
   // The ENTIRE startup is wrapped so ANY failure — a bad ZEO_ADBLOCK_FILTERS

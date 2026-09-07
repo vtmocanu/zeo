@@ -27,6 +27,8 @@ const ALL_IDS: CommandId[] = [
   "blocking.disallowSite",
   "settings.open",
   "settings.close",
+  "history.open",
+  "history.clear",
 ];
 
 /**
@@ -109,6 +111,29 @@ describe("blocking.toggle command", () => {
   test("is always enabled regardless of context", () => {
     expect(isCommandEnabled("blocking.toggle", context({ activeTab: null, spaceCount: 1 }))).toBe(true);
     expect(isCommandEnabled("blocking.toggle", context({ activeTab: activeTab(), spaceCount: 3 }))).toBe(true);
+  });
+});
+
+describe("history commands", () => {
+  test("history.open is a view command with the Cmd+Y accelerator", () => {
+    const entry = COMMANDS.find((c) => c.id === "history.open");
+    expect(entry).toBeDefined();
+    expect(entry?.menu).toBe("view");
+    expect(entry?.accelerator).toBe("CmdOrCtrl+Y");
+  });
+
+  test("history.clear is a view command with no accelerator", () => {
+    const entry = COMMANDS.find((c) => c.id === "history.clear");
+    expect(entry).toBeDefined();
+    expect(entry?.menu).toBe("view");
+    expect(entry?.accelerator).toBeNull();
+  });
+
+  test("both history commands are always enabled regardless of context", () => {
+    for (const id of ["history.open", "history.clear"] as const) {
+      expect(isCommandEnabled(id, context({ activeTab: null, spaceCount: 1 }))).toBe(true);
+      expect(isCommandEnabled(id, context({ activeTab: activeTab(), spaceCount: 3 }))).toBe(true);
+    }
   });
 });
 
@@ -210,15 +235,15 @@ describe("isCommandEnabled — no active tab yields exactly the expected set", (
     return ALL_IDS.filter((id) => isCommandEnabled(id, ctx)).sort();
   }
 
-  test("with one space: only the always-enabled commands", () => {
+  test("with one space: only the nine always-enabled commands", () => {
     expect(enabledIds(context({ activeTab: null, spaceCount: 1 }))).toEqual(
-      ["bar.open-commands", "bar.open-location", "blocking.toggle", "settings.open", "space.new", "space.rename", "tab.new"].sort(),
+      ["bar.open-commands", "bar.open-location", "blocking.toggle", "history.clear", "history.open", "settings.open", "space.new", "space.rename", "tab.new"].sort(),
     );
   });
 
-  test("with more than one space: the always-enabled set plus space.delete", () => {
+  test("with more than one space: the nine plus space.delete", () => {
     expect(enabledIds(context({ activeTab: null, spaceCount: 2 }))).toEqual(
-      ["bar.open-commands", "bar.open-location", "blocking.toggle", "settings.open", "space.delete", "space.new", "space.rename", "tab.new"].sort(),
+      ["bar.open-commands", "bar.open-location", "blocking.toggle", "history.clear", "history.open", "settings.open", "space.delete", "space.new", "space.rename", "tab.new"].sort(),
     );
   });
 });

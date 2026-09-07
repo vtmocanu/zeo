@@ -3100,6 +3100,8 @@ test.describe("zeo desktop app", () => {
     "blocking.toggle",
     "blocking.allowSite",
     "settings.open",
+    "history.open",
+    "history.clear",
   ];
 
   // §5 bullet 1 — commands mode opens empty, lists only enabled command rows in

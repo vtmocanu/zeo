@@ -28,6 +28,8 @@ function iconFor(suggestion: Suggestion): string {
       return "🔍";
     case "command":
       return "⚡";
+    case "history":
+      return "🕘";
   }
 }
 
@@ -44,16 +46,20 @@ function primaryText(suggestion: Suggestion): string {
       return suggestion.label;
     case "command":
       return suggestion.title;
+    case "history":
+      return suggestion.title;
   }
 }
 
 /**
  * The muted secondary text for a suggestion row, or `""` when the kind has none.
- * For `tab` this is the host of its url (raw url when it does not parse).
+ * For `tab` and `history` this is the host of its url (raw url when it does not
+ * parse).
  */
 function secondaryText(suggestion: Suggestion): string {
   switch (suggestion.kind) {
     case "tab":
+    case "history":
       try {
         return new URL(suggestion.url).host;
       } catch {
@@ -172,7 +178,9 @@ export function CommandBar() {
    * rejected promise is a no-op. Enter/Arrows go through the new suggestion API:
    * `accept` (no index) acts on the selected row and falls back to submitting the
    * query when the list is empty, so row-0 / empty-list behavior is preserved;
-   * the arrows ask main to move the selection.
+   * the arrows ask main to move the selection. In `history` mode, `Cmd+Backspace`
+   * on the selected history row deletes that url from history and re-queries so
+   * the row disappears while the bar stays open.
    */
   const onKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>): void => {
     if (event.key === "Enter") {
@@ -187,6 +195,19 @@ export function CommandBar() {
     } else if (event.key === "ArrowUp") {
       event.preventDefault();
       void window.zeo?.commandBar.moveSelection(-1).catch(() => {});
+    } else if (event.metaKey && event.key === "Backspace") {
+      // Delete the selected history row (history mode only): remove its url, then
+      // re-query the same text so the deleted entry drops out and the bar stays
+      // open. Only intercepts Backspace when a history row is actually selected,
+      // so ordinary text editing (incl. Cmd+Backspace) is untouched elsewhere.
+      const row = suggestions[selectedIndex];
+      if (mode === "history" && row?.kind === "history") {
+        event.preventDefault();
+        void window.zeo?.history
+          .deleteUrl(row.url)
+          .then(() => window.zeo?.commandBar.setQuery(value))
+          .catch(() => {});
+      }
     }
   };
 
@@ -217,7 +238,11 @@ export function CommandBar() {
         type="text"
         value={value}
         placeholder={
-          mode === "commands" ? "Run a command" : "Search or enter address"
+          mode === "commands"
+            ? "Run a command"
+            : mode === "history"
+              ? "Search history"
+              : "Search or enter address"
         }
         spellCheck={false}
         autoComplete="off"
