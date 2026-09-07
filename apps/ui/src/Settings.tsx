@@ -489,7 +489,8 @@ function BlockingSection({ blocking }: { blocking: BlockingState }) {
  * Each name field is controlled by a per-row draft that falls back to the stored
  * `p.name`, so a not-being-edited row reflects a broadcast rename while an
  * in-progress edit is preserved; the draft entry is cleared on a successful
- * rename or a blank-revert so the field re-follows the stored name.
+ * rename (when the field still holds the submitted name) or a blank-revert so
+ * the field re-follows the stored name.
  */
 function ProfilesSection({
   profiles,
@@ -516,6 +517,21 @@ function ProfilesSection({
   };
 
   /**
+   * Drops a row's rename draft only when it still holds `submitted`, so a rename
+   * that resolves after the user typed a newer name does not discard that edit.
+   */
+  const clearDraftIfUnchanged = (id: string, submitted: string): void => {
+    setDrafts((current) => {
+      if (current[id] !== submitted) {
+        return current;
+      }
+      const next = { ...current };
+      delete next[id];
+      return next;
+    });
+  };
+
+  /**
    * Renames a profile to its current draft. A blank or whitespace-only draft is
    * not submitted and reverts the field to the stored name; a successful rename
    * clears the draft so the field re-follows the (now updated) stored name.
@@ -527,7 +543,7 @@ function ProfilesSection({
       return;
     }
     void window.zeo?.profiles.rename(profile.id, draft).then(
-      () => clearDraft(profile.id),
+      () => clearDraftIfUnchanged(profile.id, draft),
       () => {},
     );
   };
@@ -539,11 +555,12 @@ function ProfilesSection({
 
   /** Creates a profile from the create-input; a blank name is not submitted. */
   const onCreate = (): void => {
-    if (createName.trim() === "") {
+    const submitted = createName;
+    if (submitted.trim() === "") {
       return;
     }
-    void window.zeo?.profiles.create(createName).then(
-      () => setCreateName(""),
+    void window.zeo?.profiles.create(submitted).then(
+      () => setCreateName((current) => (current === submitted ? "" : current)),
       () => {},
     );
   };
