@@ -119,18 +119,22 @@ export function Settings() {
   }, []);
 
   useEffect(() => {
-    // Section-list keyboard navigation. ArrowUp/ArrowDown move the highlight
-    // through the section list and must keep working when a section-list
-    // <button> is focused (a fresh open focuses one), so they are skipped only in
-    // a text-cursor context (INPUT/TEXTAREA/SELECT) where an arrow moves the
-    // caret. Enter selects the highlighted section, but a focused button or field
-    // handles Enter natively (activate the button, submit the field), so Enter is
-    // skipped for BUTTON as well as the text-cursor contexts.
+    // Section-list keyboard navigation. Highlight is a renderer-local cursor
+    // that is independent of DOM focus. ArrowUp/ArrowDown move the highlight and
+    // are skipped only in a text-cursor context (INPUT/TEXTAREA/SELECT) where an
+    // arrow moves the caret. Enter selects the highlighted section — whether
+    // focus rests on the body (a fresh open, where activeElement is the body) or
+    // on a section-list <button> (e.g. after a mouse click) — but a focused text
+    // field or an action button OUTSIDE the section list handles Enter natively
+    // (submit the field / activate the button), so Enter defers to the DOM there.
     const onNavigate = (event: KeyboardEvent): void => {
       const target = event.target;
       const tagName = target instanceof HTMLElement ? target.tagName : "";
       const inTextField =
         tagName === "INPUT" || tagName === "TEXTAREA" || tagName === "SELECT";
+      const inSectionNav =
+        target instanceof HTMLElement &&
+        target.closest(".settings__sections") !== null;
       if (event.key === "ArrowDown") {
         if (inTextField) {
           return;
@@ -144,7 +148,10 @@ export function Settings() {
         event.preventDefault();
         setHighlight((current) => prevSection(current));
       } else if (event.key === "Enter") {
-        if (inTextField || tagName === "BUTTON") {
+        // A section-list button still selects the highlight (preventDefault
+        // suppresses that button's own activation); a text field or an action
+        // button elsewhere keeps its native Enter.
+        if (inTextField || (tagName === "BUTTON" && !inSectionNav)) {
           return;
         }
         event.preventDefault();
