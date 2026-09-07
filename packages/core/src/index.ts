@@ -28,6 +28,7 @@ export type {
   CommandBarApi,
   CommandsApi,
   BlockingApi,
+  HistoryApi,
   ZeoApi,
   TabContextMenuItem,
   TabContextMenuResult,
@@ -51,6 +52,13 @@ export type { NavigationTarget } from "./resolve-input.js";
 export type { CommandBarMode, CommandBarState } from "./command-bar.js";
 export { suggest, nextSelectedIndex } from "./suggest.js";
 export type { Suggestion, SuggestCatalog, SuggestOptions } from "./suggest.js";
+export {
+  isHistoryUrl,
+  historyKey,
+  historyTerms,
+  HISTORY_RETENTION_MS,
+} from "./history.js";
+export type { HistoryEntry, HistoryVisit } from "./history.js";
 export { defaultSpaceName } from "./space-name.js";
 export { buildSpaceContextMenu } from "./space-menu.js";
 export type { SpaceContextMenuInput } from "./space-menu.js";

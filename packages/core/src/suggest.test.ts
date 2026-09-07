@@ -9,6 +9,7 @@ function catalog(partial: Partial<SuggestCatalog>): SuggestCatalog {
     tabs: partial.tabs ?? [],
     archived: partial.archived ?? [],
     commands: partial.commands ?? [],
+    history: partial.history ?? [],
   };
 }
 
@@ -43,6 +44,18 @@ function tab(
     url: "https://example.test/",
     spaceName: "Personal",
     lastActiveAt: 0,
+    ...over,
+  };
+}
+
+/** A minimal history catalog entry with sensible defaults. */
+function historyEntry(
+  over: Partial<SuggestCatalog["history"][number]> & { url: string },
+): SuggestCatalog["history"][number] {
+  return {
+    title: "",
+    visitCount: 1,
+    lastVisitedAt: 0,
     ...over,
   };
 }
@@ -474,6 +487,112 @@ describe("suggest — commands mode", () => {
     if (rows.length > 0) {
       expect(rows[0].kind).toBe("command");
     }
+  });
+});
+
+describe("suggest — history rows", () => {
+  test("a history row ranks between spaces and commands at equal score", () => {
+    const rows = suggest(
+      "focus",
+      catalog({
+        spaces: [{ id: "sp", name: "Focus", active: false }],
+        history: [historyEntry({ url: "https://hist.test/", title: "Focus" })],
+        commands: [command({ id: "tab.new", title: "Focus", keywords: [] })],
+        archived: [archivedTab({ tabId: "arch", title: "Focus", url: "https://arch.test/" })],
+      }),
+      options(),
+    );
+    expect(rows.slice(1).map((r) => r.kind)).toEqual([
+      "space",
+      "history",
+      "command",
+      "archived-tab",
+    ]);
+  });
+
+  test("a history entry sharing a historyKey with an open tab is dropped (the tab wins)", () => {
+    const rows = suggest(
+      "docs",
+      catalog({
+        tabs: [tab({ tabId: "t", title: "Docs", url: "https://docs.test/page" })],
+        // Same url modulo fragment as the open tab → deduped away.
+        history: [historyEntry({ url: "https://docs.test/page#section", title: "Docs" })],
+      }),
+      options(),
+    );
+    expect(rows.slice(1).map((r) => r.kind)).toEqual(["tab"]);
+  });
+
+  test("a history entry with no matching open tab still surfaces", () => {
+    const rows = suggest(
+      "docs",
+      catalog({
+        tabs: [tab({ tabId: "t", title: "Docs", url: "https://other.test/" })],
+        history: [historyEntry({ url: "https://docs.test/page", title: "Docs" })],
+      }),
+      options(),
+    );
+    expect(rows.slice(1).map((r) => r.kind)).toEqual(["tab", "history"]);
+  });
+});
+
+describe("suggest — history mode", () => {
+  test("returns no row 0 and only history rows", () => {
+    const rows = suggest(
+      "alpha",
+      catalog({
+        // Tabs, spaces and commands present; history mode must ignore them.
+        spaces: [{ id: "sp", name: "Alpha", active: false }],
+        tabs: [tab({ tabId: "t", title: "Alpha", url: "https://alpha.test/" })],
+        commands: [command({ id: "tab.new", title: "Alpha", keywords: [] })],
+        history: [historyEntry({ url: "https://alpha.test/a", title: "Alpha page" })],
+      }),
+      options({ mode: "history" }),
+    );
+    expect(rows.every((r) => r.kind === "history")).toBe(true);
+    expect(rows.map((r) => (r.kind === "history" ? r.url : ""))).toEqual([
+      "https://alpha.test/a",
+    ]);
+  });
+
+  test("row 0 is never a navigate/search text action in history mode", () => {
+    const rows = suggest(
+      "example.com",
+      catalog({
+        history: [historyEntry({ url: "https://example.com/", title: "Example" })],
+      }),
+      options({ mode: "history" }),
+    );
+    expect(rows.every((r) => r.kind === "history")).toBe(true);
+  });
+
+  test("an empty query returns the catalog.history rows in catalog order", () => {
+    const rows = suggest(
+      "  ",
+      catalog({
+        history: [
+          historyEntry({ url: "https://one.test/", title: "One", lastVisitedAt: 1 }),
+          historyEntry({ url: "https://two.test/", title: "Two", lastVisitedAt: 9 }),
+          historyEntry({ url: "https://three.test/", title: "Three", lastVisitedAt: 5 }),
+        ],
+      }),
+      options({ mode: "history" }),
+    );
+    // Catalog order is preserved despite the non-monotonic lastVisitedAt values.
+    expect(rows.map((r) => (r.kind === "history" ? r.url : ""))).toEqual([
+      "https://one.test/",
+      "https://two.test/",
+      "https://three.test/",
+    ]);
+  });
+
+  test("caps the history rows at MAX_MATCHES", () => {
+    const history = Array.from({ length: 12 }, (_, i) =>
+      historyEntry({ url: `https://h${i}.test/`, title: `Doc ${i}`, lastVisitedAt: i }),
+    );
+    const rows = suggest("doc", catalog({ history }), options({ mode: "history" }));
+    expect(rows).toHaveLength(8);
+    expect(rows.every((r) => r.kind === "history")).toBe(true);
   });
 });
 

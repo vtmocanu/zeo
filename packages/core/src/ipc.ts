@@ -4,6 +4,7 @@ import type { Profile } from "./profile.js";
 import type { CommandBarMode, CommandBarState } from "./command-bar.js";
 import type { CommandDescriptor, CommandId } from "./commands.js";
 import type { BlockingState } from "./blocking.js";
+import type { HistoryEntry, HistoryVisit } from "./history.js";
 
 /**
  * A single space's tab payload, in the pre-space shape. This is what
@@ -235,6 +236,22 @@ export interface BlockingApi {
 }
 
 /**
+ * History commands the renderer invokes over IPC, handled in main against the
+ * SQLite history tables. `search(query, limit)` returns the matching aggregated
+ * {@link HistoryEntry} rows; `recent(limit)` returns the newest
+ * {@link HistoryVisit} rows; `deleteUrl(url)` forgets one url (its visits
+ * cascade); `clear()` empties all history. `limit` defaults to 50 in main and
+ * is clamped there; a non-string url rejects with `TypeError`. History is never
+ * broadcast — surfaces query it on demand.
+ */
+export interface HistoryApi {
+  search(query: string, limit?: number): Promise<HistoryEntry[]>;
+  recent(limit?: number): Promise<HistoryVisit[]>;
+  deleteUrl(url: string): Promise<void>;
+  clear(): Promise<void>;
+}
+
+/**
  * The full bridge surface exposed on `window.zeo` by the preload script.
  *
  * `onStateChange` registers a listener for main-pushed state updates and
@@ -248,6 +265,7 @@ export interface ZeoApi {
   commandBar: CommandBarApi;
   commands: CommandsApi;
   blocking: BlockingApi;
+  history: HistoryApi;
   onStateChange(listener: (state: TabsState) => void): () => void;
   /** Registers a listener for main-pushed command-bar state updates and returns
    *  an unsubscribe function, mirroring onStateChange. */
@@ -297,5 +315,9 @@ export const IPC = {
   commandsRun: "zeo:commands:run",
   blockingSetEnabled: "zeo:blocking:set-enabled",
   blockingState: "zeo:blocking:state",
+  historySearch: "zeo:history:search",
+  historyRecent: "zeo:history:recent",
+  historyDeleteUrl: "zeo:history:delete-url",
+  historyClear: "zeo:history:clear",
   stateChange: "zeo:state-change",
 } as const;

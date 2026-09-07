@@ -1,12 +1,15 @@
 import { resolveInput } from "./resolve-input.js";
+import { historyKey, historyTerms } from "./history.js";
+import type { HistoryEntry } from "./history.js";
 import type { CommandBarMode } from "./command-bar.js";
 import type { CommandId } from "./commands.js";
 
 /**
  * One row the command bar can show and act on. `navigate`/`search` are the
- * text action for the typed query (row 0); `tab`/`archived-tab`/`space` are
- * catalog matches. The renderer draws these and hands the chosen row's index
- * back to main; main performs the action.
+ * text action for the typed query (row 0); `tab`/`archived-tab`/`space`/
+ * `history` are catalog matches (a `history` row is a recorded url with its
+ * title, lifetime visit count, and last-visit time). The renderer draws these
+ * and hands the chosen row's index back to main; main performs the action.
  */
 export type Suggestion =
   | { kind: "navigate"; url: string; label: string }
@@ -14,20 +17,25 @@ export type Suggestion =
   | { kind: "tab"; tabId: string; spaceId: string; title: string; url: string; spaceName: string }
   | { kind: "archived-tab"; tabId: string; spaceId: string; title: string; url: string; spaceName: string }
   | { kind: "space"; spaceId: string; name: string }
-  | { kind: "command"; id: CommandId; title: string; accelerator: string | null };
+  | { kind: "command"; id: CommandId; title: string; accelerator: string | null }
+  | { kind: "history"; url: string; title: string; visitCount: number; lastVisitedAt: number };
 
 /**
  * The plain, store-free input {@link suggest} ranks over. Main builds this from
  * its {@link SpaceStore} on every keystroke: every space (with its `active`
  * flag), every open tab (with `lastActiveAt`), and every archived tab (with
- * `archivedAt`), each carrying its owning space id and name. `suggest` reads
- * only this — it never touches a store.
+ * `archivedAt`), each carrying its owning space id and name. `history` is the
+ * database-filtered {@link HistoryEntry} list for the current query (already
+ * ranked/limited by the database; empty in `commands` mode and when the query
+ * does not consult history). `suggest` reads only this — it never touches a
+ * store.
  */
 export interface SuggestCatalog {
   spaces: { id: string; name: string; active: boolean }[];
   tabs: { tabId: string; spaceId: string; title: string; url: string; spaceName: string; lastActiveAt: number }[];
   archived: { tabId: string; spaceId: string; title: string; url: string; spaceName: string; archivedAt: number }[];
   commands: { id: CommandId; title: string; keywords: string[]; accelerator: string | null; enabled: boolean }[];
+  history: HistoryEntry[];
 }
 
 /**
@@ -111,11 +119,14 @@ interface Candidate {
   suggestion: Suggestion;
   /** Worst (largest) term tier — the candidate's score, ascending. */
   score: number;
-  /** Kind rank: open tab 0, space 1, command 2, archived tab 3. */
+  /** Kind rank: open tab 0, space 1, history 2, command 3, archived tab 4. */
   kindRank: number;
   /** 0 for a tab in the active space (and for every non-tab), 1 otherwise. */
   activeRank: number;
-  /** `lastActiveAt` (open) / `archivedAt` (archived), descending; 0 for spaces. */
+  /**
+   * `lastActiveAt` (open) / `lastVisitedAt` (history) / `archivedAt`
+   * (archived), descending; 0 for spaces and commands.
+   */
   recency: number;
   /** Catalog gather order — the deterministic final tiebreak. */
   order: number;
@@ -141,6 +152,32 @@ function commandSuggestion(c: SuggestCatalog["commands"][number]): Suggestion {
   return { kind: "command", id: c.id, title: c.title, accelerator: c.accelerator };
 }
 
+/** Projects a catalog history entry to a `history` {@link Suggestion}. */
+function historySuggestion(e: HistoryEntry): Suggestion {
+  return {
+    kind: "history",
+    url: e.url,
+    title: e.title,
+    visitCount: e.visitCount,
+    lastVisitedAt: e.lastVisitedAt,
+  };
+}
+
+/**
+ * The worst (largest) {@link termTier} of `terms` against a history entry's
+ * lowercased `title` and url host. With no terms (an empty history-mode query)
+ * every check is vacuous, so this returns `0` and the caller keeps catalog
+ * (database) order.
+ */
+function historyScore(entry: HistoryEntry, terms: string[]): number {
+  if (terms.length === 0) {
+    return 0;
+  }
+  const titleLower = entry.title.toLowerCase();
+  const host = hostOf(entry.url);
+  return Math.max(...terms.map((term) => termTier(term, titleLower, host)));
+}
+
 /**
  * Ranks the command-bar suggestion list for `query`. Row 0 is the text action
  * ({@link resolveInput} mapped to a `navigate` or `search` row), omitted when
@@ -148,9 +185,12 @@ function commandSuggestion(c: SuggestCatalog["commands"][number]): Suggestion {
  * recently active open tabs (excluding the active tab) in `new-tab` mode and
  * empty in `navigate` mode. Otherwise catalog rows whose haystack contains
  * every whitespace-separated term are scored (see {@link termTier}, worst tier
- * wins), sorted by score, then kind (open tab, space, command, archived tab), then
- * active-space-first for tabs, then recency descending, then catalog order,
- * and capped at eight before row 0 is prepended. Pure — reads only its
+ * wins), sorted by score, then kind (open tab, space, history, command,
+ * archived tab), then active-space-first for tabs, then recency descending,
+ * then catalog order, and capped at eight before row 0 is prepended. A history
+ * candidate is skipped when an open tab shares its {@link historyKey} (the tab
+ * row wins). `commands` mode ignores history entirely; `history` mode returns
+ * only history rows (no row 0, no other kinds). Pure — reads only its
  * arguments.
  */
 export function suggest(query: string, catalog: SuggestCatalog, options: SuggestOptions): Suggestion[] {
@@ -185,6 +225,24 @@ export function suggest(query: string, catalog: SuggestCatalog, options: Suggest
     return ranked.slice(0, MAX_MATCHES).map((c) => c.suggestion);
   }
 
+  if (options.mode === "history") {
+    // History mode is history-only: no row-0 text action and no tabs, spaces,
+    // commands or archived tabs. `catalog.history` is the database-ranked list
+    // for the query (or, on an empty query, the recent entries in last-visited
+    // order); this scores each row by the same termTier rules as the mixed
+    // history block and returns the top MAX_MATCHES, keeping the database
+    // (catalog) order within equal-score ties. With an empty query the terms
+    // are empty, so every score is 0 and the catalog order is preserved.
+    const terms = historyTerms(query);
+    const ranked: { suggestion: Suggestion; score: number; order: number }[] = [];
+    let order = 0;
+    for (const entry of catalog.history) {
+      ranked.push({ suggestion: historySuggestion(entry), score: historyScore(entry, terms), order: order++ });
+    }
+    ranked.sort((a, b) => a.score - b.score || a.order - b.order);
+    return ranked.slice(0, MAX_MATCHES).map((c) => c.suggestion);
+  }
+
   const resolved = resolveInput(query);
 
   if (resolved === null) {
@@ -207,6 +265,9 @@ export function suggest(query: string, catalog: SuggestCatalog, options: Suggest
 
   const terms = query.trim().toLowerCase().split(/\s+/);
   const activeSpaceId = catalog.spaces.find((s) => s.active)?.id ?? null;
+  // Cross-kind dedupe: a history entry whose key matches an open tab's is
+  // dropped below (the tab row wins).
+  const openTabKeys = new Set(catalog.tabs.map((tab) => historyKey(tab.url)));
 
   const candidates: Candidate[] = [];
   let order = 0;
@@ -246,6 +307,22 @@ export function suggest(query: string, catalog: SuggestCatalog, options: Suggest
     }
   }
 
+  for (const entry of catalog.history) {
+    // The database already filtered `catalog.history` to the query; score it
+    // and drop any entry an open tab already covers (the tab row wins).
+    if (openTabKeys.has(historyKey(entry.url))) {
+      continue;
+    }
+    candidates.push({
+      suggestion: historySuggestion(entry),
+      score: historyScore(entry, terms),
+      kindRank: 2,
+      activeRank: 0,
+      recency: entry.lastVisitedAt,
+      order: order++,
+    });
+  }
+
   for (const command of catalog.commands) {
     if (!command.enabled) {
       continue;
@@ -262,7 +339,7 @@ export function suggest(query: string, catalog: SuggestCatalog, options: Suggest
           accelerator: command.accelerator,
         },
         score,
-        kindRank: 2,
+        kindRank: 3,
         activeRank: 0,
         recency: 0,
         order: order++,
@@ -282,7 +359,7 @@ export function suggest(query: string, catalog: SuggestCatalog, options: Suggest
       candidates.push({
         suggestion: archivedSuggestion(tab),
         score,
-        kindRank: 3,
+        kindRank: 4,
         activeRank: 0,
         recency: tab.archivedAt,
         order: order++,

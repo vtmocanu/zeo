@@ -11,8 +11,12 @@ import type { Suggestion } from "./suggest.js";
  * - `"commands"` opens the palette empty: the typed text is a command-name filter
  *   only, there is no text (navigate/search) action, and submitting is not a valid
  *   action (accept runs the highlighted command).
+ * - `"history"` opens the bar to search recorded history: the input placeholder
+ *   reads "Search history", the typed text filters recent/matching visits, there
+ *   is no text (navigate/search) action row, and accepting a row navigates the
+ *   active tab to that url.
  */
-export type CommandBarMode = "navigate" | "new-tab" | "commands";
+export type CommandBarMode = "navigate" | "new-tab" | "commands" | "history";
 
 /**
  * The command bar's serializable state, broadcast from main to the renderer.
