@@ -53,6 +53,23 @@ export function Settings() {
     return unsubscribe;
   }, []);
 
+  useEffect(() => {
+    // Escape closes the view regardless of which control (if any) has focus. A
+    // window-level listener is used rather than a handler on the container div:
+    // the container is not focusable, so on a fresh open (activeElement is the
+    // body, an ancestor of the container) a descendant handler would never see
+    // the keydown. The settings view owns the whole renderer, so a window
+    // listener only fires while this WebContentsView has focus.
+    const onEscape = (event: KeyboardEvent): void => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        void window.zeo?.commands.run("settings.close").catch(() => {});
+      }
+    };
+    window.addEventListener("keydown", onEscape);
+    return () => window.removeEventListener("keydown", onEscape);
+  }, []);
+
   const enabled = blocking?.enabled ?? false;
   const listVersion = blocking?.listVersion ?? "";
   const allowlist = blocking?.allowlist ?? [];
@@ -124,16 +141,8 @@ export function Settings() {
     void window.zeo?.blocking.disallowSite(host).catch(() => {});
   };
 
-  /** Escape anywhere in the view asks main to close settings. */
-  const onKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>): void => {
-    if (event.key === "Escape") {
-      event.preventDefault();
-      void window.zeo?.commands.run("settings.close").catch(() => {});
-    }
-  };
-
   return (
-    <div className="settings" data-testid="settings" onKeyDown={onKeyDown}>
+    <div className="settings" data-testid="settings">
       <nav className="settings__sections" aria-label="Settings sections">
         <span className="settings__section-item settings__section-item--active">
           Content blocking
