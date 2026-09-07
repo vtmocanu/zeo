@@ -991,7 +991,13 @@ function commandContextOf(): CommandContext {
   }
   const tab = store.list().find((t) => t.id === activeTabId);
   const wc = views.get(activeTabId)?.view.webContents;
-  const siteHost = siteKeyForUrl(tab?.url ?? "");
+  // Derive siteHost from the LIVE view URL — the same identity zoomActiveTab/
+  // applyZoom mutate — so zoom command enablement and the mutation agree on the
+  // host even during an in-flight navigation (tab.url updates before loadURL
+  // commits). No live http(s) view ⇒ null, matching zoomActiveTab's rejection.
+  const siteHost = siteKeyForUrl(
+    wc !== undefined && !wc.isDestroyed() ? wc.getURL() : "",
+  );
   return {
     activeTab: {
       pinned: tab?.pinned ?? false,
