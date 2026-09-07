@@ -388,6 +388,44 @@ async function startLocalPageServer(): Promise<LocalPageServer> {
   };
 }
 
+/**
+ * Make the active tab's command-context host a real, committed http(s) host so
+ * the host-dependent command rows (blocking.allowSite, zoom.in, zoom.out) are
+ * enabled when the tests below open commands mode. `commandContextOf` derives
+ * `siteHost` from the tab view's LIVE URL; the seeded example.com tab cannot be
+ * relied on offline (its load fails and its view URL may never resolve to a
+ * host), so command enablement would flake. Create a FRESH tab at a loopback page
+ * that commits deterministically offline — createTab activates it, and a
+ * single-entry tab keeps canGoBack false so tab.back is NOT enabled. Mirrors the
+ * loopback-commit pattern of the enablement-refresh test; the committed URL
+ * persists after the server closes, so the host stays live for the rest of the
+ * test.
+ */
+async function waitForCommandHostReady(app: ElectronApplication, page: Page): Promise<void> {
+  const server = await startLocalPageServer();
+  try {
+    const token = "zeo-cmdhost-probe";
+    const pageUrl = `${server.base}/page.html?probe=${token}`;
+    await page.evaluate(async (url) => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.tabs.create(url);
+    }, pageUrl);
+    await expect
+      .poll(
+        async () =>
+          app.evaluate(
+            ({ webContents }, tok) =>
+              webContents.getAllWebContents().some((w) => w.getURL().includes(tok)),
+            token,
+          ),
+        { message: "expected the fresh tab to commit the loopback page" },
+      )
+      .toBe(true);
+  } finally {
+    await server.close();
+  }
+}
+
 test.describe("zeo desktop app", () => {
   // Fresh launch per test: each Electron process gets a pristine TabStore (one
   // seeded tab, no pins, no archives), so counts are deterministic and a CI
@@ -3117,6 +3155,7 @@ test.describe("zeo desktop app", () => {
   // registry order (no navigate/search/tab/space rows, and never bar.open-commands),
   // and the overlay input shows the "Run a command" placeholder with an empty value.
   test("commands mode lists only enabled commands in registry order, empty with the Run a command placeholder", async () => {
+    await waitForCommandHostReady(app, sidebar);
     const st = await sidebar.evaluate(async () => {
       const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
       await zeo.commandBar.open("commands");
@@ -3325,6 +3364,7 @@ test.describe("zeo desktop app", () => {
   // empty query and the full command list (it joins tab.new/bar.open-location as an
   // accept exception).
   test("accepting the bar.open-commands row from new-tab and navigate modes leaves the bar open in commands mode", async () => {
+    await waitForCommandHostReady(app, sidebar);
     for (const mode of ["new-tab", "navigate"] as const) {
       await sidebar.evaluate(async (m) => {
         const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
