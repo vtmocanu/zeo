@@ -12,24 +12,40 @@
 /**
  * The content-blocking slice of the broadcast state: whether blocking is
  * `enabled`, the active `listVersion`, the per-tab blocked-request counts keyed
- * by tab id, and `blockedUnattributed` for requests not tied to a tab.
+ * by tab id, `blockedUnattributed` for requests not tied to a tab, and the
+ * per-site `allowlist` of hosts that bypass blocking (kept sorted by
+ * `localeCompare` with no duplicates).
  */
 export interface BlockingState {
   enabled: boolean;
   listVersion: string;
   blockedByTab: Record<string, number>;
   blockedUnattributed: number;
+  allowlist: readonly string[];
+}
+
+/** Returns a sorted (`localeCompare`), de-duplicated copy of `hosts`. */
+function normalizeAllowlist(hosts: readonly string[]): string[] {
+  return [...new Set(hosts)].sort((a, b) => a.localeCompare(b));
 }
 
 /**
- * A fresh {@link BlockingState} with the given `enabled` flag and `listVersion`,
- * no per-tab counts, and a zero unattributed count.
+ * A fresh {@link BlockingState} with the given `enabled` flag, `listVersion`,
+ * and `allowlist` (normalized to sorted + de-duplicated), no per-tab counts, and
+ * a zero unattributed count.
  */
 export function initialBlockingState(
   enabled: boolean,
   listVersion: string,
+  allowlist: readonly string[] = [],
 ): BlockingState {
-  return { enabled, listVersion, blockedByTab: {}, blockedUnattributed: 0 };
+  return {
+    enabled,
+    listVersion,
+    blockedByTab: {},
+    blockedUnattributed: 0,
+    allowlist: normalizeAllowlist(allowlist),
+  };
 }
 
 /**
@@ -90,4 +106,38 @@ export function dropBlockedTab(
   const rest = { ...state.blockedByTab };
   delete rest[tabId];
   return { ...state, blockedByTab: rest };
+}
+
+/**
+ * Returns a new state with `host` inserted into `allowlist`, keeping it sorted
+ * (`localeCompare`) with no duplicates. When `host` is already present the
+ * original `state` is returned unchanged (same reference). Blocked counts are
+ * untouched.
+ */
+export function addAllowlistHost(
+  state: BlockingState,
+  host: string,
+): BlockingState {
+  if (state.allowlist.includes(host)) {
+    return state;
+  }
+  return { ...state, allowlist: normalizeAllowlist([...state.allowlist, host]) };
+}
+
+/**
+ * Returns a new state with `host` removed from `allowlist`. When `host` is
+ * absent the original `state` is returned unchanged (same reference). Blocked
+ * counts are untouched.
+ */
+export function removeAllowlistHost(
+  state: BlockingState,
+  host: string,
+): BlockingState {
+  if (!state.allowlist.includes(host)) {
+    return state;
+  }
+  return {
+    ...state,
+    allowlist: state.allowlist.filter((entry) => entry !== host),
+  };
 }

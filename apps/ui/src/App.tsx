@@ -8,7 +8,13 @@ import {
   type RefObject,
 } from "react";
 import type { Tab, TabsState } from "@zeo/core";
-import { SIDEBAR_WIDTH, defaultSpaceName, formatRelativeArchived } from "@zeo/core";
+import {
+  SIDEBAR_WIDTH,
+  defaultSpaceName,
+  formatRelativeArchived,
+  hostMatchesAllowlist,
+  siteKeyForUrl,
+} from "@zeo/core";
 import "./App.css";
 
 // Pointer travel (px) required before a press turns into a drag. Below this a
@@ -258,8 +264,9 @@ function useTabDrag(pinned: Tab[], unpinned: Tab[]) {
 /**
  * A single tab row. Thin: renders `tab` + active state and dispatches to the
  * injected `window.zeo` bridge. No business logic, no Node/Electron imports.
- * Shows a blocked-count shield when `blockedCount > 0`, dimmed when blocking
- * is disabled.
+ * Shows a blocked-count shield when `blockedCount > 0`; when the tab's site is
+ * `allowlisted` the shield instead marks blocking as disabled for `host` (no
+ * count). The count shield is dimmed when blocking is globally disabled.
  */
 function TabRow({
   tab,
@@ -268,6 +275,8 @@ function TabRow({
   dragging,
   blockedCount,
   blockingEnabled,
+  allowlisted,
+  host,
   onPointerDown,
 }: {
   tab: Tab;
@@ -276,6 +285,8 @@ function TabRow({
   dragging: boolean;
   blockedCount: number;
   blockingEnabled: boolean;
+  allowlisted: boolean;
+  host: string | null;
   onPointerDown: (event: ReactPointerEvent<HTMLLIElement>) => void;
 }) {
   const hasFavicon =
@@ -326,7 +337,18 @@ function TabRow({
       >
         {tab.title}
       </button>
-      {blockedCount > 0 ? (
+      {allowlisted ? (
+        <span
+          className="tab-item__shield tab-item__shield--allowlisted"
+          role="img"
+          data-testid="tab-shield"
+          data-allowlisted="true"
+          title={`Blocking disabled on ${host ?? ""}`}
+          aria-label={`Blocking disabled on ${host ?? ""}`}
+        >
+          <span aria-hidden="true">🛡</span>
+        </span>
+      ) : blockedCount > 0 ? (
         <span
           className={
             "tab-item__shield" +
@@ -460,11 +482,13 @@ export function App() {
     tabs: [],
     activeTabId: null,
     archived: [],
+    settingsOpen: false,
     blocking: {
       enabled: true,
       listVersion: "none",
       blockedByTab: {},
       blockedUnattributed: 0,
+      allowlist: [],
     },
   });
   const [showArchived, setShowArchived] = useState(false);
@@ -630,6 +654,9 @@ export function App() {
         if (isTarget && insertBefore === index) {
           children.push(dropIndicator(`indicator-${index}`));
         }
+        const host = siteKeyForUrl(tab.url);
+        const allowlisted =
+          host !== null && hostMatchesAllowlist(host, state.blocking.allowlist);
         children.push(
           <TabRow
             key={tab.id}
@@ -639,6 +666,8 @@ export function App() {
             dragging={tab.id === draggingId}
             blockedCount={state.blocking.blockedByTab[tab.id] ?? 0}
             blockingEnabled={state.blocking.enabled}
+            allowlisted={allowlisted}
+            host={host}
             onPointerDown={(event) =>
               onRowPointerDown(event, tab, section === "pinned")
             }

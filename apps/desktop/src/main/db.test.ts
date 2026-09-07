@@ -21,6 +21,9 @@ import {
   loadStore,
   readBlockingEnabled,
   writeBlockingEnabled,
+  readAllowlist,
+  insertAllowlistHost,
+  deleteAllowlistHost,
   closeDb,
   recordVisit,
   updateVisitTitle,
@@ -53,7 +56,7 @@ CREATE TABLE meta (
 );
 `;
 
-/** The current (schema v2) DDL, with `meta.enabled`. */
+/** The schema v2 DDL, with `meta.enabled` but no `blocking_allowlist` table. */
 const V2_DDL = `
 CREATE TABLE profiles (
   id TEXT PRIMARY KEY, name TEXT NOT NULL, createdAt INTEGER NOT NULL, position INTEGER NOT NULL
@@ -76,9 +79,14 @@ CREATE TABLE meta (
 );
 `;
 
-/** The current (schema v3) DDL: the v2 tables plus the two history tables. */
+/** The schema v3 DDL, adding the `blocking_allowlist` table to v2. */
 const V3_DDL =
   V2_DDL +
+  "CREATE TABLE blocking_allowlist (host TEXT PRIMARY KEY, createdAt INTEGER NOT NULL);";
+
+/** The current (schema v4) DDL: the v3 tables plus the two history tables. */
+const V4_DDL =
+  V3_DDL +
   `
 CREATE TABLE history_entries (
   url TEXT PRIMARY KEY,
@@ -128,6 +136,17 @@ function hasEnabledColumn(db: Database.Database): boolean {
   return cols.some((c) => c.name === "enabled");
 }
 
+/** True when the `blocking_allowlist` table exists. */
+function hasAllowlistTable(db: Database.Database): boolean {
+  return (
+    db
+      .prepare(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='blocking_allowlist'",
+      )
+      .get() !== undefined
+  );
+}
+
 let tempDir: string;
 
 beforeEach(() => {
@@ -143,7 +162,7 @@ afterEach(() => {
 });
 
 describe("migrate", () => {
-  test("upgrades a v1 database through to v3, adding enabled and history and preserving rows", () => {
+  test("upgrades a v1 database to the current version, adding enabled, the allowlist, and history and preserving rows", () => {
     const path = join(tempDir, "v1.db");
     const db = new Database(path);
     db.exec(V1_DDL);
@@ -160,8 +179,9 @@ describe("migrate", () => {
     const meta = db
       .prepare("SELECT schemaVersion, activeSpaceId, enabled FROM meta WHERE id=0")
       .get() as { schemaVersion: number; activeSpaceId: string; enabled: number };
-    expect(meta.schemaVersion).toBe(3);
+    expect(meta.schemaVersion).toBe(4);
     expect(hasEnabledColumn(db)).toBe(true);
+    expect(hasAllowlistTable(db)).toBe(true);
     expect(meta.enabled).toBe(1);
     expect(hasHistoryTable(db)).toBe(true);
     // Pre-existing rows preserved.
@@ -172,15 +192,17 @@ describe("migrate", () => {
     db.close();
   });
 
-  test("upgrades a v2 database to v3, adding the history tables and preserving rows", () => {
+  test("upgrades a v2 database to the current version, adding the allowlist and history and preserving rows", () => {
     const path = join(tempDir, "v2.db");
     const db = new Database(path);
     db.exec(V2_DDL);
+    // Seed enabled=0 so the migration is confirmed to preserve the flag.
     db.prepare(
-      "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled) VALUES (0, 2, ?, 1)",
+      "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled) VALUES (0, 2, ?, 0)",
     ).run("space-1");
     seedRows(db, "space-1");
 
+    expect(hasAllowlistTable(db)).toBe(false);
     expect(hasHistoryTable(db)).toBe(false);
 
     migrate(db);
@@ -188,7 +210,8 @@ describe("migrate", () => {
     const meta = db
       .prepare("SELECT schemaVersion, activeSpaceId, enabled FROM meta WHERE id=0")
       .get() as { schemaVersion: number; activeSpaceId: string; enabled: number };
-    expect(meta.schemaVersion).toBe(3);
+    expect(meta.schemaVersion).toBe(4);
+    expect(hasAllowlistTable(db)).toBe(true);
     expect(hasHistoryTable(db)).toBe(true);
     expect(
       db
@@ -197,16 +220,49 @@ describe("migrate", () => {
         )
         .get(),
     ).toEqual({ name: "history_entries" });
-    // Pre-existing rows preserved.
+    // Pre-existing rows and the enabled flag preserved.
     expect(meta.activeSpaceId).toBe("space-1");
-    expect(meta.enabled).toBe(1);
+    expect(meta.enabled).toBe(0);
     expect(db.prepare("SELECT id FROM profiles").get()).toEqual({ id: "p1" });
     expect(db.prepare("SELECT id FROM spaces").get()).toEqual({ id: "space-1" });
     expect(db.prepare("SELECT id FROM tabs").get()).toEqual({ id: "t1" });
     db.close();
   });
 
-  test("creates a fresh v3 schema with enabled=1 and history tables on an empty database", () => {
+  test("upgrades a v3 database to v4, adding the history tables and preserving the allowlist and rows", () => {
+    const path = join(tempDir, "v3-to-v4.db");
+    const db = new Database(path);
+    db.exec(V3_DDL);
+    // Seed enabled=0 so the migration is confirmed to preserve the flag.
+    db.prepare(
+      "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled) VALUES (0, 3, ?, 0)",
+    ).run("space-1");
+    seedRows(db, "space-1");
+    db.prepare(
+      "INSERT INTO blocking_allowlist(host,createdAt) VALUES ('example.com', 5)",
+    ).run();
+
+    expect(hasHistoryTable(db)).toBe(false);
+
+    migrate(db);
+
+    const meta = db
+      .prepare("SELECT schemaVersion, activeSpaceId, enabled FROM meta WHERE id=0")
+      .get() as { schemaVersion: number; activeSpaceId: string; enabled: number };
+    expect(meta.schemaVersion).toBe(4);
+    expect(hasHistoryTable(db)).toBe(true);
+    // Pre-existing allowlist, rows, and the enabled flag preserved.
+    expect(hasAllowlistTable(db)).toBe(true);
+    expect(db.prepare("SELECT host FROM blocking_allowlist").get()).toEqual({
+      host: "example.com",
+    });
+    expect(meta.activeSpaceId).toBe("space-1");
+    expect(meta.enabled).toBe(0);
+    expect(db.prepare("SELECT id FROM tabs").get()).toEqual({ id: "t1" });
+    db.close();
+  });
+
+  test("creates a fresh v4 schema with enabled=1, the allowlist, and history tables on an empty database", () => {
     const path = join(tempDir, "fresh.db");
     const db = new Database(path);
 
@@ -215,21 +271,22 @@ describe("migrate", () => {
     const meta = db
       .prepare("SELECT schemaVersion, enabled FROM meta WHERE id=0")
       .get() as { schemaVersion: number; enabled: number };
-    expect(meta.schemaVersion).toBe(3);
+    expect(meta.schemaVersion).toBe(4);
     expect(hasEnabledColumn(db)).toBe(true);
+    expect(hasAllowlistTable(db)).toBe(true);
     expect(meta.enabled).toBe(1);
     expect(hasHistoryTable(db)).toBe(true);
     db.close();
   });
 
-  test("is a no-op on a database already at v3", () => {
-    const path = join(tempDir, "v3.db");
+  test("is a no-op on a database already at v4", () => {
+    const path = join(tempDir, "v4.db");
     const db = new Database(path);
-    db.exec(V3_DDL);
+    db.exec(V4_DDL);
     // Seed enabled=0 so a spurious re-create/migrate (which would reset to 1)
     // is detectable.
     db.prepare(
-      "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled) VALUES (0, 3, 'space-9', 0)",
+      "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled) VALUES (0, 4, 'space-9', 0)",
     ).run();
 
     migrate(db);
@@ -237,21 +294,59 @@ describe("migrate", () => {
     const meta = db
       .prepare("SELECT schemaVersion, activeSpaceId, enabled FROM meta WHERE id=0")
       .get() as { schemaVersion: number; activeSpaceId: string; enabled: number };
-    expect(meta.schemaVersion).toBe(3);
+    expect(meta.schemaVersion).toBe(4);
     expect(meta.activeSpaceId).toBe("space-9");
     expect(meta.enabled).toBe(0);
     db.close();
   });
 });
 
-describe("readBlockingEnabled / writeBlockingEnabled", () => {
-  test("writeBlockingEnabled(false) round-trips and leaves schemaVersion/activeSpaceId intact", () => {
-    // Hand-build a valid v3 database at the path loadStore will open.
+describe("readAllowlist / insertAllowlistHost / deleteAllowlistHost", () => {
+  test("round-trip: insert (ordered), INSERT OR IGNORE on a dup is a no-op, delete removes one", () => {
+    // Hand-build a valid current (v4) database at the path loadStore will open.
     const path = join(tempDir, "zeo.db");
     const seed = new Database(path);
-    seed.exec(V3_DDL);
+    seed.exec(V4_DDL);
     seed.prepare(
-      "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled) VALUES (0, 3, 'space-x', 1)",
+      "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled) VALUES (0, 4, 'space-x', 1)",
+    ).run();
+    seedRows(seed, "space-x");
+    seed.close();
+
+    // loadStore opens the module-level handle the helpers use.
+    loadStore();
+    expect(readAllowlist()).toEqual([]);
+
+    // Insert two hosts out of order; readAllowlist returns them ordered by host.
+    insertAllowlistHost("b.example", 200);
+    insertAllowlistHost("a.example", 100);
+    expect(readAllowlist()).toEqual(["a.example", "b.example"]);
+
+    // INSERT OR IGNORE on a duplicate host is a no-op: no throw, no new row, the
+    // original createdAt is untouched.
+    insertAllowlistHost("a.example", 999);
+    expect(readAllowlist()).toEqual(["a.example", "b.example"]);
+    const inspect = new Database(path, { readonly: true });
+    const row = inspect
+      .prepare("SELECT createdAt FROM blocking_allowlist WHERE host='a.example'")
+      .get() as { createdAt: number };
+    expect(row.createdAt).toBe(100);
+    inspect.close();
+
+    // Delete removes exactly the named host.
+    deleteAllowlistHost("a.example");
+    expect(readAllowlist()).toEqual(["b.example"]);
+  });
+});
+
+describe("readBlockingEnabled / writeBlockingEnabled", () => {
+  test("writeBlockingEnabled(false) round-trips and leaves schemaVersion/activeSpaceId intact", () => {
+    // Hand-build a valid current (v4) database at the path loadStore will open.
+    const path = join(tempDir, "zeo.db");
+    const seed = new Database(path);
+    seed.exec(V4_DDL);
+    seed.prepare(
+      "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled) VALUES (0, 4, 'space-x', 1)",
     ).run();
     seedRows(seed, "space-x");
     seed.close();
@@ -268,7 +363,7 @@ describe("readBlockingEnabled / writeBlockingEnabled", () => {
     const meta = inspect
       .prepare("SELECT schemaVersion, activeSpaceId, enabled FROM meta WHERE id=0")
       .get() as { schemaVersion: number; activeSpaceId: string; enabled: number };
-    expect(meta.schemaVersion).toBe(3);
+    expect(meta.schemaVersion).toBe(4);
     expect(meta.activeSpaceId).toBe("space-x");
     expect(meta.enabled).toBe(0);
     inspect.close();

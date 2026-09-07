@@ -14,12 +14,29 @@ milestone, a minor bump only for very large breakthroughs.
 ### Added
 
 - Browsing history: every top-level http(s) navigation is now recorded in
-  SQLite (schema version 3), and the command bar suggests matching visited
+  SQLite (schema version 4), and the command bar suggests matching visited
   pages alongside open tabs and spaces. A dedicated history mode — "Show
   History" (`Cmd+Y`) — lists recent visits and filters them as you type;
   `Cmd+Backspace` on a selected history row deletes that url, and "Clear
   Browsing History" empties it. Visits are kept for 90 days and survive a
   relaunch. History is queried on demand and never leaves the local machine.
+
+## [0.0.15] - 2026-09-07
+
+### Added
+
+- Per-site allowlist: disable content blocking for an individual site without
+  turning it off everywhere. An allowlisted document bypasses all three blocking
+  layers (network, CSP, and cosmetic) while every other site stays filtered.
+  Add or remove a site from the command bar ("Disable Blocking on This Site" /
+  "Enable Blocking on This Site") or from the new settings view. The allowlist is
+  persisted (database schema version 3) and survives a relaunch. The sidebar
+  shield shows an allowlisted state ("Blocking disabled on <host>") for the
+  active tab's site.
+- Settings view (`Cmd+,` / "Open Settings"): the app's first settings surface,
+  with a content-blocking section — a global on/off toggle, the active filter-list
+  version with a manual "Update" refresh, and allowlist management (add, list,
+  and remove hosts). `Escape` closes it.
 
 ## [0.0.14] - 2026-09-04
 

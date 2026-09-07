@@ -44,7 +44,14 @@ export {
   resetBlockedCount,
   dropBlockedTab,
   initialBlockingState,
+  addAllowlistHost,
+  removeAllowlistHost,
 } from "./blocking.js";
+export {
+  siteKeyForUrl,
+  normalizeAllowlistHost,
+  hostMatchesAllowlist,
+} from "./allowlist.js";
 export { COMMANDS, isCommandEnabled, menuEntries, formatAccelerator } from "./commands.js";
 export type { CommandId, CommandDescriptor, CommandContext, MenuEntry } from "./commands.js";
 export { resolveInput, DEFAULT_SEARCH_ENGINE } from "./resolve-input.js";
@@ -69,4 +76,5 @@ export {
   COMMAND_BAR_HEIGHT,
   SUGGESTION_ROW_HEIGHT,
   commandBarBounds,
+  settingsBounds,
 } from "./layout.js";

@@ -3098,6 +3098,8 @@ test.describe("zeo desktop app", () => {
     "space.rename",
     "bar.open-location",
     "blocking.toggle",
+    "blocking.allowSite",
+    "settings.open",
     "history.open",
     "history.clear",
   ];

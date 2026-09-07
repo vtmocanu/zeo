@@ -34,8 +34,9 @@ import type {
 } from "@zeo/core";
 
 /**
- * The schema: the four core tables (profiles, spaces, tabs, meta) plus the two
- * history tables (history_entries, history_visits) added at schema version 3.
+ * The schema: the four core tables (profiles, spaces, tabs, meta), the
+ * blocking_allowlist table added at schema version 3, plus the two history
+ * tables (history_entries, history_visits) added at schema version 4.
  * The PRIMARY KEYs (no duplicate ids), the foreign
  * keys, and `PRAGMA foreign_keys=ON` are the well-formedness contract the core
  * codec relies on: every on-disk state is guaranteed loadable. `spaces.activeTabId`
@@ -63,6 +64,7 @@ CREATE TABLE meta (
   id INTEGER PRIMARY KEY CHECK (id = 0), schemaVersion INTEGER NOT NULL, activeSpaceId TEXT,
   enabled INTEGER NOT NULL DEFAULT 1
 );
+CREATE TABLE blocking_allowlist (host TEXT PRIMARY KEY, createdAt INTEGER NOT NULL);
 CREATE TABLE history_entries (
   url TEXT PRIMARY KEY,
   title TEXT NOT NULL,
@@ -83,7 +85,7 @@ CREATE INDEX history_entries_lastVisitedAt ON history_entries(lastVisitedAt);
  * The ordered, in-place upgrade steps keyed by the version they PRODUCE: the
  * `v` entry is run to move a database from version `v-1` to `v`. {@link migrate}
  * runs every step from the on-disk version + 1 up through {@link SCHEMA_VERSION},
- * so a future 3→4 upgrade is added by appending a `4` entry here. Each step is a
+ * so a future 4→5 upgrade is added by appending a `5` entry here. Each step is a
  * plain SQL blob run inside the migrate transaction; the step MUST leave
  * `meta.schemaVersion` set to its own key.
  */
@@ -101,7 +103,10 @@ const MIGRATION_STEPS: Record<number, string> = {
   2:
     "ALTER TABLE meta ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1;" +
     "UPDATE meta SET schemaVersion = 2 WHERE id = 0;",
-  3: HISTORY_DDL + "UPDATE meta SET schemaVersion = 3 WHERE id = 0;",
+  3:
+    "CREATE TABLE blocking_allowlist (host TEXT PRIMARY KEY, createdAt INTEGER NOT NULL);" +
+    "UPDATE meta SET schemaVersion = 3 WHERE id = 0;",
+  4: HISTORY_DDL + "UPDATE meta SET schemaVersion = 4 WHERE id = 0;",
 };
 
 /** The module-level database handle, `null` until {@link loadStore} opens it. */
@@ -121,7 +126,7 @@ function dbPath(): string {
 /**
  * Reads the schema version currently on disk and applies {@link migrationAction}:
  * `"abort"` throws {@link UnsupportedSchemaVersionError}, `"create"` builds the
- * fresh schema (all six tables) and seeds the single meta row, `"migrate"` runs the
+ * fresh schema (all seven tables) and seeds the single meta row, `"migrate"` runs the
  * ordered {@link MIGRATION_STEPS} from the on-disk version + 1 through
  * {@link SCHEMA_VERSION} inside a single transaction (so a partially-applied
  * upgrade never lands), and `"noop"` leaves an up-to-date database untouched.
@@ -400,6 +405,44 @@ export function pruneHistory(now: number): void {
     deleteOrphanEntries.run();
   });
   run();
+}
+
+/**
+ * Reads every host in the per-site content-blocking allowlist, ordered by host.
+ * Like {@link readBlockingEnabled} this lives outside the {@link readState}
+ * full-state read: the allowlist is its own table, not part of the store codec.
+ * Throws when the database is not open.
+ */
+export function readAllowlist(): string[] {
+  const database = requireDb();
+  // SQLite-row boundary: .all() is typed `unknown`, cast to the known shape.
+  const rows = database
+    .prepare("SELECT host FROM blocking_allowlist ORDER BY host")
+    .all() as { host: string }[];
+  return rows.map((row) => row.host);
+}
+
+/**
+ * Inserts a host into the per-site allowlist with its creation timestamp, or
+ * leaves the existing row untouched when the host is already present
+ * (`INSERT OR IGNORE`). Synchronous (better-sqlite3). Throws when the database is
+ * not open, so a caller's ordered allowlist contract sees the failure before it
+ * changes anything else.
+ */
+export function insertAllowlistHost(host: string, createdAt: number): void {
+  const database = requireDb();
+  database
+    .prepare("INSERT OR IGNORE INTO blocking_allowlist(host, createdAt) VALUES (?, ?)")
+    .run(host, createdAt);
+}
+
+/**
+ * Deletes a host from the per-site allowlist; a no-op when the host is absent.
+ * Synchronous (better-sqlite3). Throws when the database is not open.
+ */
+export function deleteAllowlistHost(host: string): void {
+  const database = requireDb();
+  database.prepare("DELETE FROM blocking_allowlist WHERE host = ?").run(host);
 }
 
 /**

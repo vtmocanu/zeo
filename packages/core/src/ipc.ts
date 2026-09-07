@@ -42,10 +42,13 @@ export interface StoreSnapshot extends SpacesState, TabsSlice {}
  * The space dimension (`spaces`, `activeSpaceId`) sits alongside the active
  * space's `tabs`/`activeTabId`/`archived` in the existing shape, so renderer
  * code written against the pre-space snapshot keeps working unchanged; `blocking`
- * carries the content-blocking counts main attaches before broadcast.
+ * carries the content-blocking counts main attaches before broadcast, and
+ * `settingsOpen` (attached by main, not part of the pure store snapshot)
+ * reflects whether the settings view is currently open.
  */
 export interface TabsState extends StoreSnapshot {
   blocking: BlockingState;
+  settingsOpen: boolean;
 }
 
 /**
@@ -228,11 +231,18 @@ export interface CommandsApi {
 /**
  * Content-blocking commands the renderer invokes over IPC, handled in main.
  * `setEnabled(enabled)` turns blocking on or off; `state()` reads back the
- * current {@link BlockingState} (enabled flag, list version, and blocked counts).
+ * current {@link BlockingState} (enabled flag, list version, blocked counts, and
+ * allowlist). `allowSite(host)` adds `host` to the per-site allowlist and
+ * `disallowSite(host)` removes it, both riding the existing `stateChange`
+ * broadcast; `refreshLists()` re-fetches the filter lists and resolves `true`
+ * on success.
  */
 export interface BlockingApi {
   setEnabled(enabled: boolean): Promise<void>;
   state(): Promise<BlockingState>;
+  allowSite(host: string): Promise<void>;
+  disallowSite(host: string): Promise<void>;
+  refreshLists(): Promise<boolean>;
 }
 
 /**
@@ -315,6 +325,9 @@ export const IPC = {
   commandsRun: "zeo:commands:run",
   blockingSetEnabled: "zeo:blocking:set-enabled",
   blockingState: "zeo:blocking:state",
+  blockingAllowSite: "zeo:blocking:allow-site",
+  blockingDisallowSite: "zeo:blocking:disallow-site",
+  blockingRefresh: "zeo:blocking:refresh",
   historySearch: "zeo:history:search",
   historyRecent: "zeo:history:recent",
   historyDeleteUrl: "zeo:history:delete-url",
