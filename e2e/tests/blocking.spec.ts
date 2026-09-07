@@ -1510,10 +1510,11 @@ test.describe("PRD 5.2 per-site allowlist + settings (offline)", () => {
         await zeo.commandBar.setQuery("block");
         return zeo.commandBar.state();
       });
+      const disallowIdx = blockState.suggestions.findIndex(
+        (s) => s.kind === "command" && s.id === "blocking.disallowSite",
+      );
       expect(
-        blockState.suggestions.findIndex(
-          (s) => s.kind === "command" && s.id === "blocking.disallowSite",
-        ),
+        disallowIdx,
         "expected a blocking.disallowSite command suggestion for query 'block'",
       ).toBeGreaterThanOrEqual(0);
       expect(
@@ -1522,6 +1523,18 @@ test.describe("PRD 5.2 per-site allowlist + settings (offline)", () => {
         ),
         "expected blocking.allowSite to be absent once the site is allowlisted",
       ).toBe(-1);
+
+      // Accept it: the active tab's host is removed from the allowlist.
+      await sidebar.evaluate(async (idx) => {
+        const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+        await zeo.commandBar.accept(idx);
+      }, disallowIdx);
+      await expect
+        .poll(async () => (await blockingState(sidebar)).allowlist, {
+          message:
+            "expected the command-bar accept to remove the active host from the allowlist",
+        })
+        .toEqual([]);
     } finally {
       await app.close();
       await server.close();

@@ -44,11 +44,21 @@ export function Settings() {
       return;
     }
     // Broadcasts carry the full TabsState; mirror only its blocking slice.
-    const unsubscribe = window.zeo.onStateChange((s) => setBlocking(s.blocking));
+    let sawBroadcast = false;
+    const unsubscribe = window.zeo.onStateChange((s) => {
+      sawBroadcast = true;
+      setBlocking(s.blocking);
+    });
     // Seed the initial slice; blocking.state() returns BlockingState directly.
+    // Ignore this async snapshot once a broadcast has arrived, so a late initial
+    // response can never overwrite a newer slice.
     void window.zeo.blocking
       .state()
-      .then(setBlocking)
+      .then((s) => {
+        if (!sawBroadcast) {
+          setBlocking(s);
+        }
+      })
       .catch(() => {});
     return unsubscribe;
   }, []);
