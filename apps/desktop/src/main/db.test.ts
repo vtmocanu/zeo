@@ -523,6 +523,17 @@ describe("history helpers", () => {
         "https://snake.com/",
       ]);
     });
+
+    test("caps the number of matched terms so a huge query cannot explode the SQL", () => {
+      recordVisit("https://example.com/", "Example", 1);
+      // 16 matching terms fill the cap; the 17th term (absent from url/title) is
+      // dropped by the slice, so the row still matches — and a pathological term
+      // count does not throw at prepare time.
+      const terms = [...Array<string>(16).fill("example"), "definitely-not-present"];
+      expect(searchHistory(terms, 10).map((e) => e.url)).toEqual([
+        "https://example.com/",
+      ]);
+    });
   });
 
   describe("recentVisits", () => {
@@ -578,7 +589,10 @@ describe("history helpers", () => {
       recordVisit("https://mix.com/", "Mix", old);
       recordVisit("https://mix.com/", "Mix", recent);
 
-      pruneHistory(now);
+      const removed = pruneHistory(now);
+      // The old.com entry was orphaned by the visit deletion and returned;
+      // mix.com kept a recent visit and is not returned.
+      expect(removed).toEqual(["https://old.com/"]);
 
       const entries = searchHistory([], 10);
       expect(entries.map((e) => e.url)).toEqual(["https://mix.com/"]);

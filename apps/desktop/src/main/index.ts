@@ -787,6 +787,37 @@ function recordNavigation(id: string): void {
   }
 }
 
+/**
+ * Drops the per-tab history record cache (`lastHistoryKey` + `lastVisitId`) for
+ * every open tab whose last-recorded key is one of `keys`. Called after a stored
+ * history row is removed out of band (a url delete or a prune) so a later
+ * same-key navigation records a fresh visit instead of short-circuiting the
+ * key-equality check in {@link recordNavigation}. `hasRealTitle` is intentionally
+ * left intact — the live document's title flag is still valid.
+ */
+function invalidateHistoryKeys(keys: Iterable<string>): void {
+  const removed = keys instanceof Set ? keys : new Set(keys);
+  if (removed.size === 0) {
+    return;
+  }
+  for (const [id, key] of lastHistoryKey) {
+    if (removed.has(key)) {
+      lastHistoryKey.delete(id);
+      lastVisitId.delete(id);
+    }
+  }
+}
+
+/**
+ * Drops EVERY open tab's per-tab history record cache after `clearHistory` has
+ * wiped all rows, so a reload or same-key navigation records a fresh visit.
+ * `hasRealTitle` is intentionally left intact.
+ */
+function invalidateAllHistoryKeys(): void {
+  lastHistoryKey.clear();
+  lastVisitId.clear();
+}
+
 /** Full new-tab lifecycle: store entry, view, activation, broadcast. */
 function createTab(url?: string): Tab {
   const u = url ?? DEFAULT_URL;
@@ -960,6 +991,7 @@ const commandHandlers: Record<CommandId, () => void> = {
   "history.clear": () => {
     try {
       clearHistory();
+      invalidateAllHistoryKeys();
     } catch (err) {
       logHistoryError(err);
     }
@@ -2099,10 +2131,13 @@ ipcMain.handle(IPC.historyDeleteUrl, (_event, url: string): void => {
     throw new TypeError("history.deleteUrl expects a string");
   }
   deleteHistoryUrl(url);
+  // The deleted aggregated url IS a historyKey; drop any open tab's cache for it.
+  invalidateHistoryKeys([url]);
 });
 
 ipcMain.handle(IPC.historyClear, (): void => {
   clearHistory();
+  invalidateAllHistoryKeys();
 });
 
 // --- Space commands -----------------------------------------------------------
@@ -2283,14 +2318,14 @@ app.whenReady().then(async () => {
   // via loadStore above) and then every 24 h. A database error is logged once and
   // never blocks startup or the recurring timer.
   try {
-    pruneHistory(Date.now());
+    invalidateHistoryKeys(pruneHistory(Date.now()));
   } catch (err) {
     logHistoryError(err);
   }
   setInterval(
     () => {
       try {
-        pruneHistory(Date.now());
+        invalidateHistoryKeys(pruneHistory(Date.now()));
       } catch (err) {
         logHistoryError(err);
       }

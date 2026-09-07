@@ -333,11 +333,17 @@ export function searchHistory(terms: string[], limit: number): HistoryEntry[] {
       .prepare(`${select} ORDER BY lastVisitedAt DESC LIMIT ?`)
       .all(limit) as HistoryEntry[];
   }
-  const clauses = terms.map(
+  // Cap the term count before expanding the query: each term adds an AND
+  // expression plus two params, and a pathological renderer query could reach
+  // SQLite's expression-depth limit at prepare time (historyCandidates would
+  // then swallow the throw and return no history) or spend real main-thread
+  // time on leading-wildcard LIKE scans. 16 is far beyond any real search.
+  const bounded = terms.slice(0, 16);
+  const clauses = bounded.map(
     () => "(url LIKE ? ESCAPE '\\' OR title LIKE ? ESCAPE '\\')",
   );
   const params: string[] = [];
-  for (const term of terms) {
+  for (const term of bounded) {
     const pattern = `%${escapeLike(term)}%`;
     params.push(pattern, pattern);
   }
@@ -387,24 +393,33 @@ export function clearHistory(): void {
 
 /**
  * Deletes visits older than {@link HISTORY_RETENTION_MS} relative to `now`, then
- * removes entries left with no remaining visits, in one transaction.
+ * removes entries left with no remaining visits, in one transaction, and returns
+ * the urls of the entries removed (orphaned by the visit deletion) so a caller
+ * can invalidate any open tab's per-tab record cache for those keys.
  * `visitCount` is a lifetime counter and is deliberately NOT adjusted, so a
  * surviving entry keeps its lifetime count even after its old visits are
  * deleted. Throws when the database is not open.
  */
-export function pruneHistory(now: number): void {
+export function pruneHistory(now: number): string[] {
   const database = requireDb();
   const deleteOldVisits = database.prepare(
     "DELETE FROM history_visits WHERE visitedAt < ?",
   );
+  const selectOrphans = database.prepare(
+    "SELECT url FROM history_entries WHERE url NOT IN (SELECT DISTINCT url FROM history_visits)",
+  );
   const deleteOrphanEntries = database.prepare(
     "DELETE FROM history_entries WHERE url NOT IN (SELECT DISTINCT url FROM history_visits)",
   );
-  const run = database.transaction((): void => {
+  const run = database.transaction((): string[] => {
     deleteOldVisits.run(now - HISTORY_RETENTION_MS);
+    // Capture the entry keys about to be orphaned BEFORE deleting them.
+    // SQLite-row boundary: .all() is typed `unknown[]`; the column is `url`.
+    const orphans = (selectOrphans.all() as { url: string }[]).map((r) => r.url);
     deleteOrphanEntries.run();
+    return orphans;
   });
-  run();
+  return run();
 }
 
 /**

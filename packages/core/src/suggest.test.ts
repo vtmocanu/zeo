@@ -563,7 +563,9 @@ describe("suggest — history mode", () => {
       }),
       options({ mode: "history" }),
     );
-    expect(rows.every((r) => r.kind === "history")).toBe(true);
+    expect(rows.map((r) => (r.kind === "history" ? r.url : r.kind))).toEqual([
+      "https://example.com/",
+    ]);
   });
 
   test("an empty query returns the catalog.history rows in catalog order", () => {

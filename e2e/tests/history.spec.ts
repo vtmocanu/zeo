@@ -307,10 +307,34 @@ function barState(sidebar: Page): Promise<CommandBarStateShape> {
  * committed first, so every test starts from an empty, deterministic history.
  * Returns the active tab id for the test to drive.
  */
-async function freshHistory(sidebar: Page): Promise<string> {
+async function freshHistory(app: ElectronApplication, sidebar: Page): Promise<string> {
   const id = await activeTabId(sidebar);
   await navigate(sidebar, id, "about:blank");
+  // Wait until the tab's WebContentsView has COMMITTED about:blank before
+  // clearing. `tabs.navigate` resolves when loadURL is CALLED (not when it
+  // commits) and the stored url is set optimistically, so neither confirms the
+  // commit; the seeded https://example.com load could otherwise fire
+  // did-navigate AFTER the clear and leave a stray visit. A recent()===0 poll
+  // cannot fix this because it can pass before that delayed event runs. The tab
+  // view surfaces as its own Playwright Page and only the seeded tab is ever
+  // sent to about:blank (the app renderers are file://), so poll app.windows()
+  // for a window whose committed url is exactly about:blank.
+  await expect
+    .poll(() => {
+      for (const w of app.windows()) {
+        try {
+          if (w.url() === "about:blank") {
+            return true;
+          }
+        } catch {
+          // A navigating WebContentsView can momentarily lose its context.
+        }
+      }
+      return false;
+    })
+    .toBe(true);
   await clearHistory(sidebar);
+  expect(await recent(sidebar)).toEqual([]);
   return id;
 }
 
@@ -329,7 +353,7 @@ test.describe("PRD 6.1 history", () => {
     const server = await startHistoryFixtureServer();
     const { app, sidebar } = await launch(userDataDir);
     try {
-      const tabId = await freshHistory(sidebar);
+      const tabId = await freshHistory(app, sidebar);
       await navigateAndRecord(sidebar, tabId, `${server.base}/a.html`, 1);
       await navigateAndRecord(sidebar, tabId, `${server.base}/b.html`, 2);
       // The fragment is dropped by the browser before the request; historyKey
@@ -374,7 +398,7 @@ test.describe("PRD 6.1 history", () => {
     const server = await startHistoryFixtureServer();
     const { app, sidebar } = await launch(userDataDir);
     try {
-      const tabId = await freshHistory(sidebar);
+      const tabId = await freshHistory(app, sidebar);
       // Record an alpha visit, then move the active tab OFF /a.html (to
       // about:blank) so /a.html is not open — the history row must show, not be
       // deduped. Keeping the tab (rather than closing it) preserves an active tab,
@@ -477,7 +501,7 @@ test.describe("PRD 6.1 history", () => {
     const server = await startHistoryFixtureServer();
     const { app, sidebar } = await launch(userDataDir);
     try {
-      const tabId = await freshHistory(sidebar);
+      const tabId = await freshHistory(app, sidebar);
       await navigateAndRecord(sidebar, tabId, `${server.base}/a.html`, 1);
       await navigateAndRecord(sidebar, tabId, `${server.base}/b.html`, 2);
 
@@ -541,7 +565,7 @@ test.describe("PRD 6.1 history", () => {
       // restored tab in launch #2 records nothing on materialize. ---
       const first = await launch(userDataDir);
       try {
-        const tabId = await freshHistory(first.sidebar);
+        const tabId = await freshHistory(first.app, first.sidebar);
         await navigateAndRecord(first.sidebar, tabId, `${server.base}/a.html`, 1);
         await navigateAndRecord(first.sidebar, tabId, `${server.base}/b.html`, 2);
         await navigate(first.sidebar, tabId, "about:blank");
@@ -576,13 +600,36 @@ test.describe("PRD 6.1 history", () => {
     const server = await startHistoryFixtureServer();
     const { app, sidebar } = await launch(userDataDir);
     try {
-      const tabId = await freshHistory(sidebar);
+      const tabId = await freshHistory(app, sidebar);
       await navigateAndRecord(sidebar, tabId, `${server.base}/a.html`, 1);
       await navigateAndRecord(sidebar, tabId, `${server.base}/b.html`, 2);
 
       await clearHistory(sidebar);
       expect(await recent(sidebar)).toEqual([]);
       expect(await search(sidebar, "")).toEqual([]);
+    } finally {
+      await app.close();
+      await server.close();
+      rmSync(userDataDir, { recursive: true, force: true });
+    }
+  });
+
+  // Clearing history invalidates the per-tab record cache: an open tab whose
+  // current url was just wiped re-records on the next same-key navigation
+  // instead of being skipped by the last-key dedupe in recordNavigation.
+  test("clearing history lets an open tab re-record its current url", async () => {
+    const userDataDir = mkdtempSync(join(tmpdir(), "zeo-history-"));
+    const server = await startHistoryFixtureServer();
+    const { app, sidebar } = await launch(userDataDir);
+    try {
+      const tabId = await freshHistory(app, sidebar);
+      await navigateAndRecord(sidebar, tabId, `${server.base}/a.html`, 1);
+      await clearHistory(sidebar);
+      expect(await recent(sidebar)).toEqual([]);
+      // The tab still displays /a.html; navigating to it again is a same-key
+      // load. Without cache invalidation this would be skipped and recent()
+      // would stay empty (the poll in navigateAndRecord would time out).
+      await navigateAndRecord(sidebar, tabId, `${server.base}/a.html`, 1);
     } finally {
       await app.close();
       await server.close();
@@ -598,7 +645,7 @@ test.describe("PRD 6.1 history", () => {
     const server = await startHistoryFixtureServer();
     const { app, sidebar } = await launch(userDataDir);
     try {
-      const tabId = await freshHistory(sidebar);
+      const tabId = await freshHistory(app, sidebar);
       await navigate(sidebar, tabId, `${server.base}/a.html`);
       await expect
         .poll(async () => (await search(sidebar, "alpha"))[0]?.visitCount ?? 0)
@@ -635,7 +682,7 @@ test.describe("PRD 6.1 history", () => {
     const server = await startHistoryFixtureServer();
     const { app, sidebar } = await launch(userDataDir);
     try {
-      const tabId = await freshHistory(sidebar);
+      const tabId = await freshHistory(app, sidebar);
       await navigateAndRecord(sidebar, tabId, `${server.base}/a.html`, 1);
       await navigateAndRecord(sidebar, tabId, `${server.base}/b.html`, 2);
       await navigateAndRecord(sidebar, tabId, `${server.base}/a.html`, 3);
@@ -667,7 +714,7 @@ test.describe("PRD 6.1 history", () => {
     const server = await startHistoryFixtureServer();
     const { app, sidebar } = await launch(userDataDir);
     try {
-      const tabId = await freshHistory(sidebar);
+      const tabId = await freshHistory(app, sidebar);
       // /a.html emits its own title, setting the tab's hasRealTitle flag. Wait for
       // the real title to be recorded before navigating on.
       await navigate(sidebar, tabId, `${server.base}/a.html`);
