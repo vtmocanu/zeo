@@ -16,6 +16,7 @@ import { existsSync, renameSync } from "node:fs";
 import { join } from "node:path";
 import {
   SCHEMA_VERSION,
+  HISTORY_RETENTION_MS,
   migrationAction,
   serializeStore,
   deserializeStore,
@@ -28,6 +29,8 @@ import type {
   SpaceRow,
   TabRow,
   SpaceStore,
+  HistoryEntry,
+  HistoryVisit,
 } from "@zeo/core";
 
 /**
@@ -58,6 +61,20 @@ CREATE TABLE meta (
   id INTEGER PRIMARY KEY CHECK (id = 0), schemaVersion INTEGER NOT NULL, activeSpaceId TEXT,
   enabled INTEGER NOT NULL DEFAULT 1
 );
+CREATE TABLE history_entries (
+  url TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  visitCount INTEGER NOT NULL,
+  lastVisitedAt INTEGER NOT NULL
+);
+CREATE TABLE history_visits (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  url TEXT NOT NULL REFERENCES history_entries(url) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  visitedAt INTEGER NOT NULL
+);
+CREATE INDEX history_visits_visitedAt ON history_visits(visitedAt);
+CREATE INDEX history_entries_lastVisitedAt ON history_entries(lastVisitedAt);
 `;
 
 /**
@@ -68,10 +85,21 @@ CREATE TABLE meta (
  * plain SQL blob run inside the migrate transaction; the step MUST leave
  * `meta.schemaVersion` set to its own key.
  */
+const HISTORY_DDL =
+  "CREATE TABLE history_entries (" +
+  "url TEXT PRIMARY KEY, title TEXT NOT NULL, visitCount INTEGER NOT NULL, lastVisitedAt INTEGER NOT NULL);" +
+  "CREATE TABLE history_visits (" +
+  "id INTEGER PRIMARY KEY AUTOINCREMENT, " +
+  "url TEXT NOT NULL REFERENCES history_entries(url) ON DELETE CASCADE, " +
+  "title TEXT NOT NULL, visitedAt INTEGER NOT NULL);" +
+  "CREATE INDEX history_visits_visitedAt ON history_visits(visitedAt);" +
+  "CREATE INDEX history_entries_lastVisitedAt ON history_entries(lastVisitedAt);";
+
 const MIGRATION_STEPS: Record<number, string> = {
   2:
     "ALTER TABLE meta ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1;" +
     "UPDATE meta SET schemaVersion = 2 WHERE id = 0;",
+  3: HISTORY_DDL + "UPDATE meta SET schemaVersion = 3 WHERE id = 0;",
 };
 
 /** The module-level database handle, `null` until {@link loadStore} opens it. */
@@ -177,6 +205,199 @@ export function readBlockingEnabled(): boolean {
 export function writeBlockingEnabled(enabled: boolean): void {
   const database = requireDb();
   database.prepare("UPDATE meta SET enabled=? WHERE id=0").run(enabled ? 1 : 0);
+}
+
+/**
+ * Escapes a term for use inside a `LIKE ... ESCAPE '\'` pattern: the three
+ * LIKE metacharacters `\`, `%` and `_` are backslash-escaped so they match
+ * literally. The backslash is escaped FIRST so the escapes added for `%`/`_`
+ * are not themselves re-escaped.
+ */
+function escapeLike(term: string): string {
+  return term
+    .replace(/\\/g, "\\\\")
+    .replace(/%/g, "\\%")
+    .replace(/_/g, "\\_");
+}
+
+/**
+ * Records one visit to `url` and folds it into the aggregated entry in a single
+ * transaction, returning the new visit's autoincrement id. The visit row always
+ * inserts and `visitCount` always increments by one, but `lastVisitedAt` and
+ * `title` (the latter only when the new `title` is non-empty) move to this
+ * visit's values ONLY when the inserted visit is the newest for the url — its
+ * `(visitedAt, id)` pair is the maximum among the url's visits. An out-of-order
+ * (older) visit is still counted but never moves `lastVisitedAt` backward nor
+ * replaces the entry title with an older one. Throws when the database is not
+ * open.
+ */
+export function recordVisit(url: string, title: string, visitedAt: number): number {
+  const database = requireDb();
+  // Seed a placeholder entry (visitCount 0) so the history_visits FK is
+  // satisfied before the visit inserts; an existing entry is left untouched and
+  // the single UPDATE below applies the count/newest-visit rule uniformly.
+  const seedEntry = database.prepare(
+    "INSERT INTO history_entries(url,title,visitCount,lastVisitedAt) VALUES (?,?,0,?) " +
+      "ON CONFLICT(url) DO NOTHING",
+  );
+  const insertVisit = database.prepare(
+    "INSERT INTO history_visits(url,title,visitedAt) VALUES (?,?,?)",
+  );
+  const isNewestStmt = database.prepare(
+    "SELECT NOT EXISTS(SELECT 1 FROM history_visits " +
+      "WHERE url=? AND (visitedAt > ? OR (visitedAt = ? AND id > ?))) AS newest",
+  );
+  const updateEntry = database.prepare(
+    "UPDATE history_entries SET visitCount = visitCount + 1, " +
+      "lastVisitedAt = CASE WHEN @newest = 1 THEN @visitedAt ELSE lastVisitedAt END, " +
+      "title = CASE WHEN @newest = 1 AND @title <> '' THEN @title ELSE title END " +
+      "WHERE url = @url",
+  );
+  const run = database.transaction((): number => {
+    seedEntry.run(url, title, visitedAt);
+    const info = insertVisit.run(url, title, visitedAt);
+    const id = Number(info.lastInsertRowid);
+    // SQLite-row boundary: .get() is typed `unknown`; NOT EXISTS yields 0/1.
+    const row = isNewestStmt.get(url, visitedAt, visitedAt, id) as {
+      newest: number;
+    };
+    updateEntry.run({ newest: row.newest, visitedAt, title, url });
+    return id;
+  });
+  return run();
+}
+
+/**
+ * Sets `title` on the visit row `visitId`, and on that visit's aggregated entry
+ * only when the visit is still the newest for its url (its `(visitedAt, id)`
+ * pair is the maximum among the url's visits), both in one transaction. A no-op
+ * when `visitId` does not exist. The newest-visit guard stops a delayed title
+ * update for an older visit from overwriting a newer visit's title on the
+ * shared entry row. Throws when the database is not open.
+ */
+export function updateVisitTitle(visitId: number, title: string): void {
+  const database = requireDb();
+  const visitStmt = database.prepare(
+    "SELECT url, visitedAt FROM history_visits WHERE id=?",
+  );
+  const updateVisit = database.prepare(
+    "UPDATE history_visits SET title=? WHERE id=?",
+  );
+  const updateEntry = database.prepare(
+    "UPDATE history_entries SET title=@title WHERE url=@url AND NOT EXISTS(" +
+      "SELECT 1 FROM history_visits WHERE url=@url AND " +
+      "(visitedAt > @visitedAt OR (visitedAt = @visitedAt AND id > @id)))",
+  );
+  const run = database.transaction((): void => {
+    // SQLite-row boundary: .get() is typed `unknown`; select the known columns.
+    const visit = visitStmt.get(visitId) as
+      | { url: string; visitedAt: number }
+      | undefined;
+    if (visit === undefined) {
+      return;
+    }
+    updateVisit.run(title, visitId);
+    updateEntry.run({
+      title,
+      url: visit.url,
+      visitedAt: visit.visitedAt,
+      id: visitId,
+    });
+  });
+  run();
+}
+
+/**
+ * Returns aggregated history entries where every term in `terms` is a
+ * case-insensitive substring of the `url` or `title`, ranked by `visitCount`
+ * then `lastVisitedAt` (both descending) and capped at `limit`. Each term's
+ * LIKE metacharacters are escaped so they match literally. An empty `terms`
+ * array returns the most recently visited entries (by `lastVisitedAt`). Throws
+ * when the database is not open.
+ */
+export function searchHistory(terms: string[], limit: number): HistoryEntry[] {
+  const database = requireDb();
+  const select =
+    "SELECT url, title, visitCount, lastVisitedAt FROM history_entries";
+  // SQLite-row boundary: .all() is typed `unknown[]`; the columns are the
+  // HistoryEntry shape.
+  if (terms.length === 0) {
+    return database
+      .prepare(`${select} ORDER BY lastVisitedAt DESC LIMIT ?`)
+      .all(limit) as HistoryEntry[];
+  }
+  const clauses = terms.map(
+    () => "(url LIKE ? ESCAPE '\\' OR title LIKE ? ESCAPE '\\')",
+  );
+  const params: string[] = [];
+  for (const term of terms) {
+    const pattern = `%${escapeLike(term)}%`;
+    params.push(pattern, pattern);
+  }
+  const sql =
+    `${select} WHERE ${clauses.join(" AND ")} ` +
+    "ORDER BY visitCount DESC, lastVisitedAt DESC LIMIT ?";
+  return database.prepare(sql).all(...params, limit) as HistoryEntry[];
+}
+
+/**
+ * Returns the most recent visits ordered by `visitedAt` descending, capped at
+ * `limit`. Throws when the database is not open.
+ */
+export function recentVisits(limit: number): HistoryVisit[] {
+  const database = requireDb();
+  // SQLite-row boundary: .all() is typed `unknown[]`; the columns are the
+  // HistoryVisit shape.
+  return database
+    .prepare(
+      "SELECT id, url, title, visitedAt FROM history_visits ORDER BY visitedAt DESC LIMIT ?",
+    )
+    .all(limit) as HistoryVisit[];
+}
+
+/**
+ * Deletes the history entry for `url`; its visits cascade via the foreign key
+ * (`PRAGMA foreign_keys=ON` is set in {@link openDb}). Throws when the database
+ * is not open.
+ */
+export function deleteHistoryUrl(url: string): void {
+  const database = requireDb();
+  database.prepare("DELETE FROM history_entries WHERE url=?").run(url);
+}
+
+/**
+ * Empties both history tables in a single transaction. Throws when the database
+ * is not open.
+ */
+export function clearHistory(): void {
+  const database = requireDb();
+  const run = database.transaction((): void => {
+    database.exec("DELETE FROM history_visits");
+    database.exec("DELETE FROM history_entries");
+  });
+  run();
+}
+
+/**
+ * Deletes visits older than {@link HISTORY_RETENTION_MS} relative to `now`, then
+ * removes entries left with no remaining visits, in one transaction.
+ * `visitCount` is a lifetime counter and is deliberately NOT adjusted, so a
+ * surviving entry keeps its lifetime count even after its old visits are
+ * deleted. Throws when the database is not open.
+ */
+export function pruneHistory(now: number): void {
+  const database = requireDb();
+  const deleteOldVisits = database.prepare(
+    "DELETE FROM history_visits WHERE visitedAt < ?",
+  );
+  const deleteOrphanEntries = database.prepare(
+    "DELETE FROM history_entries WHERE url NOT IN (SELECT DISTINCT url FROM history_visits)",
+  );
+  const run = database.transaction((): void => {
+    deleteOldVisits.run(now - HISTORY_RETENTION_MS);
+    deleteOrphanEntries.run();
+  });
+  run();
 }
 
 /**
