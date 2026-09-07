@@ -1606,6 +1606,12 @@ test.describe("PRD 5.2 per-site allowlist + settings (offline)", () => {
       const settings = await settingsWindow(app);
       await expect(settings.getByTestId("settings")).toHaveCount(1);
 
+      // settings.open now selects the General section (PRD 6.5), so the Blocking
+      // body is not shown on open; select the Blocking section so its allowlist
+      // editor renders before driving the rows below.
+      await settings.getByTestId("settings-section-blocking").click();
+      await expect(settings.getByTestId("settings-allowlist-input")).toHaveCount(1);
+
       // The row for the allowlisted host is present.
       const row = settings.locator('[data-testid="settings-allowlist-row"][data-host="127.0.0.1"]');
       await expect(row).toHaveCount(1);
