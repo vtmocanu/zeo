@@ -534,7 +534,9 @@ function ProfilesSection({
   /**
    * Renames a profile to its current draft. A blank or whitespace-only draft is
    * not submitted and reverts the field to the stored name; a successful rename
-   * clears the draft so the field re-follows the (now updated) stored name.
+   * clears the draft only when the field still holds the submitted name, so it
+   * re-follows the (now updated) stored name while preserving a newer edit typed
+   * before the request resolved.
    */
   const onRename = (profile: Profile): void => {
     const draft = drafts[profile.id] ?? profile.name;
