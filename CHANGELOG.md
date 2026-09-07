@@ -9,7 +9,7 @@ milestone, a minor bump only for very large breakthroughs.
 
 ## [Unreleased]
 
-## [0.0.20] - 2026-09-07
+## [0.0.17] - 2026-09-07
 
 ### Added
 
