@@ -21,6 +21,8 @@ import {
   loadStore,
   readBlockingEnabled,
   writeBlockingEnabled,
+  readSearchEngine,
+  writeSearchEngine,
   readAllowlist,
   insertAllowlistHost,
   deleteAllowlistHost,
@@ -31,6 +33,7 @@ import {
   recentVisits,
   deleteHistoryUrl,
   clearHistory,
+  historyStats,
   pruneHistory,
 } from "./db.js";
 
@@ -84,7 +87,7 @@ const V3_DDL =
   V2_DDL +
   "CREATE TABLE blocking_allowlist (host TEXT PRIMARY KEY, createdAt INTEGER NOT NULL);";
 
-/** The current (schema v4) DDL: the v3 tables plus the two history tables. */
+/** The schema v4 DDL: the v3 tables plus the two history tables. */
 const V4_DDL =
   V3_DDL +
   `
@@ -103,6 +106,12 @@ CREATE TABLE history_visits (
 CREATE INDEX history_visits_visitedAt ON history_visits(visitedAt);
 CREATE INDEX history_entries_lastVisitedAt ON history_entries(lastVisitedAt);
 `;
+
+/** The current (schema v5) DDL: the v4 tables plus the `meta.searchEngine`
+ *  column added by the version-5 migration step. */
+const V5_DDL =
+  V4_DDL +
+  "ALTER TABLE meta ADD COLUMN searchEngine TEXT NOT NULL DEFAULT 'duckduckgo';";
 
 /** True when the `history_visits` table exists in the database. */
 function hasHistoryTable(db: Database.Database): boolean {
@@ -136,6 +145,12 @@ function hasEnabledColumn(db: Database.Database): boolean {
   return cols.some((c) => c.name === "enabled");
 }
 
+/** True when the `meta` table has a `searchEngine` column. */
+function hasSearchEngineColumn(db: Database.Database): boolean {
+  const cols = db.prepare("PRAGMA table_info(meta)").all() as { name: string }[];
+  return cols.some((c) => c.name === "searchEngine");
+}
+
 /** True when the `blocking_allowlist` table exists. */
 function hasAllowlistTable(db: Database.Database): boolean {
   return (
@@ -162,7 +177,7 @@ afterEach(() => {
 });
 
 describe("migrate", () => {
-  test("upgrades a v1 database to the current version, adding enabled, the allowlist, and history and preserving rows", () => {
+  test("upgrades a v1 database to the current version, adding enabled, the allowlist, history, and the search engine and preserving rows", () => {
     const path = join(tempDir, "v1.db");
     const db = new Database(path);
     db.exec(V1_DDL);
@@ -173,17 +188,27 @@ describe("migrate", () => {
 
     expect(hasEnabledColumn(db)).toBe(false);
     expect(hasHistoryTable(db)).toBe(false);
+    expect(hasSearchEngineColumn(db)).toBe(false);
 
     migrate(db);
 
     const meta = db
-      .prepare("SELECT schemaVersion, activeSpaceId, enabled FROM meta WHERE id=0")
-      .get() as { schemaVersion: number; activeSpaceId: string; enabled: number };
-    expect(meta.schemaVersion).toBe(4);
+      .prepare(
+        "SELECT schemaVersion, activeSpaceId, enabled, searchEngine FROM meta WHERE id=0",
+      )
+      .get() as {
+      schemaVersion: number;
+      activeSpaceId: string;
+      enabled: number;
+      searchEngine: string;
+    };
+    expect(meta.schemaVersion).toBe(5);
     expect(hasEnabledColumn(db)).toBe(true);
     expect(hasAllowlistTable(db)).toBe(true);
     expect(meta.enabled).toBe(1);
     expect(hasHistoryTable(db)).toBe(true);
+    expect(hasSearchEngineColumn(db)).toBe(true);
+    expect(meta.searchEngine).toBe("duckduckgo");
     // Pre-existing rows preserved.
     expect(meta.activeSpaceId).toBe("space-1");
     expect(db.prepare("SELECT id FROM profiles").get()).toEqual({ id: "p1" });
@@ -210,9 +235,10 @@ describe("migrate", () => {
     const meta = db
       .prepare("SELECT schemaVersion, activeSpaceId, enabled FROM meta WHERE id=0")
       .get() as { schemaVersion: number; activeSpaceId: string; enabled: number };
-    expect(meta.schemaVersion).toBe(4);
+    expect(meta.schemaVersion).toBe(5);
     expect(hasAllowlistTable(db)).toBe(true);
     expect(hasHistoryTable(db)).toBe(true);
+    expect(hasSearchEngineColumn(db)).toBe(true);
     expect(
       db
         .prepare(
@@ -229,8 +255,8 @@ describe("migrate", () => {
     db.close();
   });
 
-  test("upgrades a v3 database to v4, adding the history tables and preserving the allowlist and rows", () => {
-    const path = join(tempDir, "v3-to-v4.db");
+  test("upgrades a v3 database to the current version, adding the history tables and the search engine and preserving the allowlist and rows", () => {
+    const path = join(tempDir, "v3-to-v5.db");
     const db = new Database(path);
     db.exec(V3_DDL);
     // Seed enabled=0 so the migration is confirmed to preserve the flag.
@@ -249,8 +275,9 @@ describe("migrate", () => {
     const meta = db
       .prepare("SELECT schemaVersion, activeSpaceId, enabled FROM meta WHERE id=0")
       .get() as { schemaVersion: number; activeSpaceId: string; enabled: number };
-    expect(meta.schemaVersion).toBe(4);
+    expect(meta.schemaVersion).toBe(5);
     expect(hasHistoryTable(db)).toBe(true);
+    expect(hasSearchEngineColumn(db)).toBe(true);
     // Pre-existing allowlist, rows, and the enabled flag preserved.
     expect(hasAllowlistTable(db)).toBe(true);
     expect(db.prepare("SELECT host FROM blocking_allowlist").get()).toEqual({
@@ -262,53 +289,100 @@ describe("migrate", () => {
     db.close();
   });
 
-  test("creates a fresh v4 schema with enabled=1, the allowlist, and history tables on an empty database", () => {
+  test("upgrades a v4 database to v5, adding the searchEngine column and preserving rows", () => {
+    const path = join(tempDir, "v4-to-v5.db");
+    const db = new Database(path);
+    db.exec(V4_DDL);
+    // Seed enabled=0 so the migration is confirmed to preserve the flag.
+    db.prepare(
+      "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled) VALUES (0, 4, ?, 0)",
+    ).run("space-1");
+    seedRows(db, "space-1");
+
+    expect(hasSearchEngineColumn(db)).toBe(false);
+
+    migrate(db);
+
+    const meta = db
+      .prepare(
+        "SELECT schemaVersion, activeSpaceId, enabled, searchEngine FROM meta WHERE id=0",
+      )
+      .get() as {
+      schemaVersion: number;
+      activeSpaceId: string;
+      enabled: number;
+      searchEngine: string;
+    };
+    expect(meta.schemaVersion).toBe(5);
+    expect(hasSearchEngineColumn(db)).toBe(true);
+    // The new column defaults to duckduckgo on the existing row.
+    expect(meta.searchEngine).toBe("duckduckgo");
+    // Pre-existing rows and the enabled flag preserved.
+    expect(meta.activeSpaceId).toBe("space-1");
+    expect(meta.enabled).toBe(0);
+    expect(db.prepare("SELECT id FROM profiles").get()).toEqual({ id: "p1" });
+    expect(db.prepare("SELECT id FROM spaces").get()).toEqual({ id: "space-1" });
+    expect(db.prepare("SELECT id FROM tabs").get()).toEqual({ id: "t1" });
+    db.close();
+  });
+
+  test("creates a fresh v5 schema with enabled=1, the allowlist, history tables, and the search engine on an empty database", () => {
     const path = join(tempDir, "fresh.db");
     const db = new Database(path);
 
     migrate(db);
 
     const meta = db
-      .prepare("SELECT schemaVersion, enabled FROM meta WHERE id=0")
-      .get() as { schemaVersion: number; enabled: number };
-    expect(meta.schemaVersion).toBe(4);
+      .prepare("SELECT schemaVersion, enabled, searchEngine FROM meta WHERE id=0")
+      .get() as { schemaVersion: number; enabled: number; searchEngine: string };
+    expect(meta.schemaVersion).toBe(5);
     expect(hasEnabledColumn(db)).toBe(true);
     expect(hasAllowlistTable(db)).toBe(true);
     expect(meta.enabled).toBe(1);
     expect(hasHistoryTable(db)).toBe(true);
+    expect(hasSearchEngineColumn(db)).toBe(true);
+    expect(meta.searchEngine).toBe("duckduckgo");
     db.close();
   });
 
-  test("is a no-op on a database already at v4", () => {
-    const path = join(tempDir, "v4.db");
+  test("is a no-op on a database already at v5", () => {
+    const path = join(tempDir, "v5.db");
     const db = new Database(path);
-    db.exec(V4_DDL);
-    // Seed enabled=0 so a spurious re-create/migrate (which would reset to 1)
-    // is detectable.
+    db.exec(V5_DDL);
+    // Seed enabled=0 and a non-default searchEngine so a spurious re-create/migrate
+    // (which would reset them to their defaults) is detectable.
     db.prepare(
-      "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled) VALUES (0, 4, 'space-9', 0)",
+      "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled,searchEngine) VALUES (0, 5, 'space-9', 0, 'google')",
     ).run();
 
     migrate(db);
 
     const meta = db
-      .prepare("SELECT schemaVersion, activeSpaceId, enabled FROM meta WHERE id=0")
-      .get() as { schemaVersion: number; activeSpaceId: string; enabled: number };
-    expect(meta.schemaVersion).toBe(4);
+      .prepare(
+        "SELECT schemaVersion, activeSpaceId, enabled, searchEngine FROM meta WHERE id=0",
+      )
+      .get() as {
+      schemaVersion: number;
+      activeSpaceId: string;
+      enabled: number;
+      searchEngine: string;
+    };
+    expect(meta.schemaVersion).toBe(5);
     expect(meta.activeSpaceId).toBe("space-9");
     expect(meta.enabled).toBe(0);
+    expect(meta.searchEngine).toBe("google");
     db.close();
   });
 });
 
 describe("readAllowlist / insertAllowlistHost / deleteAllowlistHost", () => {
   test("round-trip: insert (ordered), INSERT OR IGNORE on a dup is a no-op, delete removes one", () => {
-    // Hand-build a valid current (v4) database at the path loadStore will open.
+    // Hand-build a valid current (v5) database at the path loadStore will open.
     const path = join(tempDir, "zeo.db");
     const seed = new Database(path);
-    seed.exec(V4_DDL);
+    seed.exec(V5_DDL);
     seed.prepare(
-      "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled) VALUES (0, 4, 'space-x', 1)",
+      "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled) VALUES (0, 5, 'space-x', 1)",
     ).run();
     seedRows(seed, "space-x");
     seed.close();
@@ -341,12 +415,12 @@ describe("readAllowlist / insertAllowlistHost / deleteAllowlistHost", () => {
 
 describe("readBlockingEnabled / writeBlockingEnabled", () => {
   test("writeBlockingEnabled(false) round-trips and leaves schemaVersion/activeSpaceId intact", () => {
-    // Hand-build a valid current (v4) database at the path loadStore will open.
+    // Hand-build a valid current (v5) database at the path loadStore will open.
     const path = join(tempDir, "zeo.db");
     const seed = new Database(path);
-    seed.exec(V4_DDL);
+    seed.exec(V5_DDL);
     seed.prepare(
-      "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled) VALUES (0, 4, 'space-x', 1)",
+      "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled) VALUES (0, 5, 'space-x', 1)",
     ).run();
     seedRows(seed, "space-x");
     seed.close();
@@ -363,9 +437,87 @@ describe("readBlockingEnabled / writeBlockingEnabled", () => {
     const meta = inspect
       .prepare("SELECT schemaVersion, activeSpaceId, enabled FROM meta WHERE id=0")
       .get() as { schemaVersion: number; activeSpaceId: string; enabled: number };
-    expect(meta.schemaVersion).toBe(4);
+    expect(meta.schemaVersion).toBe(5);
     expect(meta.activeSpaceId).toBe("space-x");
     expect(meta.enabled).toBe(0);
+    inspect.close();
+  });
+});
+
+describe("readSearchEngine / writeSearchEngine", () => {
+  /** Hand-builds a valid current (v5) database at the loadStore path, opens the
+   *  module-level handle the accessors use, and returns the db file path. */
+  function seedAndLoad(): string {
+    const path = join(tempDir, "zeo.db");
+    const seed = new Database(path);
+    seed.exec(V5_DDL);
+    seed.prepare(
+      "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled) VALUES (0, 5, 'space-x', 1)",
+    ).run();
+    seedRows(seed, "space-x");
+    seed.close();
+    loadStore();
+    return path;
+  }
+
+  test("round-trips a catalog id and defaults to duckduckgo when unset", () => {
+    seedAndLoad();
+    // The freshly-added column defaults to duckduckgo.
+    expect(readSearchEngine()).toBe("duckduckgo");
+
+    writeSearchEngine("google");
+    expect(readSearchEngine()).toBe("google");
+  });
+
+  test("falls back to duckduckgo for a non-catalog stored value", () => {
+    const path = seedAndLoad();
+    // Force a value outside the catalog via a separate connection.
+    const raw = new Database(path);
+    raw.prepare("UPDATE meta SET searchEngine=? WHERE id=0").run("not-an-engine");
+    raw.close();
+    expect(readSearchEngine()).toBe("duckduckgo");
+  });
+
+  test("falls back to duckduckgo when the stored value is NULL", () => {
+    // A meta row whose searchEngine is genuinely NULL (a nullable column, as a
+    // legacy/hand-modified row could carry); readSearchEngine must still default.
+    const path = join(tempDir, "zeo.db");
+    const seed = new Database(path);
+    seed.exec(V4_DDL);
+    seed.exec("ALTER TABLE meta ADD COLUMN searchEngine TEXT;");
+    seed.prepare(
+      "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled,searchEngine) VALUES (0, 5, 'space-x', 1, NULL)",
+    ).run();
+    seedRows(seed, "space-x");
+    seed.close();
+    loadStore();
+    expect(readSearchEngine()).toBe("duckduckgo");
+  });
+
+  test("falls back to duckduckgo when the meta row is absent", () => {
+    const path = seedAndLoad();
+    const raw = new Database(path);
+    raw.prepare("DELETE FROM meta WHERE id=0").run();
+    raw.close();
+    expect(readSearchEngine()).toBe("duckduckgo");
+  });
+
+  test("writeSearchEngine throws (and changes nothing) when the meta row is absent", () => {
+    const path = seedAndLoad();
+    // Remove the id=0 row via a separate connection so the module handle's UPDATE
+    // affects zero rows.
+    const raw = new Database(path);
+    raw.prepare("DELETE FROM meta WHERE id=0").run();
+    raw.close();
+
+    expect(() => writeSearchEngine("google")).toThrow();
+
+    // No meta row was resurrected: the zero-row UPDATE persisted nothing.
+    const inspect = new Database(path, { readonly: true });
+    const count = inspect
+      .prepare("SELECT COUNT(*) AS n FROM meta")
+      .get() as { n: number };
+    expect(count.n).toBe(0);
     inspect.close();
   });
 });
@@ -603,6 +755,19 @@ describe("history helpers", () => {
       );
       expect(mixVisits.length).toBe(1);
       expect(mixVisits[0].visitedAt).toBe(recent);
+    });
+  });
+
+  describe("historyStats", () => {
+    test("returns the current entry and visit counts, both zero after clearHistory", () => {
+      recordVisit("https://a.com/", "A", 1000);
+      recordVisit("https://a.com/", "A", 2000);
+      recordVisit("https://b.com/", "B", 1500);
+      // Two distinct urls → 2 aggregated entries; three recorded visits.
+      expect(historyStats()).toEqual({ entries: 2, visits: 3 });
+
+      clearHistory();
+      expect(historyStats()).toEqual({ entries: 0, visits: 0 });
     });
   });
 });

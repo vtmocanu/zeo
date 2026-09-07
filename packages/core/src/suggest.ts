@@ -1,8 +1,10 @@
 import { resolveInput } from "./resolve-input.js";
 import { historyKey, historyTerms } from "./history.js";
+import { searchEngine } from "./settings.js";
 import type { HistoryEntry } from "./history.js";
 import type { CommandBarMode } from "./command-bar.js";
 import type { CommandId } from "./commands.js";
+import type { SearchEngineId } from "./settings.js";
 
 /**
  * One row the command bar can show and act on. `navigate`/`search` are the
@@ -40,12 +42,14 @@ export interface SuggestCatalog {
 
 /**
  * The non-catalog inputs to {@link suggest}: the bar `mode` (drives the
- * empty-query recent-tabs list) and the `activeTabId` (excluded from matches
- * and from the recent list).
+ * empty-query recent-tabs list), the `activeTabId` (excluded from matches and
+ * from the recent list), and the `searchEngine` (the chosen default engine
+ * main threads in — drives the row-0 search url and label).
  */
 export interface SuggestOptions {
   mode: CommandBarMode;
   activeTabId: string | null;
+  searchEngine: SearchEngineId;
 }
 
 /** Cap on catalog rows returned after row 0 (and on the recent-tabs list). */
@@ -243,7 +247,7 @@ export function suggest(query: string, catalog: SuggestCatalog, options: Suggest
     return ranked.slice(0, MAX_MATCHES).map((c) => c.suggestion);
   }
 
-  const resolved = resolveInput(query);
+  const resolved = resolveInput(query, options.searchEngine);
 
   if (resolved === null) {
     // Empty/whitespace query: no row 0. new-tab lists recent open tabs.
@@ -261,7 +265,11 @@ export function suggest(query: string, catalog: SuggestCatalog, options: Suggest
   const row0: Suggestion =
     resolved.kind === "url"
       ? { kind: "navigate", url: resolved.url, label: resolved.url }
-      : { kind: "search", url: resolved.url, label: `Search DuckDuckGo for "${query.trim()}"` };
+      : {
+          kind: "search",
+          url: resolved.url,
+          label: `Search ${searchEngine(options.searchEngine)!.name} for "${query.trim()}"`,
+        };
 
   const terms = query.trim().toLowerCase().split(/\s+/);
   const activeSpaceId = catalog.spaces.find((s) => s.active)?.id ?? null;

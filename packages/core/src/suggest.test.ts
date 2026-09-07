@@ -26,11 +26,15 @@ function command(
   };
 }
 
-/** Builds suggest options, defaulting to navigate mode with no active tab. */
+/**
+ * Builds suggest options, defaulting to navigate mode with no active tab and
+ * the DuckDuckGo default search engine.
+ */
 function options(partial: Partial<SuggestOptions> = {}): SuggestOptions {
   return {
     mode: partial.mode ?? "navigate",
     activeTabId: partial.activeTabId ?? null,
+    searchEngine: partial.searchEngine ?? "duckduckgo",
   };
 }
 
@@ -91,6 +95,16 @@ describe("suggest — row 0 text action", () => {
       url: "https://duckduckgo.com/?q=hello%20world",
       label: 'Search DuckDuckGo for "hello world"',
     });
+  });
+
+  test("a non-default engine drives the row-0 search label and url", () => {
+    const rows = suggest("hello world", catalog({}), options({ searchEngine: "google" }));
+    expect(rows[0]).toEqual({
+      kind: "search",
+      url: "https://www.google.com/search?q=hello%20world",
+      label: 'Search Google for "hello world"',
+    });
+    expect(rows[0].kind === "search" && rows[0].url.startsWith("https://www.google.com/search?q=")).toBe(true);
   });
 });
 

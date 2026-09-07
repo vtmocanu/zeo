@@ -9,6 +9,8 @@ import type {
   HistoryEntry,
   HistoryVisit,
   Profile,
+  SearchEngineId,
+  Settings,
   Space,
   SpaceContextMenuResult,
   SpaceMenuAction,
@@ -90,6 +92,13 @@ const api = {
     deleteUrl: (url: string): Promise<void> =>
       ipcRenderer.invoke(IPC.historyDeleteUrl, url),
     clear: (): Promise<void> => ipcRenderer.invoke(IPC.historyClear),
+    stats: (): Promise<{ entries: number; visits: number }> =>
+      ipcRenderer.invoke(IPC.historyStats),
+  },
+  settings: {
+    get: (): Promise<Settings> => ipcRenderer.invoke(IPC.settingsGet),
+    setSearchEngine: (id: SearchEngineId): Promise<void> =>
+      ipcRenderer.invoke(IPC.settingsSetSearchEngine, id),
   },
   onStateChange: (listener: (state: TabsState) => void): (() => void) => {
     const handler = (_event: Electron.IpcRendererEvent, state: TabsState): void => listener(state);

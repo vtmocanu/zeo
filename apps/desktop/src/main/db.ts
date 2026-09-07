@@ -21,6 +21,8 @@ import {
   serializeStore,
   deserializeStore,
   UnsupportedSchemaVersionError,
+  DEFAULT_SEARCH_ENGINE_ID,
+  searchEngine,
 } from "@zeo/core";
 import type {
   PersistedState,
@@ -31,6 +33,7 @@ import type {
   SpaceStore,
   HistoryEntry,
   HistoryVisit,
+  SearchEngineId,
 } from "@zeo/core";
 
 /**
@@ -62,7 +65,8 @@ CREATE TABLE tabs (
 );
 CREATE TABLE meta (
   id INTEGER PRIMARY KEY CHECK (id = 0), schemaVersion INTEGER NOT NULL, activeSpaceId TEXT,
-  enabled INTEGER NOT NULL DEFAULT 1
+  enabled INTEGER NOT NULL DEFAULT 1,
+  searchEngine TEXT NOT NULL DEFAULT 'duckduckgo'
 );
 CREATE TABLE blocking_allowlist (host TEXT PRIMARY KEY, createdAt INTEGER NOT NULL);
 CREATE TABLE history_entries (
@@ -107,6 +111,9 @@ const MIGRATION_STEPS: Record<number, string> = {
     "CREATE TABLE blocking_allowlist (host TEXT PRIMARY KEY, createdAt INTEGER NOT NULL);" +
     "UPDATE meta SET schemaVersion = 3 WHERE id = 0;",
   4: HISTORY_DDL + "UPDATE meta SET schemaVersion = 4 WHERE id = 0;",
+  5:
+    "ALTER TABLE meta ADD COLUMN searchEngine TEXT NOT NULL DEFAULT 'duckduckgo';" +
+    "UPDATE meta SET schemaVersion = 5 WHERE id = 0;",
 };
 
 /** The module-level database handle, `null` until {@link loadStore} opens it. */
@@ -212,6 +219,44 @@ export function readBlockingEnabled(): boolean {
 export function writeBlockingEnabled(enabled: boolean): void {
   const database = requireDb();
   database.prepare("UPDATE meta SET enabled=? WHERE id=0").run(enabled ? 1 : 0);
+}
+
+/**
+ * Reads the persisted default search-engine id from the meta row. Returns
+ * {@link DEFAULT_SEARCH_ENGINE_ID} when the row is absent, the stored value is
+ * null/undefined, or the value is not a catalog id (validated through
+ * {@link searchEngine}); otherwise the stored value cast to {@link SearchEngineId}.
+ * Managed ONLY here and by {@link writeSearchEngine}; like the blocking `enabled`
+ * flag it is deliberately kept out of the {@link writeState} full-state flush.
+ * Throws when the database is not open.
+ */
+export function readSearchEngine(): SearchEngineId {
+  const database = requireDb();
+  // SQLite-row boundary: .get() is typed `unknown`, cast to the known shape.
+  const row = database
+    .prepare("SELECT searchEngine FROM meta WHERE id=0")
+    .get() as { searchEngine: string | null } | undefined;
+  const value = row?.searchEngine;
+  if (value === null || value === undefined || searchEngine(value) === undefined) {
+    return DEFAULT_SEARCH_ENGINE_ID;
+  }
+  return value as SearchEngineId;
+}
+
+/**
+ * Persists the default search-engine `id` to the meta row. Synchronous
+ * (better-sqlite3). Unlike {@link writeBlockingEnabled} this checks the affected
+ * row count: an UPDATE that matches no `id = 0` row (the row is absent) throws
+ * rather than silently succeeding, so a caller's ordered set-search-engine
+ * contract surfaces the missing row as a write failure and never broadcasts a
+ * value that was not persisted. Throws when the database is not open.
+ */
+export function writeSearchEngine(id: SearchEngineId): void {
+  const database = requireDb();
+  const info = database.prepare("UPDATE meta SET searchEngine=? WHERE id=0").run(id);
+  if (info.changes === 0) {
+    throw new Error("writeSearchEngine: no meta row (id=0) to update");
+  }
 }
 
 /**
@@ -389,6 +434,24 @@ export function clearHistory(): void {
     database.exec("DELETE FROM history_entries");
   });
   run();
+}
+
+/**
+ * The current history entry and visit counts, read on demand from the two
+ * history tables. History is never part of the store snapshot and is not
+ * broadcast; the settings history section reads this when shown and re-reads it
+ * after a successful {@link clearHistory}. Throws when the database is not open.
+ */
+export function historyStats(): { entries: number; visits: number } {
+  const database = requireDb();
+  // SQLite-row boundary: .get() is typed `unknown`; COUNT(*) yields a number.
+  const entriesRow = database
+    .prepare("SELECT COUNT(*) AS n FROM history_entries")
+    .get() as { n: number };
+  const visitsRow = database
+    .prepare("SELECT COUNT(*) AS n FROM history_visits")
+    .get() as { n: number };
+  return { entries: entriesRow.n, visits: visitsRow.n };
 }
 
 /**

@@ -1,3 +1,6 @@
+import { searchUrl } from "./settings.js";
+import type { SearchEngineId } from "./settings.js";
+
 /**
  * The outcome of resolving a command-bar input string: either a concrete URL to
  * navigate to (`kind: "url"`, with `url` the canonical serialized href) or a
@@ -9,12 +12,6 @@ export interface NavigationTarget {
   kind: "url" | "search";
   url: string;
 }
-
-/**
- * The search-engine prefix a non-URL input is appended to. The resolved search
- * URL is this constant followed by the `encodeURIComponent`-encoded query term.
- */
-export const DEFAULT_SEARCH_ENGINE = "https://duckduckgo.com/?q=";
 
 /** Leading scheme detector: an ASCII letter followed by scheme chars, then `:`. */
 const SCHEME_RE = /^[a-z][a-z0-9+.-]*:/i;
@@ -116,11 +113,12 @@ function isIPv4(host: string): boolean {
  * 2. HOST: only when the text has no whitespace, a leading `host`/`host:port`
  *    authority (localhost, an IPv4 literal, or a dotted hostname) becomes an
  *    http(s) candidate built from the whole trimmed text, then canonicalized.
- * 3. SEARCH: everything else becomes a search of the trimmed text.
+ * 3. SEARCH: everything else becomes a search of the trimmed text, built with
+ *    `engine`'s catalog template via {@link searchUrl}.
  *
  * A candidate that fails URL canonicalization falls through to the search rule.
  */
-export function resolveInput(text: string): NavigationTarget | null {
+export function resolveInput(text: string, engine: SearchEngineId): NavigationTarget | null {
   const trimmed = text.trim();
   if (trimmed.length === 0) {
     return null;
@@ -128,7 +126,7 @@ export function resolveInput(text: string): NavigationTarget | null {
 
   const search = (): NavigationTarget => ({
     kind: "search",
-    url: DEFAULT_SEARCH_ENGINE + encodeURIComponent(trimmed),
+    url: searchUrl(engine, trimmed),
   });
 
   if (SCHEME_RE.test(trimmed)) {

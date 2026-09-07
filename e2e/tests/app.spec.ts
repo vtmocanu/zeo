@@ -3102,6 +3102,11 @@ test.describe("zeo desktop app", () => {
     "settings.open",
     "history.open",
     "history.clear",
+    // PRD 6.5 — the three always-enabled section-open commands appended at the END
+    // of the registry, so they trail the commands-mode list in registry order.
+    "settings.openGeneral",
+    "settings.openProfiles",
+    "settings.openHistory",
   ];
 
   // §5 bullet 1 — commands mode opens empty, lists only enabled command rows in

@@ -5,6 +5,7 @@ import type { CommandBarMode, CommandBarState } from "./command-bar.js";
 import type { CommandDescriptor, CommandId } from "./commands.js";
 import type { BlockingState } from "./blocking.js";
 import type { HistoryEntry, HistoryVisit } from "./history.js";
+import type { SettingsSectionId, SearchEngineId } from "./settings.js";
 
 /**
  * A single space's tab payload, in the pre-space shape. This is what
@@ -44,11 +45,27 @@ export interface StoreSnapshot extends SpacesState, TabsSlice {}
  * code written against the pre-space snapshot keeps working unchanged; `blocking`
  * carries the content-blocking counts main attaches before broadcast, and
  * `settingsOpen` (attached by main, not part of the pure store snapshot)
- * reflects whether the settings view is currently open.
+ * reflects whether the settings view is currently open. `settings` rides the
+ * broadcast like `blocking`, carrying the current {@link Settings} (the chosen
+ * search engine) so every settings change reaches renderers without a separate
+ * channel; `settingsSection` is the currently-targeted settings section main
+ * pushes to the settings view (the section-open commands set it), which the PRD
+ * calls the pushed `section`.
+ *
+ * `settingsSectionNonce` is a monotonically increasing counter main bumps each
+ * time a section-open command (or a cold `settings.open`) targets a section, so
+ * the settings renderer re-selects the pushed `settingsSection` on every such
+ * request even when the section id is unchanged (a discrete user intent to
+ * reveal that section must win over a stale local selection). An unrelated
+ * broadcast carries the same nonce as the previous one, so it never disturbs the
+ * renderer's local keyboard selection.
  */
 export interface TabsState extends StoreSnapshot {
   blocking: BlockingState;
   settingsOpen: boolean;
+  settings: Settings;
+  settingsSection: SettingsSectionId;
+  settingsSectionNonce: number;
 }
 
 /**
@@ -259,6 +276,35 @@ export interface HistoryApi {
   recent(limit?: number): Promise<HistoryVisit[]>;
   deleteUrl(url: string): Promise<void>;
   clear(): Promise<void>;
+  /**
+   * The current history entry and visit counts, queried on demand from the
+   * SQLite tables. Not broadcast — the settings history section reads it when
+   * shown and re-reads it after a successful clear.
+   */
+  stats(): Promise<{ entries: number; visits: number }>;
+}
+
+/**
+ * The persisted, broadcast settings slice. Currently just the chosen default
+ * search engine; it rides the `stateChange` broadcast on {@link TabsState} the
+ * same way {@link BlockingState} does, so a change needs no separate channel.
+ */
+export interface Settings {
+  searchEngine: SearchEngineId;
+}
+
+/**
+ * Settings commands the renderer invokes over IPC, handled in main. `get()`
+ * resolves the current in-memory {@link Settings}; `setSearchEngine(id)`
+ * changes the default search engine: it resolves without side effects when
+ * `id` is already current, rejects with a `TypeError` (changing nothing) when
+ * `id` is not a catalog id, otherwise persists the new value then updates the
+ * in-memory state and broadcasts — a persistence failure rejects and changes
+ * nothing.
+ */
+export interface SettingsApi {
+  get(): Promise<Settings>;
+  setSearchEngine(id: SearchEngineId): Promise<void>;
 }
 
 /**
@@ -276,6 +322,7 @@ export interface ZeoApi {
   commands: CommandsApi;
   blocking: BlockingApi;
   history: HistoryApi;
+  settings: SettingsApi;
   onStateChange(listener: (state: TabsState) => void): () => void;
   /** Registers a listener for main-pushed command-bar state updates and returns
    *  an unsubscribe function, mirroring onStateChange. */
@@ -332,5 +379,8 @@ export const IPC = {
   historyRecent: "zeo:history:recent",
   historyDeleteUrl: "zeo:history:delete-url",
   historyClear: "zeo:history:clear",
+  historyStats: "zeo:history:stats",
+  settingsGet: "zeo:settings:get",
+  settingsSetSearchEngine: "zeo:settings:set-search-engine",
   stateChange: "zeo:state-change",
 } as const;
