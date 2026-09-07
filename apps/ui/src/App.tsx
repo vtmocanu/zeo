@@ -483,6 +483,8 @@ export function App() {
     activeTabId: null,
     archived: [],
     settingsOpen: false,
+    settings: { searchEngine: "duckduckgo" },
+    settingsSection: "general",
     blocking: {
       enabled: true,
       listVersion: "none",
