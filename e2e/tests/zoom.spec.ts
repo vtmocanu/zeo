@@ -188,6 +188,14 @@ function zoomIn(sidebar: Page): Promise<void> {
   });
 }
 
+/** Step the active tab's host one rung DOWN the zoom ladder over the bridge. */
+function zoomOut(sidebar: Page): Promise<void> {
+  return sidebar.evaluate(() => {
+    const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+    return zeo.zoom.zoomOut();
+  });
+}
+
 /** Reset the active tab's host to actual size (1.0) over the bridge. */
 function zoomReset(sidebar: Page): Promise<void> {
   return sidebar.evaluate(() => {
@@ -268,13 +276,19 @@ test.describe("PRD 6.4 zoom (offline)", () => {
       await waitForDpr(page2, baseline * 1.25);
       expect(tab2.id).toBeTruthy();
 
-      // --- (B) reset the fixture host from tab1 (now at 1.25): the row is deleted
-      // and the sidebar badge disappears. ---
+      // --- Zoom OUT one rung from tab1 (1.25 -> 1.1), exercising the wired-but-
+      // otherwise-untested zoomOut path end to end: bridge state AND rendered scale.
       await activateTab(sidebar, tab1.id);
+      await zoomOut(sidebar);
+      expect((await zoomState(sidebar)).byHost["127.0.0.1"]).toBe(1.1);
+      await waitForDpr(page1, baseline * 1.1);
+
+      // --- (B) reset the fixture host from tab1 (now at 1.1): the row is deleted
+      // and the sidebar badge disappears. ---
       // The badge renders on the active tab at a non-default factor.
       await expect
         .poll(() => sidebar.getByTestId("tab-zoom").count(), {
-          message: "expected the active tab's zoom badge to render at 1.25",
+          message: "expected the active tab's zoom badge to render at 1.1",
         })
         .toBeGreaterThan(0);
 
@@ -284,6 +298,9 @@ test.describe("PRD 6.4 zoom (offline)", () => {
       // ...and the badge disappears through the stateChange re-render (web-first
       // retrying matcher).
       await expect(sidebar.getByTestId("tab-zoom")).toHaveCount(0);
+      // ...and the active Chromium view factor itself returns to actual size (the
+      // relative DPR oracle, not merely state/badge clearing).
+      await waitForDpr(page1, baseline);
 
       // --- (C) reset again with the host already at the default factor: the
       // no-persist / no-view-update / no-broadcast idempotent path. ---
@@ -336,13 +353,19 @@ test.describe("PRD 6.4 zoom (offline)", () => {
   test("persists a site's zoom factor across a relaunch", async () => {
     const userDataDir = mkdtempSync(join(tmpdir(), "zeo-zoom-"));
     const server = await startFixtureServer();
+    // Captured un-zoomed in launch #1, reused for the relative assertion in launch
+    // #2; deviceScaleFactor is environment-fixed and stable across relaunches.
+    // Definite-assignment: set in launch #1 before launch #2's read (which only
+    // runs if launch #1 succeeded), so no useless initializer.
+    let baseline!: number;
     try {
       // --- Launch #1: zoom the fixture host to 1.25, then close. ---
       const first = await launch(userDataDir);
       try {
         const tab = await createTab(first.sidebar, `${server.base}/page.html?probe=r1`);
-        await tabWindow(first.app, "probe=r1");
+        const page1 = await tabWindow(first.app, "probe=r1");
         await activateTab(first.sidebar, tab.id);
+        baseline = await readDpr(page1);
         await zoomIn(first.sidebar);
         await zoomIn(first.sidebar);
         expect((await zoomState(first.sidebar)).byHost["127.0.0.1"]).toBe(1.25);
@@ -364,12 +387,9 @@ test.describe("PRD 6.4 zoom (offline)", () => {
         expect((await zoomState(second.sidebar)).byHost["127.0.0.1"]).toBe(1.25);
 
         // The fresh tab's on-screen factor reflects the persisted 1.25 (applied on
-        // first commit). A plain non-zoomed tab would sit near a 1.0 baseline; the
-        // persisted 1.25 pushes devicePixelRatio meaningfully above it.
-        await page.waitForFunction(() => window.devicePixelRatio > 1.1, undefined, {
-          timeout: 20_000,
-        });
-        expect(await readDpr(page)).toBeGreaterThan(1.1);
+        // first commit): devicePixelRatio reaches the un-zoomed baseline * 1.25, a
+        // relative oracle that cannot pass vacuously at default zoom on high-DPI.
+        await waitForDpr(page, baseline * 1.25);
       } finally {
         await second.app.close();
       }
