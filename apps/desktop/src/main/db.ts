@@ -154,7 +154,7 @@ function dbPath(): string {
 /**
  * Reads the schema version currently on disk and applies {@link migrationAction}:
  * `"abort"` throws {@link UnsupportedSchemaVersionError}, `"create"` builds the
- * fresh schema (all eight tables) and seeds the single meta row, `"migrate"` runs the
+ * fresh schema (all nine tables) and seeds the single meta row, `"migrate"` runs the
  * ordered {@link MIGRATION_STEPS} from the on-disk version + 1 through
  * {@link SCHEMA_VERSION} inside a single transaction (so a partially-applied
  * upgrade never lands), and `"noop"` leaves an up-to-date database untouched.

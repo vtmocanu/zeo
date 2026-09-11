@@ -197,6 +197,10 @@ export function createThrottledPersister(
         clearTimer(handle);
         timers.delete(id);
       }
+      // Drop the per-id last-write timestamp too, so neither map outlives the
+      // download (cancel is called on every `done`); otherwise `lastWrite` would
+      // grow one entry per download for the life of the launch.
+      lastWrite.delete(id);
     },
   };
 }
@@ -242,6 +246,37 @@ export function terminalizeProfileDownloads<I extends CancelableItem>(
       deps.releaseFilename(current.filename);
     }
     entry.item.cancel();
+    deps.downloadItems.delete(id);
+  }
+}
+
+/** Collaborators for {@link cleanupOrphanedDoneItem}. */
+export interface CleanupDoneItemDeps<I extends CancelableItem> {
+  downloadItems: Map<string, DownloadRegistryEntry<I>>;
+  /** Releases one in-flight basename reservation (`reservedFilenames.delete`). */
+  releaseFilename(filename: string): void;
+}
+
+/**
+ * Cleanup for a `done` event whose record was NOT updated ({@link applyDownloadEvent}
+ * returned `null`) and was NOT removal-guarded — the caller has already handled
+ * those. Two cases reach here, told apart by the registry:
+ *  - cap-evicted while in-flight: the 100-cap dropped the record from memory but
+ *    left this item's reservation and registry entry. The entry is still PRESENT and
+ *    the reservation is still ours (a cap-eviction never releases it, so no other
+ *    download could have taken the name), so release the filename and drop the entry
+ *    now that the live item is done — otherwise both leak for the life of the launch.
+ *  - teardown-terminalized: {@link terminalizeProfileDownloads} already released the
+ *    filename and dropped the entry, so the entry is ABSENT — do nothing (re-releasing
+ *    could steal a new download's reservation of a since-freed name).
+ */
+export function cleanupOrphanedDoneItem<I extends CancelableItem>(
+  id: string,
+  filename: string,
+  deps: CleanupDoneItemDeps<I>,
+): void {
+  if (deps.downloadItems.has(id)) {
+    deps.releaseFilename(filename);
     deps.downloadItems.delete(id);
   }
 }

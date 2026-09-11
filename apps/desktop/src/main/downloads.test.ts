@@ -5,7 +5,9 @@ import {
   applyDownloadEvent,
   createThrottledPersister,
   terminalizeProfileDownloads,
+  cleanupOrphanedDoneItem,
 } from "./downloads.js";
+import type { DownloadRegistryEntry } from "./downloads.js";
 
 /** Builds a {@link Download} with defaults, overridable per field. */
 function makeDownload(overrides: Partial<Download> = {}): Download {
@@ -398,5 +400,34 @@ describe("terminalizeProfileDownloads", () => {
     fire!();
     // Suppressed: no second write for a removed id.
     expect(persisted).toHaveLength(1);
+  });
+});
+
+describe("cleanupOrphanedDoneItem", () => {
+  test("cap-evicted in-flight item (entry still present) releases the filename and drops the registry entry", () => {
+    const cancel = vi.fn();
+    const downloadItems = new Map<string, DownloadRegistryEntry>([
+      ["d1", { item: { cancel }, profileId: "p1" }],
+    ]);
+    const released: string[] = [];
+    cleanupOrphanedDoneItem("d1", "file.bin", {
+      downloadItems,
+      releaseFilename: (name) => released.push(name),
+    });
+    expect(released).toEqual(["file.bin"]);
+    expect(downloadItems.has("d1")).toBe(false);
+    // It does not cancel — the item is already done.
+    expect(cancel).not.toHaveBeenCalled();
+  });
+
+  test("teardown-cleaned item (entry already absent) releases nothing and changes nothing", () => {
+    const downloadItems = new Map<string, DownloadRegistryEntry>();
+    const released: string[] = [];
+    cleanupOrphanedDoneItem("d1", "file.bin", {
+      downloadItems,
+      releaseFilename: (name) => released.push(name),
+    });
+    expect(released).toEqual([]);
+    expect(downloadItems.size).toBe(0);
   });
 });

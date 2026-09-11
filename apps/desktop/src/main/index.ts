@@ -106,6 +106,7 @@ import {
   applyDownloadEvent,
   createThrottledPersister,
   terminalizeProfileDownloads,
+  cleanupOrphanedDoneItem,
 } from "./downloads.js";
 import type {
   ApplyDownloadEventDeps,
@@ -675,9 +676,19 @@ function installDownloadHandler(profileId: string): void {
         applyDownloadEventDeps,
       );
       if (finished === null) {
-        // Teardown-terminalized (finished, not guarded): terminalizeProfileDownloads
-        // already released the filename and dropped the registry entry, so do NOTHING
-        // — a re-release here could steal a new download's reservation of the name.
+        // The record was NOT updated (and is not removal-guarded, handled above), so
+        // it is either teardown-terminalized OR cap-evicted while in-flight:
+        //  - teardown: terminalizeProfileDownloads already released the filename and
+        //    dropped the registry entry, so its entry is now ABSENT — do nothing (a
+        //    re-release could steal a new download's reservation of a since-freed name);
+        //  - cap-eviction: the 100-cap dropped this record from memory but left this
+        //    item's reservation and registry entry, so its entry is still PRESENT and
+        //    its reservation is still ours — release it now that done has fired.
+        // cleanupOrphanedDoneItem release-and-drops iff the entry is still present.
+        cleanupOrphanedDoneItem(id, filename, {
+          downloadItems,
+          releaseFilename: (name) => reservedFilenames.delete(name),
+        });
         return;
       }
       // Normal completion: mutate in-memory (above) → persist → release/drop → broadcast.
