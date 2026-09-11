@@ -16,7 +16,7 @@
  * highest version it can read back. A stored version ABOVE this is from a newer
  * build and cannot be understood ({@link UnsupportedSchemaVersionError}).
  */
-export const SCHEMA_VERSION = 6;
+export const SCHEMA_VERSION = 7;
 
 /**
  * The single meta row: the schema version the state was written with and the

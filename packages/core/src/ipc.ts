@@ -4,6 +4,7 @@ import type { Profile } from "./profile.js";
 import type { CommandBarMode, CommandBarState } from "./command-bar.js";
 import type { CommandDescriptor, CommandId } from "./commands.js";
 import type { BlockingState } from "./blocking.js";
+import type { Download, DownloadsState } from "./downloads.js";
 import type { HistoryEntry, HistoryVisit } from "./history.js";
 import type { ZoomState } from "./zoom.js";
 import type { SettingsSectionId, SearchEngineId } from "./settings.js";
@@ -65,6 +66,7 @@ export interface StoreSnapshot extends SpacesState, TabsSlice {}
  */
 export interface TabsState extends StoreSnapshot {
   blocking: BlockingState;
+  downloads: DownloadsState;
   settingsOpen: boolean;
   zoom: ZoomState;
   settings: Settings;
@@ -289,6 +291,29 @@ export interface HistoryApi {
 }
 
 /**
+ * Download commands the renderer invokes over IPC, handled in main against the
+ * single trusted global download manager (no per-profile or per-space ownership
+ * check — any handler may act on any record by `id`). `list()` returns the
+ * in-memory {@link Download} items (newest first, capped at 100). `cancel(id)`
+ * cancels the live item when it is active and is a no-op on a finished, unknown,
+ * or already-cleaned-up `id`. `open(id)` opens a completed file with the OS
+ * handler and rejects otherwise; `reveal(id)` shows the item's path in Finder
+ * and rejects for an unknown `id`. `remove(id)` forgets one record (commit-first;
+ * it never deletes the file on disk); `clearFinished()` forgets every finished
+ * record (never touching an active download or any file). Updates ride the
+ * existing `stateChange` broadcast on {@link TabsState}, so there is no separate
+ * change channel.
+ */
+export interface DownloadsApi {
+  list(): Promise<Download[]>;
+  cancel(id: string): Promise<void>;
+  open(id: string): Promise<void>;
+  reveal(id: string): Promise<void>;
+  remove(id: string): Promise<void>;
+  clearFinished(): Promise<void>;
+}
+
+/**
  * The persisted, broadcast settings slice. Currently just the chosen default
  * search engine; it rides the `stateChange` broadcast on {@link TabsState} the
  * same way {@link BlockingState} does, so a change needs no separate channel.
@@ -342,6 +367,7 @@ export interface ZeoApi {
   commands: CommandsApi;
   blocking: BlockingApi;
   history: HistoryApi;
+  downloads: DownloadsApi;
   zoom: ZoomApi;
   settings: SettingsApi;
   onStateChange(listener: (state: TabsState) => void): () => void;
@@ -401,6 +427,12 @@ export const IPC = {
   historyDeleteUrl: "zeo:history:delete-url",
   historyClear: "zeo:history:clear",
   historyStats: "zeo:history:stats",
+  downloadsList: "zeo:downloads:list",
+  downloadsCancel: "zeo:downloads:cancel",
+  downloadsOpen: "zeo:downloads:open",
+  downloadsReveal: "zeo:downloads:reveal",
+  downloadsRemove: "zeo:downloads:remove",
+  downloadsClearFinished: "zeo:downloads:clear-finished",
   zoomIn: "zeo:zoom:in",
   zoomOut: "zeo:zoom:out",
   zoomReset: "zeo:zoom:reset",

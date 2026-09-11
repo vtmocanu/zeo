@@ -1,7 +1,9 @@
 import { resolveInput } from "./resolve-input.js";
 import { historyKey, historyTerms } from "./history.js";
 import { searchEngine } from "./settings.js";
+import { DOWNLOADS_CAP, downloadDetail } from "./downloads.js";
 import type { HistoryEntry } from "./history.js";
+import type { Download } from "./downloads.js";
 import type { CommandBarMode } from "./command-bar.js";
 import type { CommandId } from "./commands.js";
 import type { SearchEngineId } from "./settings.js";
@@ -9,9 +11,11 @@ import type { SearchEngineId } from "./settings.js";
 /**
  * One row the command bar can show and act on. `navigate`/`search` are the
  * text action for the typed query (row 0); `tab`/`archived-tab`/`space`/
- * `history` are catalog matches (a `history` row is a recorded url with its
- * title, lifetime visit count, and last-visit time). The renderer draws these
- * and hands the chosen row's index back to main; main performs the action.
+ * `history`/`download` are catalog matches (a `history` row is a recorded url
+ * with its title, lifetime visit count, and last-visit time; a `download` row
+ * is a tracked download with its filename, human-readable `detail`, and state).
+ * The renderer draws these and hands the chosen row's index back to main; main
+ * performs the action.
  */
 export type Suggestion =
   | { kind: "navigate"; url: string; label: string }
@@ -20,7 +24,8 @@ export type Suggestion =
   | { kind: "archived-tab"; tabId: string; spaceId: string; title: string; url: string; spaceName: string }
   | { kind: "space"; spaceId: string; name: string }
   | { kind: "command"; id: CommandId; title: string; accelerator: string | null }
-  | { kind: "history"; url: string; title: string; visitCount: number; lastVisitedAt: number };
+  | { kind: "history"; url: string; title: string; visitCount: number; lastVisitedAt: number }
+  | { kind: "download"; id: string; filename: string; detail: string; state: Download["state"] };
 
 /**
  * The plain, store-free input {@link suggest} ranks over. Main builds this from
@@ -29,7 +34,9 @@ export type Suggestion =
  * `archivedAt`), each carrying its owning space id and name. `history` is the
  * database-filtered {@link HistoryEntry} list for the current query (already
  * ranked/limited by the database; empty in `commands` mode and when the query
- * does not consult history). `suggest` reads only this — it never touches a
+ * does not consult history). `downloads` is the in-memory {@link Download} list
+ * main supplies already newest first (`startedAt` desc, `id` desc), consulted
+ * only in `downloads` mode. `suggest` reads only this — it never touches a
  * store.
  */
 export interface SuggestCatalog {
@@ -38,6 +45,7 @@ export interface SuggestCatalog {
   archived: { tabId: string; spaceId: string; title: string; url: string; spaceName: string; archivedAt: number }[];
   commands: { id: CommandId; title: string; keywords: string[]; accelerator: string | null; enabled: boolean }[];
   history: HistoryEntry[];
+  downloads: Download[];
 }
 
 /**
@@ -123,7 +131,12 @@ interface Candidate {
   suggestion: Suggestion;
   /** Worst (largest) term tier — the candidate's score, ascending. */
   score: number;
-  /** Kind rank: open tab 0, space 1, history 2, command 3, archived tab 4. */
+  /**
+   * Kind rank: open tab 0, space 1, history 2, command 3, archived tab 4,
+   * download 5. Downloads mode is isolated (its own early return), so the
+   * `download` rank only needs to be distinct and stable — no download
+   * candidate ever joins the mixed navigate/new-tab list.
+   */
   kindRank: number;
   /** 0 for a tab in the active space (and for every non-tab), 1 otherwise. */
   activeRank: number;
@@ -167,6 +180,17 @@ function historySuggestion(e: HistoryEntry): Suggestion {
   };
 }
 
+/** Projects a catalog download entry to a `download` {@link Suggestion}. */
+function downloadSuggestion(d: Download): Suggestion {
+  return {
+    kind: "download",
+    id: d.id,
+    filename: d.filename,
+    detail: downloadDetail(d),
+    state: d.state,
+  };
+}
+
 /**
  * The worst (largest) {@link termTier} of `terms` against a history entry's
  * lowercased `title` and url host. With no terms (an empty history-mode query)
@@ -194,8 +218,8 @@ function historyScore(entry: HistoryEntry, terms: string[]): number {
  * then catalog order, and capped at eight before row 0 is prepended. A history
  * candidate is skipped when an open tab shares its {@link historyKey} (the tab
  * row wins). `commands` mode ignores history entirely; `history` mode returns
- * only history rows (no row 0, no other kinds). Pure — reads only its
- * arguments.
+ * only history rows and `downloads` mode returns only download rows (each with
+ * no row 0 and no other kinds). Pure — reads only its arguments.
  */
 export function suggest(query: string, catalog: SuggestCatalog, options: SuggestOptions): Suggestion[] {
   if (options.mode === "commands") {
@@ -245,6 +269,29 @@ export function suggest(query: string, catalog: SuggestCatalog, options: Suggest
     }
     ranked.sort((a, b) => a.score - b.score || a.order - b.order);
     return ranked.slice(0, MAX_MATCHES).map((c) => c.suggestion);
+  }
+
+  if (options.mode === "downloads") {
+    // Downloads mode is download-only: no row-0 text action and no tabs,
+    // spaces, commands, archived tabs, or history. `catalog.downloads` is
+    // supplied newest first (startedAt desc, id desc). An empty/whitespace
+    // query lists every download in that order, up to the in-memory cap (100)
+    // — NOT capped at MAX_MATCHES. A non-empty query keeps the rows whose
+    // filename OR url contains the query (case-insensitive), order preserved,
+    // then caps at MAX_MATCHES.
+    const trimmed = query.trim();
+    if (trimmed === "") {
+      return catalog.downloads.slice(0, DOWNLOADS_CAP).map(downloadSuggestion);
+    }
+    const needle = trimmed.toLowerCase();
+    return catalog.downloads
+      .filter(
+        (d) =>
+          d.filename.toLowerCase().includes(needle) ||
+          d.url.toLowerCase().includes(needle),
+      )
+      .slice(0, MAX_MATCHES)
+      .map(downloadSuggestion);
   }
 
   const resolved = resolveInput(query, options.searchEngine);

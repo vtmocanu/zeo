@@ -10,6 +10,7 @@ function catalog(partial: Partial<SuggestCatalog>): SuggestCatalog {
     archived: partial.archived ?? [],
     commands: partial.commands ?? [],
     history: partial.history ?? [],
+    downloads: partial.downloads ?? [],
   };
 }
 
@@ -74,6 +75,24 @@ function archivedTab(
     url: "https://example.test/",
     spaceName: "Personal",
     archivedAt: 0,
+    ...over,
+  };
+}
+
+/** A minimal download catalog entry with sensible defaults. */
+function downloadEntry(
+  over: Partial<SuggestCatalog["downloads"][number]> & { id: string },
+): SuggestCatalog["downloads"][number] {
+  return {
+    url: "https://example.test/file.bin",
+    filename: "file.bin",
+    path: "/downloads/file.bin",
+    totalBytes: 0,
+    receivedBytes: 0,
+    state: "progressing",
+    startedAt: 0,
+    completedAt: null,
+    spaceId: null,
     ...over,
   };
 }
@@ -609,6 +628,90 @@ describe("suggest — history mode", () => {
     const rows = suggest("doc", catalog({ history }), options({ mode: "history" }));
     expect(rows).toHaveLength(8);
     expect(rows.every((r) => r.kind === "history")).toBe(true);
+  });
+});
+
+describe("suggest — downloads mode", () => {
+  test("an empty query lists every download in catalog (newest-first) order", () => {
+    const rows = suggest(
+      "  ",
+      catalog({
+        downloads: [
+          downloadEntry({ id: "c", filename: "third.bin", startedAt: 3 }),
+          downloadEntry({ id: "b", filename: "second.bin", startedAt: 2 }),
+          downloadEntry({ id: "a", filename: "first.bin", startedAt: 1 }),
+        ],
+      }),
+      options({ mode: "downloads" }),
+    );
+    expect(rows.every((r) => r.kind === "download")).toBe(true);
+    expect(rows.map((r) => (r.kind === "download" ? r.id : ""))).toEqual([
+      "c",
+      "b",
+      "a",
+    ]);
+  });
+
+  test("a non-empty query matches on filename", () => {
+    const rows = suggest(
+      "report",
+      catalog({
+        downloads: [
+          downloadEntry({ id: "a", filename: "report.bin", url: "https://a.test/x" }),
+          downloadEntry({ id: "b", filename: "notes.txt", url: "https://b.test/y" }),
+        ],
+      }),
+      options({ mode: "downloads" }),
+    );
+    expect(rows.map((r) => (r.kind === "download" ? r.id : ""))).toEqual(["a"]);
+  });
+
+  test("a non-empty query matches on url", () => {
+    const rows = suggest(
+      "cdn.example",
+      catalog({
+        downloads: [
+          downloadEntry({ id: "a", filename: "report.bin", url: "https://cdn.example/x" }),
+          downloadEntry({ id: "b", filename: "notes.txt", url: "https://other.test/y" }),
+        ],
+      }),
+      options({ mode: "downloads" }),
+    );
+    expect(rows.map((r) => (r.kind === "download" ? r.id : ""))).toEqual(["a"]);
+  });
+
+  test("no navigate/search/command/tab row ever appears in downloads mode", () => {
+    const rows = suggest(
+      "example.com",
+      catalog({
+        // Tabs, spaces, commands and history present; downloads mode ignores them.
+        spaces: [{ id: "sp", name: "Example", active: false }],
+        tabs: [tab({ tabId: "t", title: "Example", url: "https://example.com/" })],
+        commands: [command({ id: "tab.new", title: "Example", keywords: [] })],
+        history: [historyEntry({ url: "https://example.com/", title: "Example" })],
+        downloads: [downloadEntry({ id: "d", filename: "example.com.html" })],
+      }),
+      options({ mode: "downloads" }),
+    );
+    expect(rows.every((r) => r.kind === "download")).toBe(true);
+    expect(rows.map((r) => (r.kind === "download" ? r.id : ""))).toEqual(["d"]);
+  });
+
+  test("caps the download rows at MAX_MATCHES on a non-empty query", () => {
+    const downloads = Array.from({ length: 12 }, (_, i) =>
+      downloadEntry({ id: `d${i}`, filename: `doc-${i}.bin`, startedAt: i }),
+    );
+    const rows = suggest("doc", catalog({ downloads }), options({ mode: "downloads" }));
+    expect(rows).toHaveLength(8);
+    expect(rows.every((r) => r.kind === "download")).toBe(true);
+  });
+
+  test("an empty query is NOT capped at MAX_MATCHES", () => {
+    const downloads = Array.from({ length: 12 }, (_, i) =>
+      downloadEntry({ id: `d${i}`, filename: `doc-${i}.bin`, startedAt: i }),
+    );
+    const rows = suggest("  ", catalog({ downloads }), options({ mode: "downloads" }));
+    expect(rows).toHaveLength(12);
   });
 });
 

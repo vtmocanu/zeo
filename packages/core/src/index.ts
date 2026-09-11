@@ -29,6 +29,7 @@ export type {
   CommandsApi,
   BlockingApi,
   HistoryApi,
+  DownloadsApi,
   ZoomApi,
   Settings,
   SettingsApi,
@@ -94,6 +95,19 @@ export {
   HISTORY_RETENTION_MS,
 } from "./history.js";
 export type { HistoryEntry, HistoryVisit } from "./history.js";
+export type { Download, DownloadsState } from "./downloads.js";
+export {
+  upsertDownload,
+  removeDownload,
+  clearFinishedDownloads,
+  uniqueFilename,
+  safeFilename,
+  stripUrlCredentials,
+  isFinished,
+  isActive,
+  downloadDetail,
+  DOWNLOADS_CAP,
+} from "./downloads.js";
 export { defaultSpaceName } from "./space-name.js";
 export { buildSpaceContextMenu } from "./space-menu.js";
 export type { SpaceContextMenuInput } from "./space-menu.js";

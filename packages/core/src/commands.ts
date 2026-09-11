@@ -36,7 +36,10 @@ export type CommandId =
   | "zoom.reset"
   | "settings.openGeneral"
   | "settings.openProfiles"
-  | "settings.openHistory";
+  | "settings.openHistory"
+  | "downloads.open"
+  | "downloads.openFolder"
+  | "downloads.clearFinished";
 
 /**
  * One registry entry: its {@link CommandId}, human title, search `keywords`,
@@ -59,8 +62,9 @@ export interface CommandDescriptor {
  * `zoomFactor`, the active tab's host's current zoom factor
  * (`TabsState.zoom.byHost[siteHost]`, or `1.0`/{@link DEFAULT_ZOOM_FACTOR} when
  * the host has no entry or the tab is non-http(s)) — or `null` when no tab is
- * active; the number of spaces; and `settingsOpen`, whether the settings view is
- * currently open.
+ * active; the number of spaces; `settingsOpen`, whether the settings view is
+ * currently open; and `hasFinishedDownload`, whether at least one finished
+ * download exists (which gates `downloads.clearFinished`).
  */
 export interface CommandContext {
   activeTab: {
@@ -73,6 +77,7 @@ export interface CommandContext {
   } | null;
   spaceCount: number;
   settingsOpen: boolean;
+  hasFinishedDownload: boolean;
 }
 
 /**
@@ -109,6 +114,9 @@ export const COMMANDS: readonly CommandDescriptor[] = [
   { id: "settings.openGeneral", title: "Open General Settings", keywords: ["settings", "general", "search", "engine", "preferences"], accelerator: null, menu: null },
   { id: "settings.openProfiles", title: "Open Profile Settings", keywords: ["settings", "profiles", "profile"], accelerator: null, menu: null },
   { id: "settings.openHistory", title: "Open History Settings", keywords: ["settings", "history", "clear"], accelerator: null, menu: null },
+  { id: "downloads.open", title: "Show Downloads", keywords: ["download", "downloads", "files", "saved"], accelerator: "CmdOrCtrl+Shift+J", menu: "view" },
+  { id: "downloads.openFolder", title: "Open Downloads Folder", keywords: ["download", "downloads", "folder", "finder"], accelerator: null, menu: "view" },
+  { id: "downloads.clearFinished", title: "Clear Finished Downloads", keywords: ["clear", "download", "downloads", "finished"], accelerator: null, menu: "view" },
 ];
 
 /**
@@ -116,7 +124,9 @@ export const COMMANDS: readonly CommandDescriptor[] = [
  * `tab.new`, `space.new`, `space.rename`, `bar.open-location`,
  * `bar.open-commands`, `blocking.toggle`, `settings.open`, `history.open`,
  * `history.clear`, `settings.openGeneral`, `settings.openProfiles`,
- * `settings.openHistory`. Every other
+ * `settings.openHistory`, `downloads.open`, `downloads.openFolder`.
+ * `downloads.clearFinished` needs at least one finished download
+ * (`hasFinishedDownload`). Every other
  * `tab.*` needs an active tab; on top of that `tab.pin` needs it unpinned,
  * `tab.unpin` pinned, `tab.archive` unpinned, and `tab.back` / `tab.forward`
  * the matching history flag. `space.delete` needs more than one space.
@@ -141,7 +151,11 @@ export function isCommandEnabled(id: CommandId, context: CommandContext): boolea
     case "settings.openGeneral":
     case "settings.openProfiles":
     case "settings.openHistory":
+    case "downloads.open":
+    case "downloads.openFolder":
       return true;
+    case "downloads.clearFinished":
+      return context.hasFinishedDownload;
     case "space.delete":
       return context.spaceCount > 1;
     case "blocking.allowSite":
