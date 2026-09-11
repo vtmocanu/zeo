@@ -515,6 +515,14 @@ export function App() {
       allowlist: [],
     },
     zoom: { byHost: {} },
+    find: {
+      open: false,
+      query: "",
+      activeMatch: 0,
+      matchCount: 0,
+      tabId: null,
+      activeRequestId: null,
+    },
   });
   const [showArchived, setShowArchived] = useState(false);
   const [now, setNow] = useState(() => Date.now());

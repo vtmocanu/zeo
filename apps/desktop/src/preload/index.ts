@@ -6,6 +6,7 @@ import type {
   CommandBarState,
   CommandDescriptor,
   CommandId,
+  FindState,
   HistoryEntry,
   HistoryVisit,
   Profile,
@@ -106,6 +107,14 @@ const api = {
     zoomOut: (): Promise<void> => ipcRenderer.invoke(IPC.zoomOut),
     reset: (): Promise<void> => ipcRenderer.invoke(IPC.zoomReset),
     state: (): Promise<ZoomState> => ipcRenderer.invoke(IPC.zoomState),
+  },
+  find: {
+    open: (): Promise<void> => ipcRenderer.invoke(IPC.findOpen),
+    setQuery: (text: string): Promise<void> => ipcRenderer.invoke(IPC.findSetQuery, text),
+    next: (): Promise<void> => ipcRenderer.invoke(IPC.findNext),
+    previous: (): Promise<void> => ipcRenderer.invoke(IPC.findPrevious),
+    close: (): Promise<void> => ipcRenderer.invoke(IPC.findClose),
+    state: (): Promise<FindState> => ipcRenderer.invoke(IPC.findState),
   },
   onStateChange: (listener: (state: TabsState) => void): (() => void) => {
     const handler = (_event: Electron.IpcRendererEvent, state: TabsState): void => listener(state);

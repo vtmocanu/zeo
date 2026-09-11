@@ -36,6 +36,13 @@ import {
   zoomOut,
   setHostZoom,
   DEFAULT_ZOOM_FACTOR,
+  openFind,
+  setFindQuery,
+  applyFindResult,
+  beginFindRequest,
+  clearFindResults,
+  closeFind,
+  findBarBounds,
 } from "@zeo/core";
 import type {
   BlockingState,
@@ -44,6 +51,7 @@ import type {
   CommandContext,
   CommandDescriptor,
   CommandId,
+  FindState,
   HistoryEntry,
   HistoryVisit,
   Profile,
@@ -154,6 +162,7 @@ let commandBar: CommandBarState = {
   suggestions: [],
   selectedIndex: -1,
   revision: 0,
+  surface: "bar",
 };
 /**
  * Monotonic source for {@link CommandBarState.revision}. Bumped whenever the
@@ -161,6 +170,21 @@ let commandBar: CommandBarState = {
  * row's rendered revision can be matched against the list currently in effect.
  */
 let commandBarRevision = 0;
+/**
+ * The single in-page find session (PRD 6.3), bound to the active tab while open.
+ * Attached to every broadcast snapshot as `TabsState.find` and mutated only
+ * through the pure page-search reducers. While it is open the command-bar overlay
+ * renders the find bar as its `"find"` surface (see {@link commandBar}); the two
+ * surfaces are mutually exclusive.
+ */
+let find: FindState = {
+  open: false,
+  query: "",
+  activeMatch: 0,
+  matchCount: 0,
+  tabId: null,
+  activeRequestId: null,
+};
 /**
  * Per-tab navigation sequence counter for last-request-wins: each
  * {@link navigateTab} bumps its tab's number, and a settling `loadURL` only
@@ -321,6 +345,7 @@ function fullSnapshot(): TabsState {
     settings,
     settingsSection,
     settingsSectionNonce,
+    find,
   };
 }
 
@@ -623,13 +648,20 @@ function layoutOverlay(): boolean {
     return false;
   }
   const [width, height] = win.getContentSize();
-  const bounds = commandBarBounds(width, height, commandBar.suggestions.length);
+  // The overlay hosts two mutually exclusive surfaces: the find bar anchors
+  // top-right of the page region, the command bar spans it. Size to whichever is
+  // active and show it only while that surface's own open flag is set.
+  const bounds =
+    commandBar.surface === "find"
+      ? findBarBounds(width)
+      : commandBarBounds(width, height, commandBar.suggestions.length);
   if (bounds.width === 0) {
     overlay.setVisible(false);
     return false;
   }
   overlay.setBounds(bounds);
-  if (commandBar.open) {
+  const surfaceOpen = commandBar.surface === "find" ? find.open : commandBar.open;
+  if (surfaceOpen) {
     overlay.setVisible(true);
     return true;
   }
@@ -855,6 +887,40 @@ function createViewFor(tab: Tab, spaceId: string, urlOverride?: string): void {
     recordNavigation(tab.id);
   });
 
+  // In-page find (PRD 6.3). Route this view's found-in-page results into the
+  // session only while find is open and bound to THIS tab, gated by request id in
+  // applyFindResult so a superseded/pre-navigation straggler is dropped.
+  view.webContents.on("found-in-page", (_event, result) => {
+    if (!find.open || find.tabId !== tab.id) {
+      return;
+    }
+    find = applyFindResult(
+      find,
+      result.requestId,
+      result.activeMatchOrdinal,
+      result.matches,
+      result.finalUpdate,
+    );
+    broadcast();
+  });
+  // A navigation of the bound tab keeps the session open on the same tab but
+  // clears highlights, resets the counter to 0/0, and nulls activeRequestId so a
+  // pre-navigation result is rejected. The query text stays in the bar with no
+  // automatic re-search.
+  const onFindNavigate = (): void => {
+    if (!find.open || find.tabId !== tab.id) {
+      return;
+    }
+    const v = views.get(tab.id)?.view;
+    if (v != null && !v.webContents.isDestroyed()) {
+      v.webContents.stopFindInPage("clearSelection");
+    }
+    find = clearFindResults(find);
+    broadcast();
+  };
+  view.webContents.on("did-navigate", onFindNavigate);
+  view.webContents.on("did-navigate-in-page", onFindNavigate);
+
   // Apply the host's stored zoom on the first commit and every later navigation.
   view.webContents.on("did-navigate", () => {
     const host = siteKeyForUrl(view.webContents.getURL());
@@ -1062,7 +1128,12 @@ function commandContextOf(): CommandContext {
   const spaceCount = store.spaces().length;
   const activeTabId = store.activeTabId;
   if (activeTabId === null) {
-    return { activeTab: null, spaceCount, settingsOpen };
+    return {
+      activeTab: null,
+      spaceCount,
+      settingsOpen,
+      find: { open: find.open, hasQuery: find.query.trim().length > 0 },
+    };
   }
   const tab = store.list().find((t) => t.id === activeTabId);
   const wc = views.get(activeTabId)?.view.webContents;
@@ -1084,6 +1155,7 @@ function commandContextOf(): CommandContext {
     },
     spaceCount,
     settingsOpen,
+    find: { open: find.open, hasQuery: find.query.trim().length > 0 },
   };
 }
 
@@ -1219,6 +1291,10 @@ const commandHandlers: Record<CommandId, () => void> = {
   "zoom.reset": () => {
     zoomActiveTab("reset").catch((err) => console.error("[zoom] zoom.reset failed:", err));
   },
+  "find.open": () => openFindSession(),
+  "find.next": () => findNext(),
+  "find.previous": () => findPrevious(),
+  "find.close": () => closeFindSession(),
 };
 
 /**
@@ -1355,6 +1431,13 @@ function recomputeSuggestions(): void {
  * the next resize pass), and pushes the new state.
  */
 function openCommandBar(mode: CommandBarMode): void {
+  // Opening any command-bar mode while find is open first closes find, so the
+  // overlay's surface is restored to the command bar before it is reconstructed.
+  // Skip find's focus return — this handler re-focuses the overlay itself below,
+  // and an intervening page focus would blur-close the just-opened bar.
+  if (find.open) {
+    closeFindSession(false);
+  }
   const effectiveMode: CommandBarMode =
     mode === "navigate" && store.activeTabId === null ? "new-tab" : mode;
   let initialText = "";
@@ -1370,6 +1453,7 @@ function openCommandBar(mode: CommandBarMode): void {
     suggestions: [],
     selectedIndex: -1,
     revision: commandBar.revision,
+    surface: "bar",
   };
   // Rank the initial suggestions BEFORE laying out so the overlay is sized to the
   // row count on open — a `Cmd+T` with empty text already shows the recent-tabs
@@ -1401,6 +1485,7 @@ function closeCommandBar(): void {
     // Clearing the list bumps the revision so a click that raced the close is
     // rejected rather than resolved against the now-empty list.
     revision: ++commandBarRevision,
+    surface: "bar",
   };
   overlay?.setVisible(false);
   pushCommandBar();
@@ -1410,6 +1495,131 @@ function closeCommandBar(): void {
   } else {
     win?.webContents.focus();
   }
+}
+
+/**
+ * Resolves the live {@link WebContentsView} the find session is bound to, or
+ * `null` when the session is closed, the bound tab has no live view, or its
+ * webContents has been destroyed.
+ */
+function findBoundView(): WebContentsView | null {
+  if (find.tabId === null) {
+    return null;
+  }
+  const view = views.get(find.tabId)?.view;
+  if (view == null || view.webContents.isDestroyed()) {
+    return null;
+  }
+  return view;
+}
+
+/**
+ * Issues one `findInPage` on the bound view (match-case always off) and records
+ * its request id via {@link beginFindRequest}, so `found-in-page` results route
+ * to this request by exact id. A no-op when there is no live bound view.
+ */
+function issueFind(text: string, findNext: boolean, forward: boolean): void {
+  const view = findBoundView();
+  if (view === null) {
+    return;
+  }
+  const requestId = view.webContents.findInPage(text, { findNext, forward, matchCase: false });
+  find = beginFindRequest(find, requestId);
+}
+
+/**
+ * Tears down the find session (PRD 6.3 §3 `close()`): clears highlights on the
+ * bound view, resets the session, restores the overlay to the command-bar
+ * surface, hides the overlay, pushes and broadcasts, then returns focus to the
+ * active tab's page. Idempotent: a no-op when find is already closed.
+ *
+ * `returnFocus` defaults to true. It is passed `false` when the caller is about
+ * to re-focus the overlay itself (opening the command bar over the same overlay):
+ * focusing the page in between would blur the overlay, and that blur — delivered
+ * asynchronously after the command bar has reopened — would fire the overlay's
+ * blur handler and immediately close the just-opened bar.
+ */
+function closeFindSession(returnFocus = true): void {
+  if (!find.open) {
+    return;
+  }
+  const view = findBoundView();
+  if (view !== null) {
+    view.webContents.stopFindInPage("clearSelection");
+  }
+  find = closeFind(find);
+  commandBar = { ...commandBar, surface: "bar" };
+  overlay?.setVisible(false);
+  pushCommandBar();
+  broadcast();
+  if (!returnFocus) {
+    return;
+  }
+  // Mirror closeCommandBar's focus return: hand focus back to the active tab's
+  // page (or the window when there is none).
+  const activeTabId = store.activeTabId;
+  if (activeTabId !== null && views.has(activeTabId)) {
+    views.get(activeTabId)?.view.webContents.focus();
+  } else {
+    win?.webContents.focus();
+  }
+}
+
+/**
+ * Opens (or re-focuses) the find session on the active tab (PRD 6.3 §3
+ * `open()`). With no active tab it is a no-op — the IPC handler and command
+ * enablement reject that case. When already open it just re-focuses the overlay
+ * input (the find bar selects its text on focus). Otherwise it closes the command
+ * bar if open (mutual exclusion), opens a fresh session, flips the overlay to the
+ * find surface, lays it out with {@link findBarBounds}, and pushes/broadcasts.
+ */
+function openFindSession(): void {
+  const activeTabId = store.activeTabId;
+  if (activeTabId === null) {
+    return;
+  }
+  if (find.open) {
+    // Already open: just re-focus the input; the find bar selects its text on focus.
+    overlay?.webContents.focus();
+    return;
+  }
+  if (commandBar.open) {
+    closeCommandBar();
+  }
+  find = openFind(find, activeTabId);
+  commandBar = { ...commandBar, surface: "find" };
+  const shown = layoutOverlay();
+  if (shown) {
+    overlay?.webContents.focus();
+  }
+  pushCommandBar();
+  broadcast();
+}
+
+/**
+ * Cycles the find session forward (PRD 6.3 §3 `next()`). A no-op that issues no
+ * request when find is closed or the query is empty/whitespace-only; otherwise
+ * issues the forward directional `findInPage` and broadcasts.
+ */
+function findNext(): void {
+  if (!find.open || find.query.trim().length === 0) {
+    return;
+  }
+  issueFind(find.query, true, true);
+  broadcast();
+}
+
+/**
+ * Cycles the find session backward (PRD 6.3 §3 `previous()`). A no-op that issues
+ * no request when find is closed or the query is empty/whitespace-only; otherwise
+ * issues the backward directional `findInPage` and broadcasts.
+ */
+function findPrevious(): void {
+  if (!find.open || find.query.trim().length === 0) {
+    return;
+  }
+  issueFind(find.query, true, false);
+  broadcast();
 }
 
 /**
@@ -1659,6 +1869,11 @@ function removeTab(id: string): void {
 
 /** Tears down and unparents the tracked view for `id`, if one exists. */
 function destroyView(id: string): void {
+  // Close the find session before the bound view is destroyed, so
+  // stopFindInPage runs while its webContents is still alive.
+  if (find.open && find.tabId === id) {
+    closeFindSession();
+  }
   const tracked = views.get(id);
   if (tracked !== undefined) {
     win?.contentView.removeChildView(tracked.view);
@@ -1824,6 +2039,12 @@ function remapSpaceProfile(spaceId: string, profileId: string): void {
  * space's views — the whole space-switch view transition.
  */
 function setActive(id: string | null): void {
+  // A find session never follows a tab change: closing it here covers activate,
+  // archive, space-switch, and close-to-sibling. Re-asserting the same active tab
+  // (find.tabId === id) is a no-op.
+  if (find.open && find.tabId !== id) {
+    closeFindSession();
+  }
   for (const [tabId, tracked] of views) {
     const active = tabId === id;
     tracked.view.setVisible(active);
@@ -1842,6 +2063,10 @@ function broadcast(): void {
   if (settingsView !== null) {
     settingsView.webContents.send(IPC.stateChange, snapshot);
   }
+  // The overlay renders the find surface, which echoes its committed query and
+  // counter from TabsState.find — so it needs the full snapshot too (the surface
+  // selector still travels separately on commandBarChange).
+  overlay?.webContents.send(IPC.stateChange, snapshot);
   scheduleSave(store);
   // Every active-tab/active-space/store change can change command enablement and
   // the pin/unpin menu label, so refresh the menu (and the open bar) here.
@@ -2132,11 +2357,11 @@ function createWindow(seed: boolean): void {
     if (settingsOpen && settingsView !== null) {
       settingsView.setBounds(settingsBoundsRect());
     }
-    if (commandBar.open) {
+    if (commandBar.open || find.open) {
       // A resize that grows a too-short window can bring a previously collapsed
       // (all-zero rect) overlay back into view. Focus is returned to the overlay
       // only on that hidden→visible transition, so a resize of an already-shown
-      // bar never steals focus from the input mid-typing.
+      // bar (command or find surface) never steals focus from the input mid-typing.
       const wasVisible = overlay?.getVisible() ?? false;
       const shown = layoutOverlay();
       if (shown && !wasVisible) {
@@ -2168,6 +2393,8 @@ function createWindow(seed: boolean): void {
     }
     views.clear();
     overlay = null;
+    find = closeFind(find);
+    commandBar = { ...commandBar, surface: "bar" };
     // Drop the settings view with the window it was parented to; a later
     // createWindow + settings.open recreates it lazily.
     if (settingsView !== null && !settingsView.webContents.isDestroyed()) {
@@ -2328,6 +2555,50 @@ ipcMain.handle(IPC.zoomIn, (): Promise<void> => zoomActiveTab("in"));
 ipcMain.handle(IPC.zoomOut, (): Promise<void> => zoomActiveTab("out"));
 ipcMain.handle(IPC.zoomReset, (): Promise<void> => zoomActiveTab("reset"));
 ipcMain.handle(IPC.zoomState, (): ZoomState => fullSnapshot().zoom);
+
+// --- Find in page -------------------------------------------------------------
+// open() opens (or re-focuses) a session bound to the active tab and rejects with
+// no active tab; setQuery commits the search text and issues the search (an empty
+// query clears highlights and issues no request); next/previous cycle the
+// directional search (no-ops with an empty query) and reject with no active tab;
+// close() is idempotent; state() reads back the current FindState. Find rides the
+// existing stateChange broadcast on TabsState.find.
+ipcMain.handle(IPC.findOpen, (): void => {
+  if (store.activeTabId === null) {
+    throw new Error("find.open: no active tab");
+  }
+  openFindSession();
+});
+ipcMain.handle(IPC.findSetQuery, (_event, text: string): void => {
+  if (!find.open || store.activeTabId === null) {
+    throw new Error("find.setQuery: no open session");
+  }
+  find = setFindQuery(find, text);
+  if (text.trim().length === 0) {
+    // Empty/whitespace-only query: clear highlights with no request so a delayed
+    // result for the cleared query is rejected; the counter reads 0/0.
+    findBoundView()?.webContents.stopFindInPage("clearSelection");
+  } else {
+    issueFind(text, false, true); // fresh search that selects the first match
+  }
+  broadcast();
+});
+ipcMain.handle(IPC.findNext, (): void => {
+  if (store.activeTabId === null) {
+    throw new Error("find.next: no active tab");
+  }
+  findNext();
+});
+ipcMain.handle(IPC.findPrevious, (): void => {
+  if (store.activeTabId === null) {
+    throw new Error("find.previous: no active tab");
+  }
+  findPrevious();
+});
+ipcMain.handle(IPC.findClose, (): void => {
+  closeFindSession();
+});
+ipcMain.handle(IPC.findState, (): FindState => find);
 
 // --- Settings -----------------------------------------------------------------
 // get() resolves the current in-memory settings slice; setSearchEngine runs the

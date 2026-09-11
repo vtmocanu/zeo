@@ -6,6 +6,7 @@ import type { CommandDescriptor, CommandId } from "./commands.js";
 import type { BlockingState } from "./blocking.js";
 import type { HistoryEntry, HistoryVisit } from "./history.js";
 import type { ZoomState } from "./zoom.js";
+import type { FindState } from "./page-search.js";
 import type { SettingsSectionId, SearchEngineId } from "./settings.js";
 
 /**
@@ -62,6 +63,10 @@ export interface StoreSnapshot extends SpacesState, TabsSlice {}
  * reveal that section must win over a stale local selection). An unrelated
  * broadcast carries the same nonce as the previous one, so it never disturbs the
  * renderer's local keyboard selection.
+ *
+ * `find` carries the single in-page find session (see {@link FindState}) and
+ * rides the `stateChange` broadcast exactly like `zoom` and `settings` — main
+ * attaches it before every broadcast, so it is never absent.
  */
 export interface TabsState extends StoreSnapshot {
   blocking: BlockingState;
@@ -70,6 +75,7 @@ export interface TabsState extends StoreSnapshot {
   settings: Settings;
   settingsSection: SettingsSectionId;
   settingsSectionNonce: number;
+  find: FindState;
 }
 
 /**
@@ -328,6 +334,25 @@ export interface ZoomApi {
 }
 
 /**
+ * In-page find commands the renderer invokes over IPC, handled in main against
+ * the single find session bound to the active tab. `open()` opens a fresh
+ * session (rejects when there is no active tab); `setQuery(text)` commits the
+ * search text and issues the search (an empty query clears highlights);
+ * `next()`/`previous()` cycle the directional search (no-ops with an empty
+ * query); `close()` is idempotent and hides the bar. `state()` reads back the
+ * current {@link FindState}. Find rides the `stateChange` broadcast on
+ * `TabsState.find` — there is no dedicated change channel.
+ */
+export interface FindApi {
+  open(): Promise<void>;
+  setQuery(text: string): Promise<void>;
+  next(): Promise<void>;
+  previous(): Promise<void>;
+  close(): Promise<void>;
+  state(): Promise<FindState>;
+}
+
+/**
  * The full bridge surface exposed on `window.zeo` by the preload script.
  *
  * `onStateChange` registers a listener for main-pushed state updates and
@@ -344,6 +369,7 @@ export interface ZeoApi {
   history: HistoryApi;
   zoom: ZoomApi;
   settings: SettingsApi;
+  find: FindApi;
   onStateChange(listener: (state: TabsState) => void): () => void;
   /** Registers a listener for main-pushed command-bar state updates and returns
    *  an unsubscribe function, mirroring onStateChange. */
@@ -405,6 +431,12 @@ export const IPC = {
   zoomOut: "zeo:zoom:out",
   zoomReset: "zeo:zoom:reset",
   zoomState: "zeo:zoom:state",
+  findOpen: "zeo:find:open",
+  findSetQuery: "zeo:find:set-query",
+  findNext: "zeo:find:next",
+  findPrevious: "zeo:find:previous",
+  findClose: "zeo:find:close",
+  findState: "zeo:find:state",
   settingsGet: "zeo:settings:get",
   settingsSetSearchEngine: "zeo:settings:set-search-engine",
   stateChange: "zeo:state-change",

@@ -36,17 +36,22 @@ const ALL_IDS: CommandId[] = [
   "settings.openGeneral",
   "settings.openProfiles",
   "settings.openHistory",
+  "find.open",
+  "find.next",
+  "find.previous",
+  "find.close",
 ];
 
 /**
- * Builds a command context, defaulting to no active tab, a single space, and a
- * closed settings view.
+ * Builds a command context, defaulting to no active tab, a single space, a
+ * closed settings view, and a closed find session with no query.
  */
 function context(partial: Partial<CommandContext> = {}): CommandContext {
   return {
     activeTab: partial.activeTab === undefined ? null : partial.activeTab,
     spaceCount: partial.spaceCount ?? 1,
     settingsOpen: partial.settingsOpen ?? false,
+    find: partial.find ?? { open: false, hasQuery: false },
   };
 }
 
@@ -305,6 +310,57 @@ describe("zoom commands", () => {
       isCommandEnabled("zoom.reset", context({ activeTab: activeTab({ siteHost: null, zoomFactor: 1.25 }) })),
     ).toBe(false);
     expect(isCommandEnabled("zoom.reset", context({ activeTab: null }))).toBe(false);
+  });
+});
+
+describe("find commands", () => {
+  const findIds = ["find.open", "find.next", "find.previous"] as const;
+
+  test("each is registered exactly once as a view command with its accelerator", () => {
+    for (const [id, accelerator] of [
+      ["find.open", "CmdOrCtrl+F"],
+      ["find.next", "CmdOrCtrl+G"],
+      ["find.previous", "CmdOrCtrl+Shift+G"],
+    ] as const) {
+      const matches = COMMANDS.filter((c) => c.id === id);
+      expect(matches).toHaveLength(1);
+      expect(matches[0]?.menu).toBe("view");
+      expect(matches[0]?.accelerator).toBe(accelerator);
+    }
+  });
+
+  test("the three accelerators are unique across the whole registry", () => {
+    for (const id of findIds) {
+      const accelerator = COMMANDS.find((c) => c.id === id)?.accelerator;
+      expect(COMMANDS.filter((c) => c.accelerator === accelerator)).toHaveLength(1);
+    }
+  });
+
+  test("find.open is enabled with an active tab and disabled with none", () => {
+    expect(isCommandEnabled("find.open", context({ activeTab: activeTab() }))).toBe(true);
+    expect(isCommandEnabled("find.open", context({ activeTab: null }))).toBe(false);
+  });
+
+  test("find.close is registered once with no accelerator and no menu", () => {
+    const matches = COMMANDS.filter((c) => c.id === "find.close");
+    expect(matches).toHaveLength(1);
+    expect(matches[0]?.menu).toBeNull();
+    expect(matches[0]?.accelerator).toBeNull();
+  });
+
+  test("find.close needs the find session open", () => {
+    expect(isCommandEnabled("find.close", context({ find: { open: true, hasQuery: false } }))).toBe(true);
+    expect(isCommandEnabled("find.close", context({ find: { open: true, hasQuery: true } }))).toBe(true);
+    expect(isCommandEnabled("find.close", context({ find: { open: false, hasQuery: false } }))).toBe(false);
+  });
+
+  test("find.next and find.previous need find open with a query", () => {
+    for (const id of ["find.next", "find.previous"] as const) {
+      expect(isCommandEnabled(id, context({ find: { open: true, hasQuery: true } }))).toBe(true);
+      expect(isCommandEnabled(id, context({ find: { open: true, hasQuery: false } }))).toBe(false);
+      expect(isCommandEnabled(id, context({ find: { open: false, hasQuery: true } }))).toBe(false);
+      expect(isCommandEnabled(id, context({ find: { open: false, hasQuery: false } }))).toBe(false);
+    }
   });
 });
 

@@ -9,6 +9,18 @@ milestone, a minor bump only for very large breakthroughs.
 
 ## [Unreleased]
 
+## [0.0.19] - 2026-09-07
+
+### Added
+
+- Find in page: press `Cmd+F` to open a find bar anchored top-right over the
+  active tab; typing highlights every match and a counter tracks the active
+  match and the total. `Enter` / `Cmd+G` cycle forward, `Shift+Enter` /
+  `Cmd+Shift+G` backward, and `Escape` closes the bar and returns focus to the
+  page. The search binds to one tab at a time — switching tabs or opening the
+  command bar closes it; there is no cross-tab search, regex, or match-case
+  toggle. Find state is in-memory only, so no schema change.
+
 ## [0.0.18] - 2026-09-07
 
 ### Added
