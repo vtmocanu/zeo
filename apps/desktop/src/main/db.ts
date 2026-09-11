@@ -34,14 +34,16 @@ import type {
   HistoryEntry,
   HistoryVisit,
   SearchEngineId,
+  Download,
 } from "@zeo/core";
 
 /**
  * The schema: the four core tables (profiles, spaces, tabs, meta), the
  * blocking_allowlist table added at schema version 3, the two history
  * tables (history_entries, history_visits) added at schema version 4, the
- * searchEngine column added at schema version 5, plus the site_zoom table added
- * at schema version 6 — eight tables in all.
+ * searchEngine column added at schema version 5, the site_zoom table added
+ * at schema version 6, plus the downloads table added at schema version 7 —
+ * nine tables in all.
  * The PRIMARY KEYs (no duplicate ids), the foreign
  * keys, and `PRAGMA foreign_keys=ON` are the well-formedness contract the core
  * codec relies on: every on-disk state is guaranteed loadable. `spaces.activeTabId`
@@ -51,6 +53,16 @@ import type {
  */
 const SITE_ZOOM_DDL =
   "CREATE TABLE site_zoom (host TEXT PRIMARY KEY, factor REAL NOT NULL, updatedAt INTEGER NOT NULL);";
+
+/**
+ * The downloads table (schema version 7): one column per {@link Download} field.
+ * `state` is stored as its string; `completedAt` and `spaceId` are nullable; byte
+ * counts and timestamps are integers. Download rows live OUTSIDE the
+ * {@link writeState} full-state flush (like the allowlist, history, and site_zoom
+ * tables) — they are managed only by the dedicated row helpers below.
+ */
+const DOWNLOADS_DDL =
+  "CREATE TABLE downloads (id TEXT PRIMARY KEY, url TEXT NOT NULL, filename TEXT NOT NULL, path TEXT NOT NULL, totalBytes INTEGER NOT NULL, receivedBytes INTEGER NOT NULL, state TEXT NOT NULL, startedAt INTEGER NOT NULL, completedAt INTEGER, spaceId TEXT);";
 
 const DDL = `
 CREATE TABLE profiles (
@@ -89,6 +101,7 @@ CREATE TABLE history_visits (
 CREATE INDEX history_visits_visitedAt ON history_visits(visitedAt);
 CREATE INDEX history_entries_lastVisitedAt ON history_entries(lastVisitedAt);
 ${SITE_ZOOM_DDL}
+${DOWNLOADS_DDL}
 `;
 
 /**
@@ -121,6 +134,7 @@ const MIGRATION_STEPS: Record<number, string> = {
     "ALTER TABLE meta ADD COLUMN searchEngine TEXT NOT NULL DEFAULT 'duckduckgo';" +
     "UPDATE meta SET schemaVersion = 5 WHERE id = 0;",
   6: SITE_ZOOM_DDL + "UPDATE meta SET schemaVersion = 6 WHERE id = 0;",
+  7: DOWNLOADS_DDL + "UPDATE meta SET schemaVersion = 7 WHERE id = 0;",
 };
 
 /** The module-level database handle, `null` until {@link loadStore} opens it. */
@@ -573,6 +587,135 @@ export function upsertSiteZoom(host: string, factor: number, updatedAt: number):
 export function deleteSiteZoom(host: string): void {
   const database = requireDb();
   database.prepare("DELETE FROM site_zoom WHERE host = ?").run(host);
+}
+
+/**
+ * The SQLite shape of a `downloads` row: `state` comes back as a plain string,
+ * `completedAt`/`spaceId` as `number | null` / `string | null`. The DDL above is
+ * the source of truth for these columns.
+ */
+interface DownloadRow {
+  id: string;
+  url: string;
+  filename: string;
+  path: string;
+  totalBytes: number;
+  receivedBytes: number;
+  state: string;
+  startedAt: number;
+  completedAt: number | null;
+  spaceId: string | null;
+}
+
+/** Maps a SQLite `downloads` row to a {@link Download}: the stored `state` string
+ *  is narrowed to the union and the nullable columns stay `null`. */
+function rowToDownload(row: DownloadRow): Download {
+  return {
+    id: row.id,
+    url: row.url,
+    filename: row.filename,
+    path: row.path,
+    totalBytes: row.totalBytes,
+    receivedBytes: row.receivedBytes,
+    state: row.state as Download["state"],
+    startedAt: row.startedAt,
+    completedAt: row.completedAt ?? null,
+    spaceId: row.spaceId ?? null,
+  };
+}
+
+/**
+ * Inserts one download row, then prunes the table to the newest 100 rows by
+ * `startedAt DESC, id DESC`, both in one transaction. The prune keeps the on-disk
+ * table bounded and matches the in-memory 100-cap so disk and memory drop the same
+ * oldest entry. Throws when the database is not open.
+ */
+export function insertDownload(d: Download): void {
+  const database = requireDb();
+  const insert = database.prepare(
+    "INSERT INTO downloads(id,url,filename,path,totalBytes,receivedBytes,state,startedAt,completedAt,spaceId) " +
+      "VALUES (@id,@url,@filename,@path,@totalBytes,@receivedBytes,@state,@startedAt,@completedAt,@spaceId)",
+  );
+  const prune = database.prepare(
+    "DELETE FROM downloads WHERE id NOT IN (SELECT id FROM downloads ORDER BY startedAt DESC, id DESC LIMIT 100)",
+  );
+  const run = database.transaction((download: Download): void => {
+    insert.run(download);
+    prune.run();
+  });
+  run(d);
+}
+
+/**
+ * Updates every mutable column of the download row with id `d.id`. An UPDATE that
+ * matches no row (the id is absent — e.g. a throttled write for a record already
+ * removed) affects zero rows and is a silent no-op. Throws when the database is
+ * not open.
+ */
+export function updateDownload(d: Download): void {
+  const database = requireDb();
+  database
+    .prepare(
+      "UPDATE downloads SET url=@url, filename=@filename, path=@path, totalBytes=@totalBytes, " +
+        "receivedBytes=@receivedBytes, state=@state, startedAt=@startedAt, completedAt=@completedAt, " +
+        "spaceId=@spaceId WHERE id=@id",
+    )
+    .run(d);
+}
+
+/**
+ * Deletes the download row with id `id`; a no-op when the id is absent.
+ * Synchronous (better-sqlite3). Throws when the database is not open.
+ */
+export function deleteDownload(id: string): void {
+  const database = requireDb();
+  database.prepare("DELETE FROM downloads WHERE id = ?").run(id);
+}
+
+/**
+ * Deletes every finished download row (`state` one of the three terminal states),
+ * never touching an active (`progressing`/`paused`) row. Backs
+ * `downloads.clearFinished`. Throws when the database is not open.
+ */
+export function clearFinishedDownloadRows(): void {
+  const database = requireDb();
+  database
+    .prepare(
+      "DELETE FROM downloads WHERE state IN ('completed','cancelled','interrupted')",
+    )
+    .run();
+}
+
+/**
+ * Returns the newest 100 downloads ordered by `startedAt DESC, id DESC` (the same
+ * total order the reducer and prune use), mapped back to {@link Download}s. Feeds
+ * the in-memory `DownloadsState` at startup. Throws when the database is not open.
+ */
+export function listDownloads(): Download[] {
+  const database = requireDb();
+  // SQLite-row boundary: .all() is typed `unknown[]`; the columns are DownloadRow.
+  const rows = database
+    .prepare(
+      "SELECT id,url,filename,path,totalBytes,receivedBytes,state,startedAt,completedAt,spaceId " +
+        "FROM downloads ORDER BY startedAt DESC, id DESC LIMIT 100",
+    )
+    .all() as DownloadRow[];
+  return rows.map(rowToDownload);
+}
+
+/**
+ * Rewrites every active (`progressing`/`paused`) download row to `interrupted`
+ * with its `completedAt` set to `launchTime`. Run once at startup BEFORE
+ * {@link listDownloads} so a download interrupted by a crash or quit is never
+ * shown as still running. Throws when the database is not open.
+ */
+export function markInterruptedDownloadsOnLaunch(launchTime: number): void {
+  const database = requireDb();
+  database
+    .prepare(
+      "UPDATE downloads SET state = 'interrupted', completedAt = @t WHERE state IN ('progressing','paused')",
+    )
+    .run({ t: launchTime });
 }
 
 /**

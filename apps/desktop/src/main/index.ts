@@ -1,7 +1,8 @@
-import { app, BrowserWindow, WebContentsView, clipboard, ipcMain, Menu, session } from "electron";
+import { app, BrowserWindow, WebContentsView, clipboard, ipcMain, Menu, session, shell } from "electron";
 import type { MenuItemConstructorOptions } from "electron";
 import { basename, dirname, join } from "node:path";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import {
   SpaceStore,
@@ -36,6 +37,13 @@ import {
   zoomOut,
   setHostZoom,
   DEFAULT_ZOOM_FACTOR,
+  upsertDownload,
+  removeDownload,
+  clearFinishedDownloads,
+  isFinished,
+  uniqueFilename,
+  safeFilename,
+  stripUrlCredentials,
 } from "@zeo/core";
 import type {
   BlockingState,
@@ -44,6 +52,8 @@ import type {
   CommandContext,
   CommandDescriptor,
   CommandId,
+  Download,
+  DownloadsState,
   HistoryEntry,
   HistoryVisit,
   Profile,
@@ -84,7 +94,23 @@ import {
   readSiteZoom,
   upsertSiteZoom,
   deleteSiteZoom,
+  insertDownload,
+  updateDownload,
+  deleteDownload,
+  clearFinishedDownloadRows,
+  listDownloads,
+  markInterruptedDownloadsOnLaunch,
 } from "./db.js";
+import {
+  removeDownloadSequenced,
+  applyDownloadEvent,
+  createThrottledPersister,
+  terminalizeProfileDownloads,
+} from "./downloads.js";
+import type {
+  ApplyDownloadEventDeps,
+  DownloadRegistryEntry,
+} from "./downloads.js";
 
 // The built main is emitted by electron-vite as ESM (out/main/index.js, the
 // package is "type": "module"), so `__dirname` is not defined — derive it from
@@ -299,6 +325,88 @@ let blockingBroadcastTimer: ReturnType<typeof setTimeout> | null = null;
 const BLOCKING_BROADCAST_MS = 250;
 
 /**
+ * The downloads slice main owns and attaches to every broadcast snapshot. Seeded
+ * empty here and replaced at startup from {@link listDownloads} (after the
+ * interrupted-on-launch sweep). Every later change flows through the reducers.
+ */
+let downloads: DownloadsState = { items: [] };
+/**
+ * The live-item registry: the Electron `DownloadItem` for each ACTIVE download,
+ * keyed by record id, alongside the profile id whose `will-download` fired. The
+ * single mechanism that lets a bridge call by id reach the correct live item; the
+ * entry is added before the record is broadcast and dropped on `done`/teardown.
+ */
+const downloadItems = new Map<string, DownloadRegistryEntry<Electron.DownloadItem>>();
+/**
+ * Ids of downloads removed while still in-flight (the removal guard). A guarded
+ * id's later `updated`/`done` events and any pending throttled write are
+ * suppressed so a live item can never resurrect a removed record; cleared when the
+ * cancelled item's `done` fires.
+ */
+const removedDownloadIds = new Set<string>();
+/**
+ * In-flight basename reservations this launch: a filename resolved by
+ * {@link uniqueFilename} is reserved here so a second concurrent download of the
+ * same name resolves to a distinct path even before the first file exists on disk.
+ * Released when the download reaches a finished state (or on profile teardown).
+ */
+const reservedFilenames = new Set<string>();
+/** Profile ids whose session already carries the `will-download` handler, so a
+ *  repeated {@link installDownloadHandler} is a no-op (one handler per session). */
+const downloadSessionProfiles = new Set<string>();
+/** Coalescing timer for downloads progress broadcasts; `null` when none pending. */
+let downloadsBroadcastTimer: ReturnType<typeof setTimeout> | null = null;
+/** Coalescing window for {@link scheduleDownloadsBroadcast}, in milliseconds. */
+const DOWNLOADS_BROADCAST_MS = 250;
+/** Whether a downloads database error has been logged this launch. */
+let downloadErrorLogged = false;
+
+/**
+ * Logs a downloads database error once per launch and swallows it thereafter, so a
+ * failing download write never breaks a download, the command bar, or navigation.
+ */
+function logDownloadError(err: unknown): void {
+  if (!downloadErrorLogged) {
+    downloadErrorLogged = true;
+    console.error("[downloads] database error; download persistence degraded this launch:", err);
+  }
+}
+
+/** Collaborators for the shared {@link applyDownloadEvent} helper, wired to the
+ *  live in-memory state and the removal guard. */
+const applyDownloadEventDeps: ApplyDownloadEventDeps = {
+  getState: () => downloads,
+  setState: (next) => {
+    downloads = next;
+  },
+  removedDownloadIds,
+};
+
+/**
+ * The per-download throttled row persister (≤ once/sec per download): each write
+ * reads the record LIVE at fire time through the update helper, so it can never
+ * write a state older than the live record, and a guarded (removed) id is skipped.
+ */
+const downloadPersister = createThrottledPersister({
+  getRecord: (id) => downloads.items.find((d) => d.id === id),
+  persist: (record) => {
+    try {
+      updateDownload(record);
+    } catch (err) {
+      logDownloadError(err);
+    }
+  },
+  removedDownloadIds,
+});
+
+/** The downloads directory: the E2E override when `ZEO_E2E === "1"`, else the OS
+ *  downloads folder. Used by `will-download` and `downloads.openFolder`. */
+function downloadsDir(): string {
+  // ZEO_DOWNLOADS_DIR is guaranteed set by the e2e harness when ZEO_E2E === "1".
+  return process.env.ZEO_E2E === "1" ? process.env.ZEO_DOWNLOADS_DIR! : app.getPath("downloads");
+}
+
+/**
  * The Electron sessions for every profile partition (`persist:<profileId>`), the
  * set the blocker attaches to. Derived from the store's profiles on each call so
  * a newly created profile is covered the next time it runs.
@@ -321,6 +429,7 @@ function fullSnapshot(): TabsState {
     settings,
     settingsSection,
     settingsSectionNonce,
+    downloads,
   };
 }
 
@@ -402,6 +511,25 @@ function scheduleBlockingBroadcast(): void {
 }
 
 /**
+ * Pushes a downloads-updated snapshot, coalesced to at most one push per
+ * {@link DOWNLOADS_BROADCAST_MS}. Unlike {@link scheduleBlockingBroadcast} it
+ * routes through {@link broadcast} with `persist: false`, so the renderer `send`
+ * AND {@link refreshCommandState} run (an open downloads-mode bar re-ranks live
+ * and `downloads.clearFinished` enablement refreshes) while the debounced
+ * full-state save is skipped — download rows persist only through their own
+ * throttled update helper and the final flush on `done`.
+ */
+function scheduleDownloadsBroadcast(): void {
+  if (downloadsBroadcastTimer !== null) {
+    return;
+  }
+  downloadsBroadcastTimer = setTimeout(() => {
+    downloadsBroadcastTimer = null;
+    broadcast({ persist: false });
+  }, DOWNLOADS_BROADCAST_MS);
+}
+
+/**
  * Subscribes to the blocker's blocked events: a hit in the reverse index
  * attributes the block to that tab, a miss (a torn-down view or a non-tab
  * renderer) is counted as unattributed so a wrong mapping is visible in tests.
@@ -435,6 +563,148 @@ function attachBlockerToAllSessions(b: Blocker): void {
   for (const s of profileSessions()) {
     b.attach(s);
   }
+}
+
+/**
+ * Installs the `will-download` handler on a profile's `persist:<profileId>`
+ * session, exactly once per profile (guarded by {@link downloadSessionProfiles}).
+ * NOT gated on content blocking — downloads are always captured. Called at the
+ * three sites the blocker attaches (startup, `profilesCreate`, `remapSpaceProfile`),
+ * and the guard makes a repeated call a no-op so no session carries two handlers.
+ *
+ * Each download is saved to {@link downloadsDir} under a sanitized, de-duplicated
+ * basename (so no save dialog shows and the path can never escape the directory),
+ * recorded through {@link upsertDownload}/{@link insertDownload}, registered in
+ * {@link downloadItems} BEFORE the first broadcast, and then tracked via its
+ * `updated`/`done` events through the shared {@link applyDownloadEvent} guards.
+ */
+function installDownloadHandler(profileId: string): void {
+  if (downloadSessionProfiles.has(profileId)) {
+    return;
+  }
+  downloadSessionProfiles.add(profileId);
+  const ses = session.fromPartition("persist:" + profileId);
+  ses.on("will-download", (_event, item, webContents) => {
+    const dir = downloadsDir();
+    // Sanitize BEFORE de-duplicating so setSavePath only ever receives an absolute
+    // path built from a safe basename inside the downloads directory; a reserved
+    // name covers an in-flight download whose file does not exist on disk yet.
+    const filename = uniqueFilename(
+      safeFilename(item.getFilename()),
+      (candidate) => existsSync(join(dir, candidate)) || reservedFilenames.has(candidate),
+    );
+    const path = join(dir, filename);
+    reservedFilenames.add(filename);
+    let record: Download | null = null;
+    try {
+      // setSavePath with an absolute path suppresses the save dialog. A throw here
+      // (or from insertDownload) must leave no record, no row, and no held name.
+      item.setSavePath(path);
+      const tabId = webContentsToTab.get(webContents.id);
+      record = {
+        id: randomUUID(),
+        url: stripUrlCredentials(item.getURL()),
+        filename,
+        path,
+        totalBytes: item.getTotalBytes(),
+        receivedBytes: 0,
+        state: "progressing",
+        startedAt: Date.now(),
+        completedAt: null,
+        // A download whose webContents maps to no live tab gets spaceId null; it is
+        // never dropped.
+        spaceId: tabId !== undefined ? (views.get(tabId)?.spaceId ?? null) : null,
+      };
+      // Register the live item BEFORE broadcasting so a cancel/remove arriving as
+      // soon as the renderer sees the row finds it.
+      downloadItems.set(record.id, { item, profileId });
+      downloads = upsertDownload(downloads, record);
+      insertDownload(record);
+    } catch (err) {
+      if (record !== null) {
+        downloadItems.delete(record.id);
+        downloads = removeDownload(downloads, record.id);
+      }
+      reservedFilenames.delete(filename);
+      logDownloadError(err);
+      return;
+    }
+    broadcast({ persist: false });
+    const id = record.id;
+
+    item.on("updated", () => {
+      const updated = applyDownloadEvent(
+        id,
+        {
+          receivedBytes: item.getReceivedBytes(),
+          // A still-live item is progressing unless explicitly paused (no
+          // pause/resume UI this PRD, so a resumable interrupt maps to progressing).
+          state: item.isPaused() ? "paused" : "progressing",
+        },
+        applyDownloadEventDeps,
+      );
+      if (updated === null) {
+        return; // removal-guarded or already terminal: no mutate/persist/broadcast
+      }
+      scheduleDownloadsBroadcast();
+      downloadPersister.schedule(id);
+    });
+
+    item.on("done", (_doneEvent, state) => {
+      // The throttled write is cancelled regardless; the final value is flushed
+      // below (normal path), bypassing the 1s throttle.
+      downloadPersister.cancel(id);
+      // Removal guard: remove(id) removed this record from memory/disk while it was
+      // in-flight and cancelled the item. Now its done has fired — release the
+      // filename it still held (the reservation is the ONLY one for this name, since
+      // the removed record was never reset), drop the registry entry, and clear the
+      // guard (bounding the set). No persist/broadcast: the record is already gone.
+      if (removedDownloadIds.has(id)) {
+        reservedFilenames.delete(filename);
+        downloadItems.delete(id);
+        removedDownloadIds.delete(id);
+        return;
+      }
+      const finished = applyDownloadEvent(
+        id,
+        {
+          state,
+          completedAt: Date.now(),
+          receivedBytes: item.getReceivedBytes(),
+        },
+        applyDownloadEventDeps,
+      );
+      if (finished === null) {
+        // Teardown-terminalized (finished, not guarded): terminalizeProfileDownloads
+        // already released the filename and dropped the registry entry, so do NOTHING
+        // — a re-release here could steal a new download's reservation of the name.
+        return;
+      }
+      // Normal completion: mutate in-memory (above) → persist → release/drop → broadcast.
+      try {
+        updateDownload(finished);
+      } catch (err) {
+        logDownloadError(err);
+      }
+      reservedFilenames.delete(finished.filename);
+      downloadItems.delete(id);
+      broadcast({ persist: false });
+    });
+  });
+}
+
+/**
+ * Looks up a completed download and opens its file with the OS handler — only when
+ * the record is `completed` AND the file still exists on disk; otherwise a no-op.
+ * The mouse-click path for a `download` suggestion row (the renderer handles the
+ * keyboard open over the bridge).
+ */
+async function openDownloadById(id: string): Promise<void> {
+  const record = downloads.items.find((d) => d.id === id);
+  if (record === undefined || record.state !== "completed" || !existsSync(record.path)) {
+    return;
+  }
+  await shell.openPath(record.path);
 }
 
 /**
@@ -1060,9 +1330,10 @@ function pushCommandBar(): void {
  */
 function commandContextOf(): CommandContext {
   const spaceCount = store.spaces().length;
+  const hasFinishedDownload = downloads.items.some(isFinished);
   const activeTabId = store.activeTabId;
   if (activeTabId === null) {
-    return { activeTab: null, spaceCount, settingsOpen };
+    return { activeTab: null, spaceCount, settingsOpen, hasFinishedDownload };
   }
   const tab = store.list().find((t) => t.id === activeTabId);
   const wc = views.get(activeTabId)?.view.webContents;
@@ -1084,6 +1355,7 @@ function commandContextOf(): CommandContext {
     },
     spaceCount,
     settingsOpen,
+    hasFinishedDownload,
   };
 }
 
@@ -1210,6 +1482,27 @@ const commandHandlers: Record<CommandId, () => void> = {
       pushCommandBar();
     }
   },
+  "downloads.open": () => {
+    if (commandBar.open && commandBar.mode === "downloads") {
+      closeCommandBar();
+    } else {
+      openCommandBar("downloads");
+    }
+  },
+  "downloads.openFolder": () => {
+    void shell.openPath(downloadsDir());
+  },
+  "downloads.clearFinished": () => {
+    downloads = clearFinishedDownloads(downloads);
+    try {
+      clearFinishedDownloadRows();
+    } catch (err) {
+      logDownloadError(err);
+    }
+    // broadcast() mirrors the new DownloadsState and, via refreshCommandState,
+    // re-ranks an open downloads-mode bar and refreshes clearFinished enablement.
+    broadcast();
+  },
   "zoom.in": () => {
     zoomActiveTab("in").catch((err) => console.error("[zoom] zoom.in failed:", err));
   },
@@ -1295,6 +1588,8 @@ function buildCatalog(): SuggestCatalog {
       archivedAt: tab.archivedAt ?? 0,
     })),
     history: historyCandidates(),
+    // suggest only reads this in downloads mode; newest-first, capped at 100.
+    downloads: downloads.items,
   };
 }
 
@@ -1536,6 +1831,12 @@ function performSuggestion(s: Suggestion): void {
       }
       return;
     }
+    case "download": {
+      // Mouse-click open: no-op unless the record is completed and its file still
+      // exists on disk (openDownloadById enforces both). The bar stays open.
+      void openDownloadById(s.id);
+      return;
+    }
     case "navigate":
     case "search":
     case "command": {
@@ -1579,9 +1880,9 @@ function acceptCommandBar(index?: number, revision?: number): void {
   }
   const idx = index ?? commandBar.selectedIndex;
   if (idx === -1) {
-    // Commands mode has no text action: a no-match query simply leaves the bar
-    // open rather than routing to submit (which rejects in commands mode).
-    if (commandBar.mode === "commands") {
+    // Commands and downloads modes have no text action: a no-match query simply
+    // leaves the bar open rather than routing to submit (which rejects anyway).
+    if (commandBar.mode === "commands" || commandBar.mode === "downloads") {
       return;
     }
     submitCommandBar(commandBar.query);
@@ -1604,14 +1905,19 @@ function acceptCommandBar(index?: number, revision?: number): void {
       s.id !== "bar.open-location" &&
       s.id !== "tab.new" &&
       s.id !== "bar.open-commands" &&
-      s.id !== "history.open"
+      s.id !== "history.open" &&
+      s.id !== "downloads.open"
     ) {
       closeCommandBar();
     }
     return;
   }
   performSuggestion(s);
-  closeCommandBar();
+  // A download row click opens the file and keeps the bar open; every other kind
+  // closes it.
+  if (commandBar.mode !== "downloads") {
+    closeCommandBar();
+  }
 }
 
 /** Full close lifecycle: store removal, view teardown, re-activation, broadcast. */
@@ -1779,6 +2085,9 @@ function remapSpaceProfile(spaceId: string, profileId: string): void {
   if (blocking.enabled && blocker) {
     blocker.attach(session.fromPartition("persist:" + profileId));
   }
+  // Capture downloads started on the new partition's session; idempotent per
+  // session, so a profile already carrying the handler is a no-op.
+  installDownloadHandler(profileId);
 
   // Capture the exact tab ids whose views are on the OLD partition, from the LIVE
   // views map filtered by owning space — NOT from tabsOfSpace, which would
@@ -1833,8 +2142,15 @@ function setActive(id: string | null): void {
   }
 }
 
-/** Pushes the current store snapshot to the renderer, then schedules a save. */
-function broadcast(): void {
+/**
+ * Pushes the current store snapshot to the renderer and refreshes command state.
+ * Schedules a debounced full-state save UNLESS `persist` is `false` — the
+ * downloads progress/`updated`/`done` paths pass `{ persist: false }` so a 250 ms
+ * progress tick never triggers a full-state serialization (download rows persist
+ * through their own throttled update helper); every other caller keeps the default
+ * and save behavior is unchanged.
+ */
+function broadcast({ persist = true }: { persist?: boolean } = {}): void {
   const snapshot = fullSnapshot();
   win?.webContents.send(IPC.stateChange, snapshot);
   // The settings view mirrors the same snapshot while it exists (even when
@@ -1842,7 +2158,9 @@ function broadcast(): void {
   if (settingsView !== null) {
     settingsView.webContents.send(IPC.stateChange, snapshot);
   }
-  scheduleSave(store);
+  if (persist) {
+    scheduleSave(store);
+  }
   // Every active-tab/active-space/store change can change command enablement and
   // the pin/unpin menu label, so refresh the menu (and the open bar) here.
   refreshCommandState();
@@ -2382,6 +2700,68 @@ ipcMain.handle(IPC.historyClear, (): void => {
 
 ipcMain.handle(IPC.historyStats, (): { entries: number; visits: number } => historyStats());
 
+// --- Downloads ----------------------------------------------------------------
+// A single trusted global download manager: every handler may act on any record
+// by id, with no per-profile/per-space ownership check. Updates ride the existing
+// stateChange broadcast on TabsState.downloads; there is no separate channel.
+
+ipcMain.handle(IPC.downloadsList, (): Download[] => downloads.items);
+
+ipcMain.handle(IPC.downloadsCancel, (_event, id: string): void => {
+  // Cancel the live item when active; a finished/unknown/absent id is a no-op. A
+  // successful cancel arrives at `done` with `cancelled` through the normal path.
+  const entry = downloadItems.get(id);
+  if (entry !== undefined) {
+    entry.item.cancel();
+  }
+});
+
+ipcMain.handle(IPC.downloadsOpen, async (_event, id: string): Promise<void> => {
+  // Resolve only when the record is completed AND the file still exists; otherwise
+  // reject, changing nothing (the renderer tolerates the reject and keeps the bar).
+  const record = downloads.items.find((d) => d.id === id);
+  if (record === undefined || record.state !== "completed" || !existsSync(record.path)) {
+    throw new Error(`download not openable: ${id}`);
+  }
+  await shell.openPath(record.path);
+});
+
+ipcMain.handle(IPC.downloadsReveal, async (_event, id: string): Promise<void> => {
+  // Show the record's path in Finder when the record exists; an unknown id rejects.
+  const record = downloads.items.find((d) => d.id === id);
+  if (record === undefined) {
+    throw new Error(`download not found: ${id}`);
+  }
+  shell.showItemInFolder(record.path);
+});
+
+ipcMain.handle(IPC.downloadsRemove, (_event, id: string): Promise<void> =>
+  // Commit-first remove through the extracted helper: delete the row, then (only on
+  // success, synchronously) drop from memory, guard+cancel a live item, broadcast.
+  removeDownloadSequenced(id, {
+    getState: () => downloads,
+    setState: (next) => {
+      downloads = next;
+    },
+    deleteRow: (rid) => deleteDownload(rid),
+    downloadItems,
+    removedDownloadIds,
+    broadcast: () => broadcast({ persist: false }),
+  }),
+);
+
+ipcMain.handle(IPC.downloadsClearFinished, (): void => {
+  // Same body as the downloads.clearFinished command: clear memory + finished rows,
+  // then broadcast. Never deletes a file, never touches an active download.
+  downloads = clearFinishedDownloads(downloads);
+  try {
+    clearFinishedDownloadRows();
+  } catch (err) {
+    logDownloadError(err);
+  }
+  broadcast();
+});
+
 // --- Space commands -----------------------------------------------------------
 // The renderer's single UI bridge drives these; tab WebContentsViews have no
 // bridge and cannot dispatch. A thrown Error (unknown/last space) propagates out
@@ -2422,6 +2802,9 @@ ipcMain.handle(IPC.profilesCreate, (_event, name: string): Profile => {
   if (blocking.enabled && blocker) {
     blocker.attach(session.fromPartition("persist:" + profile.id));
   }
+  // Capture downloads started on the new profile's session (always, not gated on
+  // blocking); idempotent per session.
+  installDownloadHandler(profile.id);
   broadcast();
   return profile;
 });
@@ -2434,8 +2817,31 @@ ipcMain.handle(IPC.profilesRename, (_event, id: string, name: string): void => {
 ipcMain.handle(IPC.profilesDelete, async (_event, id: string): Promise<void> => {
   // Throws before any mutation on a rejected delete (default profile, unknown
   // id, or still referenced by a space), so a rejected delete never wipes a
-  // live partition.
+  // live partition and terminalizes nothing.
   store.deleteProfile(id);
+  // The session is about to be cleared out from under any still-active DownloadItem
+  // on this profile, which would then never deliver `done`. Terminalize each such
+  // download deterministically (interrupted, persisted, filename released, item
+  // cancelled, registry entry dropped) BEFORE the broadcast below mirrors the
+  // terminal state and BEFORE the partition is cleared. The finished-record
+  // invariant (not the removal guard) then suppresses the cancel's later events.
+  terminalizeProfileDownloads(id, Date.now(), {
+    getState: () => downloads,
+    setState: (next) => {
+      downloads = next;
+    },
+    updateRow: (record) => {
+      try {
+        updateDownload(record);
+      } catch (err) {
+        logDownloadError(err);
+      }
+    },
+    downloadItems,
+    releaseFilename: (filename) => {
+      reservedFilenames.delete(filename);
+    },
+  });
   broadcast();
   // The profile record is gone, so nothing can reach persist:<id> again — drop
   // its on-disk cookies/storage/cache instead of orphaning them forever.
@@ -2574,6 +2980,17 @@ app.whenReady().then(async () => {
     },
     24 * 60 * 60 * 1000,
   );
+
+  // Seed the in-memory downloads list from disk. The interrupted-on-launch sweep
+  // runs FIRST (before listDownloads) so a download left progressing/paused by a
+  // crash or quit is loaded as interrupted, never shown as still running. A
+  // database error is logged once and leaves an empty list.
+  try {
+    markInterruptedDownloadsOnLaunch(Date.now());
+    downloads = { items: listDownloads() };
+  } catch (err) {
+    logDownloadError(err);
+  }
 
   // --- Content-blocking startup gate (PRD 5.1 §3) --------------------------
   // The ENTIRE startup is wrapped so ANY failure — a bad ZEO_ADBLOCK_FILTERS
@@ -2723,6 +3140,15 @@ app.whenReady().then(async () => {
       "none",
       [...allowlist].sort((a, b) => a.localeCompare(b)),
     );
+  }
+
+  // Install the `will-download` handler on every existing profile's session so
+  // startup profiles capture downloads, exactly once each (the guard makes the
+  // later profilesCreate/remapSpaceProfile calls safe). Placed AFTER the blocking
+  // gate so downloads are still captured even if content-blocking setup failed;
+  // it is independent of the blocker.
+  for (const p of store.profiles()) {
+    installDownloadHandler(p.id);
   }
 
   buildMenu();

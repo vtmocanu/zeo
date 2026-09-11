@@ -6,6 +6,7 @@ import type {
   CommandBarState,
   CommandDescriptor,
   CommandId,
+  Download,
   HistoryEntry,
   HistoryVisit,
   Profile,
@@ -95,6 +96,14 @@ const api = {
     clear: (): Promise<void> => ipcRenderer.invoke(IPC.historyClear),
     stats: (): Promise<{ entries: number; visits: number }> =>
       ipcRenderer.invoke(IPC.historyStats),
+  },
+  downloads: {
+    list: (): Promise<Download[]> => ipcRenderer.invoke(IPC.downloadsList),
+    cancel: (id: string): Promise<void> => ipcRenderer.invoke(IPC.downloadsCancel, id),
+    open: (id: string): Promise<void> => ipcRenderer.invoke(IPC.downloadsOpen, id),
+    reveal: (id: string): Promise<void> => ipcRenderer.invoke(IPC.downloadsReveal, id),
+    remove: (id: string): Promise<void> => ipcRenderer.invoke(IPC.downloadsRemove, id),
+    clearFinished: (): Promise<void> => ipcRenderer.invoke(IPC.downloadsClearFinished),
   },
   settings: {
     get: (): Promise<Settings> => ipcRenderer.invoke(IPC.settingsGet),
