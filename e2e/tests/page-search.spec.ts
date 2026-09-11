@@ -7,60 +7,14 @@ import { join } from "node:path";
 import { createServer } from "node:http";
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
+import type { CommandBarMode, CommandBarState, FindState, Tab, ZeoApi } from "@zeo/core";
 
 // Absolute path to the built Electron main entry, resolved from this test file
 // (e2e is ESM, so no __dirname). Layout mirrors blocking.spec.ts / app.spec.ts:
 // e2e/tests -> repo root is two levels up, then the desktop app's build output.
 const mainPath = fileURLToPath(new URL("../../apps/desktop/out/main/index.js", import.meta.url));
 
-// --- Minimal typed view of the preload-injected `window.zeo` bridge. ------------
-// e2e deliberately does NOT depend on @zeo/core; we redeclare only the slice these
-// find-in-page tests touch (structurally compatible with @zeo/core's ZeoApi).
-interface BridgeTab {
-  id: string;
-  url: string;
-}
-interface BridgeState {
-  tabs: { id: string }[];
-  activeTabId: string | null;
-}
-// PRD 6.3 — the in-page find session slice, exactly as main returns it over
-// IPC.findState (and rides TabsState.find on the stateChange broadcast). Only
-// `open`/`activeMatch`/`matchCount`/`tabId` are load-bearing here; the full six
-// fields are redeclared like the rest of this bridge.
-interface FindStateShape {
-  open: boolean;
-  query: string;
-  activeMatch: number;
-  matchCount: number;
-  tabId: string | null;
-  activeRequestId: number | null;
-}
-// PRD 4.4 — only the `open` flag of the command-bar state is load-bearing for the
-// find/command-bar mutual-exclusion case below.
-interface CommandBarStateShape {
-  open: boolean;
-}
-interface ZeoBridge {
-  tabs: {
-    create(url?: string): Promise<BridgeTab>;
-    activate(id: string): Promise<void>;
-    list(): Promise<BridgeState>;
-  };
-  commandBar: {
-    open(mode: string): Promise<void>;
-    close(): Promise<void>;
-    state(): Promise<CommandBarStateShape>;
-  };
-  find: {
-    open(): Promise<void>;
-    setQuery(text: string): Promise<void>;
-    next(): Promise<void>;
-    previous(): Promise<void>;
-    close(): Promise<void>;
-    state(): Promise<FindStateShape>;
-  };
-}
+type ZeoBridge = Pick<ZeoApi, "tabs" | "commandBar" | "find">;
 
 // The fixture page: its VISIBLE body contains the word `needle` EXACTLY three
 // times and nowhere else — not in the <title>, an attribute, or a hidden node —
@@ -202,7 +156,7 @@ async function tabWindow(app: ElectronApplication, urlSubstring: string): Promis
 // --- Bridge helpers, each a live invoke round trip over the sidebar page. --------
 // The cast helper is inlined at each call site because module-scope functions are
 // not in scope in the serialized `page.evaluate` browser context.
-function findState(sidebar: Page): Promise<FindStateShape> {
+function findState(sidebar: Page): Promise<FindState> {
   return sidebar.evaluate(() => {
     const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
     return zeo.find.state();
@@ -237,14 +191,14 @@ function closeFind(sidebar: Page): Promise<void> {
   });
 }
 
-function commandBarState(sidebar: Page): Promise<CommandBarStateShape> {
+function commandBarState(sidebar: Page): Promise<CommandBarState> {
   return sidebar.evaluate(() => {
     const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
     return zeo.commandBar.state();
   });
 }
 
-function openCommandBar(sidebar: Page, mode: string): Promise<void> {
+function openCommandBar(sidebar: Page, mode: CommandBarMode): Promise<void> {
   return sidebar.evaluate((m) => {
     const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
     return zeo.commandBar.open(m);
@@ -258,7 +212,7 @@ function closeCommandBar(sidebar: Page): Promise<void> {
   });
 }
 
-function createTab(sidebar: Page, url: string): Promise<BridgeTab> {
+function createTab(sidebar: Page, url: string): Promise<Tab> {
   return sidebar.evaluate((u) => {
     const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
     return zeo.tabs.create(u);
@@ -290,11 +244,6 @@ async function waitForFixtureCommit(app: ElectronApplication, port: number): Pro
       { message: "expected the fixture tab's view to commit the loopback page" },
     )
     .toBe(true);
-}
-
-/** Give any async overlay focus/blur a chance to settle before a negative read. */
-async function settle(ms: number): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 // A single Electron launch shared across the cases (cold start under xvfb/docker
@@ -464,18 +413,17 @@ test.describe.serial("PRD 6.3 find in page (offline)", () => {
     await openCommandBar(sidebar, "navigate");
     // Find closes on the surface switch...
     await expect.poll(async () => (await findState(sidebar)).open).toBe(false);
-    // ...and the command bar must NOT have blur-closed itself. Let any async
-    // overlay blur settle, then assert the bar is (still) open and find is closed.
-    await settle(500);
+    // ...and the command bar must NOT have blur-closed itself: its input holds
+    // focus and the bar is (still) open.
+    await expect(overlay.getByTestId("command-bar-input")).toBeFocused();
     expect((await commandBarState(sidebar)).open).toBe(true);
     expect((await findState(sidebar)).open).toBe(false);
 
     // --- Reverse: with the command bar open, open find. ---
     await openFind(sidebar);
     await expect.poll(async () => (await findState(sidebar)).open).toBe(true);
-    await settle(500);
+    await expect(overlay.getByTestId("find-input")).toBeFocused();
     expect((await commandBarState(sidebar)).open).toBe(false);
     expect((await findState(sidebar)).open).toBe(true);
-    await expect(overlay.getByTestId("find-input")).toBeVisible();
   });
 });

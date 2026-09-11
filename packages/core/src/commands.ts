@@ -39,7 +39,8 @@ export type CommandId =
   | "settings.openHistory"
   | "find.open"
   | "find.next"
-  | "find.previous";
+  | "find.previous"
+  | "find.close";
 
 /**
  * One registry entry: its {@link CommandId}, human title, search `keywords`,
@@ -118,6 +119,7 @@ export const COMMANDS: readonly CommandDescriptor[] = [
   { id: "find.open", title: "Find in Page", keywords: ["find", "search", "page", "text"], accelerator: "CmdOrCtrl+F", menu: "view" },
   { id: "find.next", title: "Find Next", keywords: ["find", "next", "search"], accelerator: "CmdOrCtrl+G", menu: "view" },
   { id: "find.previous", title: "Find Previous", keywords: ["find", "previous", "search"], accelerator: "CmdOrCtrl+Shift+G", menu: "view" },
+  { id: "find.close", title: "Close Find", keywords: ["find", "close", "search"], accelerator: null, menu: null },
 ];
 
 /**
@@ -193,6 +195,8 @@ export function isCommandEnabled(id: CommandId, context: CommandContext): boolea
     case "find.next":
     case "find.previous":
       return context.find.open && context.find.hasQuery;
+    case "find.close":
+      return context.find.open;
     default: {
       const exhaustive: never = id;
       return exhaustive;

@@ -39,6 +39,7 @@ const ALL_IDS: CommandId[] = [
   "find.open",
   "find.next",
   "find.previous",
+  "find.close",
 ];
 
 /**
@@ -338,6 +339,19 @@ describe("find commands", () => {
   test("find.open is enabled with an active tab and disabled with none", () => {
     expect(isCommandEnabled("find.open", context({ activeTab: activeTab() }))).toBe(true);
     expect(isCommandEnabled("find.open", context({ activeTab: null }))).toBe(false);
+  });
+
+  test("find.close is registered once with no accelerator and no menu", () => {
+    const matches = COMMANDS.filter((c) => c.id === "find.close");
+    expect(matches).toHaveLength(1);
+    expect(matches[0]?.menu).toBeNull();
+    expect(matches[0]?.accelerator).toBeNull();
+  });
+
+  test("find.close needs the find session open", () => {
+    expect(isCommandEnabled("find.close", context({ find: { open: true, hasQuery: false } }))).toBe(true);
+    expect(isCommandEnabled("find.close", context({ find: { open: true, hasQuery: true } }))).toBe(true);
+    expect(isCommandEnabled("find.close", context({ find: { open: false, hasQuery: false } }))).toBe(false);
   });
 
   test("find.next and find.previous need find open with a query", () => {

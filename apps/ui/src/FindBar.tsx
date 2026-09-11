@@ -27,6 +27,7 @@ import "./App.css";
  */
 export function FindBar() {
   const [value, setValue] = useState("");
+  const userEditedRef = useRef(false);
   // The counter reflects the pushed find state, not local input state.
   const [activeMatch, setActiveMatch] = useState(0);
   const [matchCount, setMatchCount] = useState(0);
@@ -54,7 +55,9 @@ export function FindBar() {
       .state()
       .then((find) => {
         applyCounter(find);
-        setValue(find.query);
+        if (!userEditedRef.current) {
+          setValue(find.query);
+        }
       })
       .catch(() => {});
     return unsubscribe;
@@ -107,6 +110,7 @@ export function FindBar() {
    */
   const onChange = (event: ReactChangeEvent<HTMLInputElement>): void => {
     const text = event.target.value;
+    userEditedRef.current = true;
     setValue(text);
     if (debounceRef.current !== null) {
       clearTimeout(debounceRef.current);

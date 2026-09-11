@@ -1294,6 +1294,7 @@ const commandHandlers: Record<CommandId, () => void> = {
   "find.open": () => openFindSession(),
   "find.next": () => findNext(),
   "find.previous": () => findPrevious(),
+  "find.close": () => closeFindSession(),
 };
 
 /**
@@ -2392,6 +2393,8 @@ function createWindow(seed: boolean): void {
     }
     views.clear();
     overlay = null;
+    find = closeFind(find);
+    commandBar = { ...commandBar, surface: "bar" };
     // Drop the settings view with the window it was parented to; a later
     // createWindow + settings.open recreates it lazily.
     if (settingsView !== null && !settingsView.webContents.isDestroyed()) {
