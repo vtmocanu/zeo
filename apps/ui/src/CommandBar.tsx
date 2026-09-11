@@ -30,6 +30,8 @@ function iconFor(suggestion: Suggestion): string {
       return "⚡";
     case "history":
       return "🕘";
+    case "download":
+      return "⬇";
   }
 }
 
@@ -48,6 +50,8 @@ function primaryText(suggestion: Suggestion): string {
       return suggestion.title;
     case "history":
       return suggestion.title;
+    case "download":
+      return suggestion.filename;
   }
 }
 
@@ -74,6 +78,10 @@ function secondaryText(suggestion: Suggestion): string {
       return "";
     case "command":
       return "Command";
+    case "download":
+      // The core already formats a human-readable `detail` (sizes, percentage,
+      // or terminal-state label); surface it verbatim — do NOT reparse as a url.
+      return suggestion.detail;
   }
 }
 
@@ -180,10 +188,27 @@ export function CommandBar() {
    * query when the list is empty, so row-0 / empty-list behavior is preserved;
    * the arrows ask main to move the selection. In `history` mode, `Cmd+Backspace`
    * on the selected history row deletes that url from history and re-queries so
-   * the row disappears while the bar stays open.
+   * the row disappears while the bar stays open. In `downloads` mode on a
+   * selected `download` row, Enter opens the file, `Cmd+Enter` reveals it in
+   * Finder, and `Cmd+Backspace` removes the record (re-querying so the row drops
+   * out); each reaches `window.zeo.downloads` directly instead of `accept`, and a
+   * rejected bridge call is swallowed so the bar stays open.
    */
   const onKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>): void => {
     if (event.key === "Enter") {
+      // Downloads mode is download-only: Enter/Cmd+Enter act on the selected
+      // download via the bridge and never fall through to `accept` (the bar must
+      // stay open; a non-openable item's reject is a swallowed no-op).
+      const row = suggestions[selectedIndex];
+      if (mode === "downloads" && row?.kind === "download") {
+        event.preventDefault();
+        if (event.metaKey) {
+          void window.zeo?.downloads.reveal(row.id).catch(() => {});
+        } else {
+          void window.zeo?.downloads.open(row.id).catch(() => {});
+        }
+        return;
+      }
       event.preventDefault();
       void window.zeo?.commandBar.accept().catch(() => {});
     } else if (event.key === "Escape") {
@@ -205,6 +230,14 @@ export function CommandBar() {
         event.preventDefault();
         void window.zeo?.history
           .deleteUrl(row.url)
+          .then(() => window.zeo?.commandBar.setQuery(value))
+          .catch(() => {});
+      } else if (mode === "downloads" && row?.kind === "download") {
+        // Remove the selected download record, then re-query the same text so it
+        // drops out and the bar stays open; main re-ranks and resets selection.
+        event.preventDefault();
+        void window.zeo?.downloads
+          .remove(row.id)
           .then(() => window.zeo?.commandBar.setQuery(value))
           .catch(() => {});
       }
@@ -242,7 +275,9 @@ export function CommandBar() {
             ? "Run a command"
             : mode === "history"
               ? "Search history"
-              : "Search or enter address"
+              : mode === "downloads"
+                ? "Filter downloads"
+                : "Search or enter address"
         }
         spellCheck={false}
         autoComplete="off"

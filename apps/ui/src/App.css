@@ -408,6 +408,23 @@ body {
   outline-offset: -2px;
 }
 
+/*
+ * Downloads footer indicator. Reuses the footer-button base; the --active
+ * modifier (at least one progressing/paused download) brightens the label and
+ * tints it with the accent so live progress stands out from the idle count.
+ */
+.downloads-indicator {
+  color: #a0a0b4;
+}
+
+.downloads-indicator--active {
+  color: #e6e6ee;
+}
+
+.downloads-indicator--active:hover {
+  color: #c4c4ff;
+}
+
 /* Its own scroll so a long archive never pushes the toggle off-screen. */
 .archived-view {
   max-height: 40vh;

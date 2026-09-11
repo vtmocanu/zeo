@@ -515,6 +515,7 @@ export function App() {
       allowlist: [],
     },
     zoom: { byHost: {} },
+    downloads: { items: [] },
   });
   const [showArchived, setShowArchived] = useState(false);
   const [now, setNow] = useState(() => Date.now());
@@ -719,6 +720,30 @@ export function App() {
   const showPinned = pinned.length > 0 || isDragging;
   const showUnpinned = unpinned.length > 0 || isDragging;
 
+  // Sidebar footer downloads indicator — reads the broadcast `downloads` slice
+  // only (no forked state). "Active" is progressing-or-paused; aggregate progress
+  // is sum(receivedBytes) / sum(totalBytes) across active downloads, shown as a
+  // percentage. When every active download has an unknown total (totalBytes 0)
+  // the sum is 0 and the indicator goes indeterminate; the percentage is clamped
+  // to 100 since an unknown-total item can still contribute received bytes.
+  const downloadItems = state.downloads.items;
+  const activeDownloads = downloadItems.filter(
+    (d) => d.state === "progressing" || d.state === "paused",
+  );
+  const downloadsReceived = activeDownloads.reduce(
+    (sum, d) => sum + d.receivedBytes,
+    0,
+  );
+  const downloadsTotal = activeDownloads.reduce(
+    (sum, d) => sum + d.totalBytes,
+    0,
+  );
+  const downloadsIndeterminate = downloadsTotal === 0;
+  const downloadsPercent =
+    downloadsTotal > 0
+      ? Math.min(100, Math.round((downloadsReceived / downloadsTotal) * 100))
+      : 0;
+
   return (
     <aside
       className={`sidebar${isDragging ? " sidebar--dragging" : ""}`}
@@ -826,6 +851,24 @@ export function App() {
       )}
 
       <footer className="sidebar__footer">
+        {downloadItems.length > 0 && (
+          <button
+            type="button"
+            className={`sidebar__footer-button downloads-indicator${
+              activeDownloads.length > 0 ? " downloads-indicator--active" : ""
+            }`}
+            data-testid="downloads-indicator"
+            onClick={() =>
+              void window.zeo?.commands.run("downloads.open").catch(() => {})
+            }
+          >
+            {activeDownloads.length > 0
+              ? downloadsIndeterminate
+                ? `Downloading ${activeDownloads.length}…`
+                : `Downloading ${activeDownloads.length} · ${downloadsPercent}%`
+              : `Downloads (${downloadItems.length})`}
+          </button>
+        )}
         <button
           type="button"
           className="sidebar__footer-button"
