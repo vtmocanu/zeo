@@ -3149,6 +3149,13 @@ test.describe("zeo desktop app", () => {
     "settings.openGeneral",
     "settings.openProfiles",
     "settings.openHistory",
+    // PRD 6.2 — downloads.open / downloads.openFolder are always-enabled view
+    // commands appended after settings.openHistory in the registry, so they
+    // trail the commands-mode list in registry order. (downloads.clearFinished
+    // needs a finished download, of which a fresh launch has none, so it is not
+    // listed here.)
+    "downloads.open",
+    "downloads.openFolder",
   ];
 
   // §5 bullet 1 — commands mode opens empty, lists only enabled command rows in
