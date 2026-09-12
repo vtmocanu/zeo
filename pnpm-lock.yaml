@@ -16,7 +16,7 @@ importers:
         version: 10.0.1(eslint@10.9.1)
       '@types/node':
         specifier: ^24.5.2
-        version: 24.13.3
+        version: 24.13.4
       eslint:
         specifier: ^10.0.0
         version: 10.9.1
@@ -56,22 +56,22 @@ importers:
         version: 9.6.0
       '@types/node':
         specifier: ^24.5.2
-        version: 24.13.3
+        version: 24.13.4
       electron:
         specifier: 44.0.0
         version: 44.0.0
       electron-vite:
         specifier: ^5.0.0
-        version: 5.0.0(vite@8.2.2(@types/node@24.13.3)(esbuild@0.28.2))
+        version: 5.0.0(vite@8.2.2(@types/node@24.13.4)(esbuild@0.28.2))
       typescript:
         specifier: ^5.9.2
         version: 5.9.3
       vite:
         specifier: ^8.0.0
-        version: 8.2.2(@types/node@24.13.3)(esbuild@0.28.2)
+        version: 8.2.2(@types/node@24.13.4)(esbuild@0.28.2)
       vitest:
         specifier: ^4.0.0
-        version: 4.1.11(@types/node@24.13.3)(vite@8.2.2(@types/node@24.13.3)(esbuild@0.28.2))
+        version: 4.1.11(@types/node@24.13.4)(vite@8.2.2(@types/node@24.13.4)(esbuild@0.28.2))
 
   apps/ui:
     dependencies:
@@ -93,13 +93,13 @@ importers:
         version: 19.2.5(@types/react@19.2.18)
       '@vitejs/plugin-react':
         specifier: ^5.0.3
-        version: 5.2.0(vite@8.2.2(@types/node@24.13.3)(esbuild@0.28.2))
+        version: 5.2.0(vite@8.2.2(@types/node@24.13.4)(esbuild@0.28.2))
       typescript:
         specifier: ^5.9.2
         version: 5.9.3
       vite:
         specifier: ^8.0.0
-        version: 8.2.2(@types/node@24.13.3)(esbuild@0.28.2)
+        version: 8.2.2(@types/node@24.13.4)(esbuild@0.28.2)
 
   e2e:
     devDependencies:
@@ -108,7 +108,7 @@ importers:
         version: 1.62.1
       '@types/node':
         specifier: ^24.5.2
-        version: 24.13.3
+        version: 24.13.4
       '@zeo/core':
         specifier: workspace:*
         version: link:../packages/core
@@ -130,7 +130,7 @@ importers:
     devDependencies:
       '@types/node':
         specifier: ^24.5.2
-        version: 24.13.3
+        version: 24.13.4
       electron:
         specifier: 44.0.0
         version: 44.0.0
@@ -139,19 +139,19 @@ importers:
         version: 5.9.3
       vitest:
         specifier: ^4.0.0
-        version: 4.1.11(@types/node@24.13.3)(vite@8.2.2(@types/node@24.13.3)(esbuild@0.28.2))
+        version: 4.1.11(@types/node@24.13.4)(vite@8.2.2(@types/node@24.13.4)(esbuild@0.28.2))
 
   packages/core:
     devDependencies:
       '@types/node':
         specifier: ^24.5.2
-        version: 24.13.3
+        version: 24.13.4
       typescript:
         specifier: ^5.9.2
         version: 5.9.3
       vitest:
         specifier: ^4.0.0
-        version: 4.1.11(@types/node@24.13.3)(vite@8.2.2(@types/node@24.13.3)(esbuild@0.28.2))
+        version: 4.1.11(@types/node@24.13.4)(vite@8.2.2(@types/node@24.13.4)(esbuild@0.28.2))
 
 packages:
 
@@ -822,8 +822,8 @@ packages:
   '@types/json-schema@7.0.15':
     resolution: {integrity: sha512-5+fP8P8MFNC+AyZCDxrB2pkZFPGzqQWUzpSeuuVLvm8VMcorNYavBqoFcxK8bQz4Qsbn4oUEEem4wDLfcysGHA==}
 
-  '@types/node@24.13.3':
-    resolution: {integrity: sha512-Dh8vAsV36ig5wa9OX4pXvMc9D3Veibfw2wix0CUwYODLD8nkj9UsLjASr49nPg+2eKzxhBV+v7L8pXvT4e639Q==}
+  '@types/node@24.13.4':
+    resolution: {integrity: sha512-YJ7EqCstVTzIr0fMr7qul/977en+pQHrfmuKIo6Zr9i75Be21dr3MovcfvGtyvi2HAUrRerWps5sMO9I7WaxDw==}
 
   '@types/react-dom@19.2.5':
     resolution: {integrity: sha512-fMPwH9v7r/pp43yUd2/Mbiex5KouJwwR3dzHkhLREUC6764VyDsqxhAxv6OFEYR1RhjOyD1naqba8ECDBe7ZQg==}
@@ -2087,7 +2087,7 @@ snapshots:
 
   '@types/better-sqlite3@9.6.0':
     dependencies:
-      '@types/node': 24.13.3
+      '@types/node': 24.13.4
 
   '@types/chai@5.2.3':
     dependencies:
@@ -2102,7 +2102,7 @@ snapshots:
 
   '@types/json-schema@7.0.15': {}
 
-  '@types/node@24.13.3':
+  '@types/node@24.13.4':
     dependencies:
       undici-types: 7.18.2
 
@@ -2205,7 +2205,7 @@ snapshots:
       '@typescript-eslint/types': 8.68.0
       eslint-visitor-keys: 5.0.1
 
-  '@vitejs/plugin-react@5.2.0(vite@8.2.2(@types/node@24.13.3)(esbuild@0.28.2))':
+  '@vitejs/plugin-react@5.2.0(vite@8.2.2(@types/node@24.13.4)(esbuild@0.28.2))':
     dependencies:
       '@babel/core': 7.29.7
       '@babel/plugin-transform-react-jsx-self': 7.29.7(@babel/core@7.29.7)
@@ -2213,7 +2213,7 @@ snapshots:
       '@rolldown/pluginutils': 1.0.0-rc.3
       '@types/babel__core': 7.20.5
       react-refresh: 0.18.0
-      vite: 8.2.2(@types/node@24.13.3)(esbuild@0.28.2)
+      vite: 8.2.2(@types/node@24.13.4)(esbuild@0.28.2)
     transitivePeerDependencies:
       - supports-color
 
@@ -2226,13 +2226,13 @@ snapshots:
       chai: 6.2.2
       tinyrainbow: 3.1.1
 
-  '@vitest/mocker@4.1.11(vite@8.2.2(@types/node@24.13.3)(esbuild@0.28.2))':
+  '@vitest/mocker@4.1.11(vite@8.2.2(@types/node@24.13.4)(esbuild@0.28.2))':
     dependencies:
       '@vitest/spy': 4.1.11
       estree-walker: 3.0.3
       magic-string: 0.30.21
     optionalDependencies:
-      vite: 8.2.2(@types/node@24.13.3)(esbuild@0.28.2)
+      vite: 8.2.2(@types/node@24.13.4)(esbuild@0.28.2)
 
   '@vitest/pretty-format@4.1.11':
     dependencies:
@@ -2319,7 +2319,7 @@ snapshots:
 
   electron-to-chromium@1.5.416: {}
 
-  electron-vite@5.0.0(vite@8.2.2(@types/node@24.13.3)(esbuild@0.28.2)):
+  electron-vite@5.0.0(vite@8.2.2(@types/node@24.13.4)(esbuild@0.28.2)):
     dependencies:
       '@babel/core': 7.29.7
       '@babel/plugin-transform-arrow-functions': 7.29.7(@babel/core@7.29.7)
@@ -2327,7 +2327,7 @@ snapshots:
       esbuild: 0.25.12
       magic-string: 0.30.21
       picocolors: 1.1.1
-      vite: 8.2.2(@types/node@24.13.3)(esbuild@0.28.2)
+      vite: 8.2.2(@types/node@24.13.4)(esbuild@0.28.2)
     transitivePeerDependencies:
       - supports-color
 
@@ -2335,7 +2335,7 @@ snapshots:
     dependencies:
       '@electron-internal/extract-zip': 1.0.5
       '@electron/get': 5.1.0
-      '@types/node': 24.13.3
+      '@types/node': 24.13.4
     transitivePeerDependencies:
       - supports-color
 
@@ -2790,7 +2790,7 @@ snapshots:
     dependencies:
       punycode: 2.3.1
 
-  vite@8.2.2(@types/node@24.13.3)(esbuild@0.28.2):
+  vite@8.2.2(@types/node@24.13.4)(esbuild@0.28.2):
     dependencies:
       lightningcss: 1.33.0
       picomatch: 4.0.7
@@ -2798,14 +2798,14 @@ snapshots:
       rolldown: 1.2.6
       tinyglobby: 0.2.17
     optionalDependencies:
-      '@types/node': 24.13.3
+      '@types/node': 24.13.4
       esbuild: 0.28.2
       fsevents: 2.3.3
 
-  vitest@4.1.11(@types/node@24.13.3)(vite@8.2.2(@types/node@24.13.3)(esbuild@0.28.2)):
+  vitest@4.1.11(@types/node@24.13.4)(vite@8.2.2(@types/node@24.13.4)(esbuild@0.28.2)):
     dependencies:
       '@vitest/expect': 4.1.11
-      '@vitest/mocker': 4.1.11(vite@8.2.2(@types/node@24.13.3)(esbuild@0.28.2))
+      '@vitest/mocker': 4.1.11(vite@8.2.2(@types/node@24.13.4)(esbuild@0.28.2))
       '@vitest/pretty-format': 4.1.11
       '@vitest/runner': 4.1.11
       '@vitest/snapshot': 4.1.11
@@ -2822,10 +2822,10 @@ snapshots:
       tinyexec: 1.3.0
       tinyglobby: 0.2.17
       tinyrainbow: 3.1.1
-      vite: 8.2.2(@types/node@24.13.3)(esbuild@0.28.2)
+      vite: 8.2.2(@types/node@24.13.4)(esbuild@0.28.2)
       why-is-node-running: 2.3.0
     optionalDependencies:
-      '@types/node': 24.13.3
+      '@types/node': 24.13.4
     transitivePeerDependencies:
       - msw
 
