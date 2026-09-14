@@ -185,6 +185,11 @@ describe("safeFilename", () => {
     expect(safeFilename("re\u0000port\u001f.bin\u007f")).toBe("report.bin");
   });
 
+  test("replaces Windows-forbidden characters with underscores", () => {
+    expect(safeFilename("report:2026.pdf")).toBe("report_2026.pdf");
+    expect(safeFilename('a<b>c:d"e|f?g*h.txt')).toBe("a_b_c_d_e_f_g_h.txt");
+  });
+
   test("maps empty, whitespace-only, '.' and '..' to the default name", () => {
     expect(safeFilename("")).toBe("download");
     expect(safeFilename("   ")).toBe("download");

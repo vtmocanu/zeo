@@ -191,7 +191,8 @@ const CONTROL_CHARS_RE = /[\u0000-\u001F\u007F]/g;
 /**
  * Reduces a response-derived suggested filename to a safe basename, pure and
  * I/O-free. It discards everything up to and including the last `/` or `\`,
- * strips NUL and other control characters, trims trailing dots and spaces, and
+ * strips NUL and other control characters, replaces the Windows-forbidden
+ * characters `< > : " | ? *` with `_`, trims trailing dots and spaces, and
  * maps an empty, whitespace-only, `.`, or `..` result to `download`. A bare
  * platform-reserved name (`CON`, `NUL`, `PRN`, `AUX`, `COM1`–`COM9`,
  * `LPT1`–`LPT9`, case-insensitive, ignoring an extension) is neutralized with a
@@ -204,6 +205,7 @@ export function safeFilename(name: string): string {
     base = base.slice(lastSep + 1);
   }
   base = base.replace(CONTROL_CHARS_RE, "");
+  base = base.replace(/[<>:"|?*]/g, "_");
   base = base.replace(/[. ]+$/, "");
   if (base === "" || base === "." || base === "..") {
     return DEFAULT_FILENAME;
