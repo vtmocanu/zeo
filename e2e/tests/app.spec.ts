@@ -3156,6 +3156,11 @@ test.describe("zeo desktop app", () => {
     // listed here.)
     "downloads.open",
     "downloads.openFolder",
+    // PRD 6.3 — find.open is menu:"view" and enabled whenever there is an active
+    // tab, so it trails the registry (after the downloads view commands) and
+    // closes out the commands-mode list. find.next/find.previous are disabled
+    // while find is closed (which it is here), so they do NOT appear.
+    "find.open",
   ];
 
   // §5 bullet 1 — commands mode opens empty, lists only enabled command rows in

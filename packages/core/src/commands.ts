@@ -39,7 +39,11 @@ export type CommandId =
   | "settings.openHistory"
   | "downloads.open"
   | "downloads.openFolder"
-  | "downloads.clearFinished";
+  | "downloads.clearFinished"
+  | "find.open"
+  | "find.next"
+  | "find.previous"
+  | "find.close";
 
 /**
  * One registry entry: its {@link CommandId}, human title, search `keywords`,
@@ -63,8 +67,10 @@ export interface CommandDescriptor {
  * (`TabsState.zoom.byHost[siteHost]`, or `1.0`/{@link DEFAULT_ZOOM_FACTOR} when
  * the host has no entry or the tab is non-http(s)) — or `null` when no tab is
  * active; the number of spaces; `settingsOpen`, whether the settings view is
- * currently open; and `hasFinishedDownload`, whether at least one finished
- * download exists (which gates `downloads.clearFinished`).
+ * currently open; `hasFinishedDownload`, whether at least one finished
+ * download exists (which gates `downloads.clearFinished`); and `find`, whether
+ * the find session is `open` and whether it currently `hasQuery` (a non-empty
+ * committed query), which gate the directional find commands.
  */
 export interface CommandContext {
   activeTab: {
@@ -78,6 +84,7 @@ export interface CommandContext {
   spaceCount: number;
   settingsOpen: boolean;
   hasFinishedDownload: boolean;
+  find: { open: boolean; hasQuery: boolean };
 }
 
 /**
@@ -117,6 +124,10 @@ export const COMMANDS: readonly CommandDescriptor[] = [
   { id: "downloads.open", title: "Show Downloads", keywords: ["download", "downloads", "files", "saved"], accelerator: "CmdOrCtrl+Shift+J", menu: "view" },
   { id: "downloads.openFolder", title: "Open Downloads Folder", keywords: ["download", "downloads", "folder", "finder"], accelerator: null, menu: "view" },
   { id: "downloads.clearFinished", title: "Clear Finished Downloads", keywords: ["clear", "download", "downloads", "finished"], accelerator: null, menu: "view" },
+  { id: "find.open", title: "Find in Page", keywords: ["find", "search", "page", "text"], accelerator: "CmdOrCtrl+F", menu: "view" },
+  { id: "find.next", title: "Find Next", keywords: ["find", "next", "search"], accelerator: "CmdOrCtrl+G", menu: "view" },
+  { id: "find.previous", title: "Find Previous", keywords: ["find", "previous", "search"], accelerator: "CmdOrCtrl+Shift+G", menu: "view" },
+  { id: "find.close", title: "Close Find", keywords: ["find", "close", "search"], accelerator: null, menu: null },
 ];
 
 /**
@@ -135,7 +146,9 @@ export const COMMANDS: readonly CommandDescriptor[] = [
  * is allowlisted; `settings.close` needs the settings view open. `zoom.in` and
  * `zoom.out` need an active tab with a non-null http(s) `siteHost`; `zoom.reset`
  * needs that too AND a current `zoomFactor` other than the default `1.0` (there
- * is nothing to reset when the host is already at actual size).
+ * is nothing to reset when the host is already at actual size). `find.open`
+ * needs an active tab; `find.next` and `find.previous` need the find session
+ * open with a non-empty query (`context.find.open && context.find.hasQuery`).
  */
 export function isCommandEnabled(id: CommandId, context: CommandContext): boolean {
   switch (id) {
@@ -191,6 +204,13 @@ export function isCommandEnabled(id: CommandId, context: CommandContext): boolea
         context.activeTab.siteHost !== null &&
         context.activeTab.zoomFactor !== DEFAULT_ZOOM_FACTOR
       );
+    case "find.open":
+      return context.activeTab !== null;
+    case "find.next":
+    case "find.previous":
+      return context.find.open && context.find.hasQuery;
+    case "find.close":
+      return context.find.open;
     default: {
       const exhaustive: never = id;
       return exhaustive;

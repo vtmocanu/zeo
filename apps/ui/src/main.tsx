@@ -1,7 +1,7 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App.js";
-import { CommandBar } from "./CommandBar.js";
+import { Overlay } from "./Overlay.js";
 import { Settings } from "./Settings.js";
 
 const container = document.getElementById("root");
@@ -18,7 +18,7 @@ const view = new URLSearchParams(window.location.search).get("view");
 createRoot(container).render(
   <StrictMode>
     {view === "command-bar" ? (
-      <CommandBar />
+      <Overlay />
     ) : view === "settings" ? (
       <Settings />
     ) : (

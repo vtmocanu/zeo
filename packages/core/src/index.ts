@@ -31,6 +31,7 @@ export type {
   HistoryApi,
   DownloadsApi,
   ZoomApi,
+  FindApi,
   Settings,
   SettingsApi,
   ZeoApi,
@@ -86,6 +87,15 @@ export type {
   SearchEngine,
 } from "./settings.js";
 export type { CommandBarMode, CommandBarState } from "./command-bar.js";
+export {
+  openFind,
+  setFindQuery,
+  applyFindResult,
+  beginFindRequest,
+  clearFindResults,
+  closeFind,
+} from "./page-search.js";
+export type { FindState } from "./page-search.js";
 export { suggest, nextSelectedIndex } from "./suggest.js";
 export type { Suggestion, SuggestCatalog, SuggestOptions } from "./suggest.js";
 export {
@@ -119,4 +129,9 @@ export {
   SUGGESTION_ROW_HEIGHT,
   commandBarBounds,
   settingsBounds,
+  FIND_BAR_WIDTH,
+  FIND_BAR_HEIGHT,
+  FIND_BAR_INSET,
+  FIND_BAR_TOP,
+  findBarBounds,
 } from "./layout.js";

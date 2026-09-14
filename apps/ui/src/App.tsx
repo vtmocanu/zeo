@@ -516,6 +516,14 @@ export function App() {
     },
     zoom: { byHost: {} },
     downloads: { items: [] },
+    find: {
+      open: false,
+      query: "",
+      activeMatch: 0,
+      matchCount: 0,
+      tabId: null,
+      activeRequestId: null,
+    },
   });
   const [showArchived, setShowArchived] = useState(false);
   const [now, setNow] = useState(() => Date.now());
