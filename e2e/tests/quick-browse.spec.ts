@@ -56,6 +56,28 @@ interface BlockingStateShape {
   enabled: boolean;
   allowlist: string[];
 }
+// PRD 4.2/7.2 — one command-bar suggestion row. The real @zeo/core `Suggestion`
+// is a discriminated union; the `promote`-mode picker Test B drives lists only
+// `{ kind: "space"; spaceId; name }` rows, so we redeclare a minimal structural
+// view keying off `kind` and the optional `spaceId`/`name` (mirrors the same
+// pattern in history.spec.ts).
+interface BridgeSuggestion {
+  kind: string;
+  spaceId?: string;
+  name?: string;
+}
+// PRD 4.2/7.2 — the command-bar state main broadcasts, redeclared as a structural
+// slice of @zeo/core's `CommandBarState`. `revision` is the monotonic id of the
+// current `suggestions` list: an accept that echoes the revision it read is
+// rejected by main when the list has since changed (the staleness guard), so Test
+// B reads it alongside the row index and passes it back exactly as the renderer does.
+interface CommandBarStateShape {
+  open: boolean;
+  mode: string;
+  suggestions: BridgeSuggestion[];
+  selectedIndex: number;
+  revision: number;
+}
 interface ZeoBridge {
   tabs: {
     create(url?: string): Promise<BridgeTab>;
@@ -79,6 +101,15 @@ interface ZeoBridge {
   };
   commands: {
     run(id: string): Promise<void>;
+  };
+  // PRD 4.2/7.2 — the command-bar surface Test B drives to pick a promote target.
+  // `state()` reads back the pushed bar state; `accept(index, revision)` performs
+  // the row at `index`, rejecting when `revision` no longer matches main's current
+  // list (the clicked-row staleness guard). Only the two methods Test B uses are
+  // declared; the shape is a structural view of @zeo/core's `CommandBarApi`.
+  commandBar: {
+    state(): Promise<CommandBarStateShape>;
+    accept(index?: number, revision?: number): Promise<void>;
   };
   blocking: {
     allowSite(host: string): Promise<void>;
@@ -343,6 +374,14 @@ function tabsList(sidebar: Page): Promise<BridgeState> {
   return sidebar.evaluate(() => {
     const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
     return zeo.tabs.list();
+  });
+}
+
+/** Read the current command-bar state over the sidebar bridge (PRD 4.2/7.2). */
+function commandBarState(sidebar: Page): Promise<CommandBarStateShape> {
+  return sidebar.evaluate(() => {
+    const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+    return zeo.commandBar.state();
   });
 }
 
@@ -780,6 +819,158 @@ test.describe("PRD 7.2 quick-browse window (offline)", () => {
       expect((await tabsList(sidebar)).isDefaultBrowser).toBe(false);
       await expect(defaultBtn).toHaveText("Set zeo as default browser");
       await expect(defaultBtn).toBeEnabled();
+    } finally {
+      await app.close();
+      await server.close();
+      rmSync(userDataDir, { recursive: true, force: true });
+    }
+  });
+
+  // Scenario 10 (OPEN-IN-TAB): quickBrowse.openInTab keeps the link on a NEW
+  // background tab in the ACTIVE space WITHOUT stealing activation, and LEAVES the
+  // quick-browse window open. This is the distinguishing contract from promote
+  // (which activates the new tab AND tears the window down): a background adopt.
+  test("openInTab creates a background tab in the active space and leaves the window open", async () => {
+    const userDataDir = mkdtempSync(join(tmpdir(), "zeo-qb-"));
+    const server = await startFixtureServer();
+    const { app, sidebar } = await launch(userDataDir);
+    try {
+      const fixture = `${server.base}/qb-open-in-tab.html?probe=qb-open-in-tab`;
+      await emitOpenUrl(app, fixture);
+      await waitForQuickBrowseChrome(app);
+      await expect
+        .poll(async () => (await quickBrowseState(sidebar))?.url ?? null, {
+          message: "expected quickBrowse.state().url === fixture before openInTab",
+        })
+        .toBe(fixture);
+
+      // Snapshot the active-space tab set BEFORE the action: a fresh launch has one
+      // seeded, active default tab. openInTab must add a tab without moving activation.
+      const before = await tabsList(sidebar);
+      const beforeActiveId = before.activeTabId;
+      const beforeCount = before.tabs.length;
+
+      await sidebar.evaluate(() => {
+        const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+        return zeo.commands.run("quickBrowse.openInTab");
+      });
+
+      // A NEW tab carrying the link appears in the active space (poll: create + the
+      // re-activation of the previous tab both complete before the broadcast).
+      await expect
+        .poll(
+          async () => (await tabsList(sidebar)).tabs.some((t) => t.url.includes("probe=qb-open-in-tab")),
+          { message: "expected a background tab carrying the quick-browse link" },
+        )
+        .toBe(true);
+      const after = await tabsList(sidebar);
+      // Exactly one tab was added...
+      expect(after.tabs.length).toBe(beforeCount + 1);
+      // ...and it did NOT steal activation: the pre-action active tab is still active.
+      expect(after.activeTabId).toBe(beforeActiveId);
+
+      // The quick-browse window STAYS open and the pure entry is still present — the
+      // key distinction from promote/dismiss, which close the window. The probe tab
+      // above already proves the handler ran and broadcast, so these are deterministic
+      // (openInTab never touches the window).
+      expect(quickBrowseChromeCount(app)).toBe(1);
+      expect(await quickBrowseState(sidebar)).not.toBeNull();
+    } finally {
+      await app.close();
+      await server.close();
+      rmSync(userDataDir, { recursive: true, force: true });
+    }
+  });
+
+  // Scenario 11 (PROMOTE-TO-SPACE): quickBrowse.promoteToSpace opens the command
+  // bar in "promote" mode (a space picker); accepting a chosen space row adopts the
+  // link into THAT space (which becomes active) and tears the window down. A second,
+  // non-active space is the target, so a link landing there proves promotion follows
+  // the PICKED row, not merely the previously-active space.
+  test("promoteToSpace adopts the link into the chosen space via the command bar and closes the window", async () => {
+    const userDataDir = mkdtempSync(join(tmpdir(), "zeo-qb-"));
+    const server = await startFixtureServer();
+    const { app, sidebar } = await launch(userDataDir);
+    try {
+      // A distinct promote target. spaces.create never switches the active space, so
+      // the original stays active — a link landing in Target proves the picked row won.
+      const target = await sidebar.evaluate(() => {
+        const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+        return zeo.spaces.create("Target Space");
+      });
+      const originalActiveSpaceId = (await tabsList(sidebar)).activeSpaceId;
+      expect(originalActiveSpaceId).not.toBe(target.id);
+
+      const fixture = `${server.base}/qb-promote-space.html?probe=qb-promote-space`;
+      await emitOpenUrl(app, fixture);
+      await waitForQuickBrowseChrome(app);
+      await expect
+        .poll(async () => (await quickBrowseState(sidebar))?.url ?? null, {
+          message: "expected quickBrowse.state().url === fixture before promoteToSpace",
+        })
+        .toBe(fixture);
+
+      // Open the promote picker (openCommandBar ranks its suggestions synchronously).
+      await sidebar.evaluate(() => {
+        const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+        return zeo.commands.run("quickBrowse.promoteToSpace");
+      });
+
+      // The bar is open in "promote" mode listing space-only rows for BOTH spaces.
+      await expect
+        .poll(
+          async () => {
+            const st = await commandBarState(sidebar);
+            return (
+              st.open &&
+              st.mode === "promote" &&
+              st.suggestions.length >= 2 &&
+              st.suggestions.every((s) => s.kind === "space")
+            );
+          },
+          { message: 'expected the command bar open in "promote" mode with space rows' },
+        )
+        .toBe(true);
+
+      // Accept the Target Space row against the revision the state reports (mirrors
+      // the renderer's clicked-row accept + staleness guard). Reading the state and
+      // accepting in ONE evaluate keeps the revision from drifting between the two
+      // invokes; in promote mode the space-only list is stable, so the guard passes.
+      const acceptedIndex = await sidebar.evaluate((targetId) => {
+        const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+        return zeo.commandBar.state().then((st) => {
+          const index = st.suggestions.findIndex(
+            (s) => s.kind === "space" && s.spaceId === targetId,
+          );
+          if (index === -1) {
+            return -1;
+          }
+          return zeo.commandBar.accept(index, st.revision).then(() => index);
+        });
+      }, target.id);
+      expect(acceptedIndex).toBeGreaterThanOrEqual(0);
+
+      // The link landed in the TARGET space: promote-to-space makes it active, and
+      // the snapshot's space-scoped `tabs` (the active space's set) carries the probe.
+      await expect
+        .poll(async () => (await tabsList(sidebar)).activeSpaceId, {
+          message: "expected the target space to become active after promote-to-space",
+        })
+        .toBe(target.id);
+      await expect
+        .poll(
+          async () => (await tabsList(sidebar)).tabs.some((t) => t.url.includes("probe=qb-promote-space")),
+          { message: "expected the promoted tab to carry the link in the target space" },
+        )
+        .toBe(true);
+
+      // The quick-browse window is gone and the pure entry is null.
+      await expect
+        .poll(() => quickBrowseChromeCount(app), {
+          message: "expected the quick-browse window to close after promote-to-space",
+        })
+        .toBe(0);
+      await expect.poll(() => quickBrowseState(sidebar)).toBeNull();
     } finally {
       await app.close();
       await server.close();
