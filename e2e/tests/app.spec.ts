@@ -3149,10 +3149,17 @@ test.describe("zeo desktop app", () => {
     "settings.openGeneral",
     "settings.openProfiles",
     "settings.openHistory",
+    // PRD 6.2 — downloads.open / downloads.openFolder are always-enabled view
+    // commands appended after settings.openHistory in the registry, so they
+    // trail the commands-mode list in registry order. (downloads.clearFinished
+    // needs a finished download, of which a fresh launch has none, so it is not
+    // listed here.)
+    "downloads.open",
+    "downloads.openFolder",
     // PRD 6.3 — find.open is menu:"view" and enabled whenever there is an active
-    // tab, so it trails the registry (after settings.openHistory) and closes out
-    // the commands-mode list. find.next/find.previous are disabled while find is
-    // closed (which it is here), so they do NOT appear.
+    // tab, so it trails the registry (after the downloads view commands) and
+    // closes out the commands-mode list. find.next/find.previous are disabled
+    // while find is closed (which it is here), so they do NOT appear.
     "find.open",
   ];
 
