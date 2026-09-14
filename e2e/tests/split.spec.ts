@@ -386,9 +386,10 @@ test.describe("PRD 7.1 split view", () => {
       const bar = await commandBarState(sidebar);
       expect(bar.mode).toBe("split");
 
-      // The overlay rendered a data-kind="tab" row for the one other open tab.
-      const overlay = await windowByUrl(app, "view=command-bar");
-      await expect(overlay.locator('[data-kind="tab"]')).toHaveCount(1);
+      // Exactly one command-bar suggestion, the one other open tab, rendered as a
+      // data-kind="tab" row. Read from main's command-bar state (deterministic)
+      // rather than polling the overlay DOM, which races the renderer's render.
+      expect(bar.suggestions.filter((s) => s.kind === "tab")).toHaveLength(1);
 
       // Accept the row for the chosen tab (over the bridge, avoiding the overlay
       // blur-close race noted in repo memory).
@@ -441,6 +442,14 @@ test.describe("PRD 7.1 split view", () => {
     try {
       const [left, right] = await seedTabs(sidebar, ["ZEOSPLIT_A", "ZEOSPLIT_B"]);
       await splitWith(sidebar, right);
+
+      // Move the ratio off the default 0.5 so the swap's "ratio preserved"
+      // assertion below can distinguish preserved from reset-to-default.
+      await sidebar.evaluate(() => {
+        const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+        return zeo.splitView.setRatio(0.68);
+      });
+      expect(asSplit(await splitState(sidebar)).ratio).toBeCloseTo(0.68, 5);
 
       let split = asSplit(await splitState(sidebar));
       expect(split.focused).toBe("left");
