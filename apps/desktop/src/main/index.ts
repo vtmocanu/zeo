@@ -292,7 +292,7 @@ let settingsOpen = false;
  * {@link readSearchEngine}. Main is the sole holder of the current search-engine
  * choice, threaded into {@link resolveInput} and {@link suggest}.
  */
-let settings: Settings = { searchEngine: "duckduckgo", quickBrowseExternal: false };
+let settings: Settings = { searchEngine: "duckduckgo", quickBrowseExternal: true };
 /**
  * The currently-targeted settings section main pushes to the settings view (the
  * PRD's `section`). The section-open commands set it via {@link openSettingsAt};
@@ -352,15 +352,15 @@ let quickBrowsePageView: WebContentsView | null = null;
 let quickBrowseSession: Electron.Session | null = null;
 /** Monotonic; each open gets a unique in-memory partition (`quick-browse-<n>`). */
 let quickBrowseSessionSeq = 0;
-/** Monotonic; incremented before each PROGRAMMATIC page-view loadURL. */
-let quickBrowseNavGen = 0;
 /**
- * The generation + target url of the current programmatic page-view load, or
- * `null` once no programmatic load is outstanding (the page is free-navigating).
- * Correlates a `did-navigate` with the load that produced it so a stale straggler
- * from a superseded generation never advances the live url.
+ * `true` from the moment a PROGRAMMATIC load is issued (openQuickBrowseWindow /
+ * replaceQuickBrowseLink) until that load's top-level `did-navigate` commits.
+ * While it is `true`, same-document (`did-navigate-in-page`) events are dropped:
+ * they are stragglers from the superseded document, not the page the user is now
+ * on. Read in {@link onQuickBrowseNavigateInPage}; cleared in
+ * {@link onQuickBrowseNavigate} when the top-level commit lands.
  */
-let quickBrowseCurrentNav: { gen: number; url: string } | null = null;
+let quickBrowseLoadPending = false;
 /** Single-flight teardown guard: {@link BrowserWindow.close} re-fires `closed`. */
 let quickBrowseTearingDown = false;
 /** Gates open-url dispatch until {@link app.whenReady} has drained. */
@@ -873,15 +873,21 @@ function closeSettings(): void {
 }
 
 /**
- * The page view's `did-navigate` / `did-navigate-in-page` handler: mirrors the
- * committed url into the pure {@link quickBrowse} entry (which the chrome renderer
- * follows over the broadcast). Early-returns after teardown, when the entry is
- * gone, or when the page view is gone, so a straggler event after dismissal
- * mutates no state. A programmatic load's commit closes out its generation (its
- * committed url — including a redirect/normalization target — is applied); once no
- * programmatic load is outstanding a user-initiated navigation is tracked.
- * Issuing a newer programmatic load aborts the in-flight prior load, so a
- * superseded generation's straggler never fires here.
+ * The page view's `did-navigate` handler (the top-level document commit): mirrors
+ * the committed url into the pure {@link quickBrowse} entry (which the chrome
+ * renderer follows over the broadcast) and clears {@link quickBrowseLoadPending}.
+ * Early-returns after teardown, when the entry is gone, or when the page view is
+ * gone, so a straggler event after dismissal mutates no state. A top-level commit
+ * — whether the pending programmatic load committing (possibly after a redirect or
+ * url normalization) or a user-initiated top-level navigation — is always the real
+ * current page, so the live url is applied unconditionally.
+ *
+ * The required property (a promote/openInTab fired during an in-flight replace
+ * captures the replaced url, not the old one) holds because
+ * {@link replaceQuickBrowseUrl} updates the pure `quickBrowse.url` synchronously.
+ * {@link quickBrowseLoadPending} additionally prevents a same-document straggler
+ * from the old document (see {@link onQuickBrowseNavigateInPage}) from reverting
+ * the url before the new top-level load commits here.
  */
 function onQuickBrowseNavigate(): void {
   if (
@@ -896,8 +902,35 @@ function onQuickBrowseNavigate(): void {
   if (current === "") {
     return;
   }
-  if (quickBrowseCurrentNav !== null) {
-    quickBrowseCurrentNav = null; // the outstanding programmatic load has committed
+  quickBrowse = setQuickBrowseUrl(quickBrowse, current);
+  quickBrowseLoadPending = false; // this top-level commit is the current page
+  broadcast();
+}
+
+/**
+ * The page view's `did-navigate-in-page` handler (a same-document navigation, e.g.
+ * a fragment or a history.pushState). While {@link quickBrowseLoadPending} is
+ * `true` a top-level programmatic load is in flight, so any same-document event is
+ * a straggler from the superseded document — drop it, or it would revert the live
+ * url to the old page before the new top-level load commits. Otherwise the page is
+ * free-navigating within its document and the live url is tracked. Shares the
+ * teardown/gone early-returns with {@link onQuickBrowseNavigate}.
+ */
+function onQuickBrowseNavigateInPage(): void {
+  if (
+    quickBrowseTearingDown ||
+    quickBrowse === null ||
+    quickBrowsePageView === null ||
+    quickBrowsePageView.webContents.isDestroyed()
+  ) {
+    return;
+  }
+  if (quickBrowseLoadPending) {
+    return; // straggler from the superseded document during a programmatic load
+  }
+  const current = quickBrowsePageView.webContents.getURL(); // read live, never a captured value
+  if (current === "") {
+    return;
   }
   quickBrowse = setQuickBrowseUrl(quickBrowse, current);
   broadcast();
@@ -924,7 +957,7 @@ function onQuickBrowseTitle(_event: Electron.Event, title: string): void {
 /** Wires the quick-browse page view's url/title tracking (see {@link onQuickBrowseNavigate}). */
 function wireQuickBrowsePageEvents(view: WebContentsView): void {
   view.webContents.on("did-navigate", onQuickBrowseNavigate);
-  view.webContents.on("did-navigate-in-page", onQuickBrowseNavigate);
+  view.webContents.on("did-navigate-in-page", onQuickBrowseNavigateInPage);
   view.webContents.on("page-title-updated", onQuickBrowseTitle);
 }
 
@@ -1049,9 +1082,9 @@ function openQuickBrowseWindow(url: string): void {
   // 8. Wire url/title tracking before navigating so no first commit is missed.
   wireQuickBrowsePageEvents(pageView);
 
-  // 9. Programmatic navigation with the generation guard.
-  const gen = ++quickBrowseNavGen;
-  quickBrowseCurrentNav = { gen, url };
+  // 9. Programmatic navigation; flag the in-flight load so same-document stragglers
+  //    from the superseded (blank) document are dropped until the top-level commit.
+  quickBrowseLoadPending = true;
   void pageView.webContents.loadURL(url);
 
   // 10. Show + focus the window.
@@ -1075,17 +1108,16 @@ function openQuickBrowseWindow(url: string): void {
 /**
  * Handles a second external link while a quick-browse window is already open:
  * replaces the pure entry's url (resetting the derived title), programmatically
- * navigates the existing page view under a fresh generation, and brings the
- * window to the front. A no-op if the window vanished between the caller's check
- * and here.
+ * navigates the existing page view (flagging the in-flight load so same-document
+ * stragglers from the superseded document are dropped), and brings the window to
+ * the front. A no-op if the window vanished between the caller's check and here.
  */
 function replaceQuickBrowseLink(url: string): void {
   if (quickBrowse === null || quickBrowsePageView === null) {
     return;
   }
   quickBrowse = replaceQuickBrowseUrl(quickBrowse, url);
-  const gen = ++quickBrowseNavGen;
-  quickBrowseCurrentNav = { gen, url };
+  quickBrowseLoadPending = true;
   void quickBrowsePageView.webContents.loadURL(url);
   quickBrowseWindow?.moveTop();
   quickBrowseWindow?.focus();
@@ -1138,7 +1170,7 @@ function teardownQuickBrowse(): void {
   quickBrowseWindow = null;
   quickBrowsePageView = null;
   quickBrowseSession = null;
-  quickBrowseCurrentNav = null;
+  quickBrowseLoadPending = false;
   broadcast();
 
   // Return focus to the main window (its active tab view when present, else the window).
@@ -1176,7 +1208,7 @@ function teardownQuickBrowse(): void {
  */
 function handleExternalLink(url: string): void {
   if (siteKeyForUrl(url) === null) {
-    console.warn("[quick-browse] ignoring non-http(s) external link:", url);
+    console.warn("[quick-browse] ignoring non-http(s) external link:", JSON.stringify(url));
     return;
   }
   if (win === null) {
