@@ -504,7 +504,10 @@ export function App() {
     activeTabId: null,
     archived: [],
     settingsOpen: false,
-    settings: { searchEngine: DEFAULT_SEARCH_ENGINE_ID },
+    settings: {
+      searchEngine: DEFAULT_SEARCH_ENGINE_ID,
+      quickBrowseExternal: true,
+    },
     settingsSection: "general",
     settingsSectionNonce: 0,
     blocking: {
@@ -523,6 +526,8 @@ export function App() {
       tabId: null,
       activeRequestId: null,
     },
+    quickBrowse: null,
+    isDefaultBrowser: false,
   });
   const [showArchived, setShowArchived] = useState(false);
   const [now, setNow] = useState(() => Date.now());
