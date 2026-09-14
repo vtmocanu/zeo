@@ -23,6 +23,8 @@ import {
   writeBlockingEnabled,
   readSearchEngine,
   writeSearchEngine,
+  readQuickBrowseExternal,
+  writeQuickBrowseExternal,
   readAllowlist,
   insertAllowlistHost,
   deleteAllowlistHost,
@@ -116,10 +118,15 @@ const V5_DDL =
   V4_DDL +
   "ALTER TABLE meta ADD COLUMN searchEngine TEXT NOT NULL DEFAULT 'duckduckgo';";
 
-/** The current (schema v6) DDL: v5 plus the site_zoom table. */
+/** The schema v6 DDL: v5 plus the site_zoom table. */
 const V6_DDL =
   V5_DDL +
   "CREATE TABLE site_zoom (host TEXT PRIMARY KEY, factor REAL NOT NULL, updatedAt INTEGER NOT NULL);";
+
+/** The current (schema v7) DDL: v6 plus the meta.quickBrowseExternal column. */
+const V7_DDL =
+  V6_DDL +
+  "ALTER TABLE meta ADD COLUMN quickBrowseExternal INTEGER NOT NULL DEFAULT 1;";
 
 /** True when the `history_visits` table exists in the database. */
 function hasHistoryTable(db: Database.Database): boolean {
@@ -170,6 +177,12 @@ function hasSearchEngineColumn(db: Database.Database): boolean {
   return cols.some((c) => c.name === "searchEngine");
 }
 
+/** True when the `meta` table has a `quickBrowseExternal` column. */
+function hasQuickBrowseExternalColumn(db: Database.Database): boolean {
+  const cols = db.prepare("PRAGMA table_info(meta)").all() as { name: string }[];
+  return cols.some((c) => c.name === "quickBrowseExternal");
+}
+
 /** True when the `blocking_allowlist` table exists. */
 function hasAllowlistTable(db: Database.Database): boolean {
   return (
@@ -196,7 +209,7 @@ afterEach(() => {
 });
 
 describe("migrate", () => {
-  test("upgrades a v1 database to the current version, adding enabled, the allowlist, history, the search engine, and site_zoom and preserving rows", () => {
+  test("upgrades a v1 database to the current version, adding enabled, the allowlist, history, the search engine, site_zoom, and the quick-browse toggle and preserving rows", () => {
     const path = join(tempDir, "v1.db");
     const db = new Database(path);
     db.exec(V1_DDL);
@@ -214,15 +227,16 @@ describe("migrate", () => {
 
     const meta = db
       .prepare(
-        "SELECT schemaVersion, activeSpaceId, enabled, searchEngine FROM meta WHERE id=0",
+        "SELECT schemaVersion, activeSpaceId, enabled, searchEngine, quickBrowseExternal FROM meta WHERE id=0",
       )
       .get() as {
       schemaVersion: number;
       activeSpaceId: string;
       enabled: number;
       searchEngine: string;
+      quickBrowseExternal: number;
     };
-    expect(meta.schemaVersion).toBe(6);
+    expect(meta.schemaVersion).toBe(7);
     expect(hasEnabledColumn(db)).toBe(true);
     expect(hasAllowlistTable(db)).toBe(true);
     expect(meta.enabled).toBe(1);
@@ -230,6 +244,8 @@ describe("migrate", () => {
     expect(hasSearchEngineColumn(db)).toBe(true);
     expect(meta.searchEngine).toBe("duckduckgo");
     expect(hasSiteZoomTable(db)).toBe(true);
+    expect(hasQuickBrowseExternalColumn(db)).toBe(true);
+    expect(meta.quickBrowseExternal).toBe(1);
     // Pre-existing rows preserved.
     expect(meta.activeSpaceId).toBe("space-1");
     expect(db.prepare("SELECT id FROM profiles").get()).toEqual({ id: "p1" });
@@ -238,7 +254,7 @@ describe("migrate", () => {
     db.close();
   });
 
-  test("upgrades a v2 database to the current version, adding the allowlist, history, the search engine, and site_zoom and preserving rows", () => {
+  test("upgrades a v2 database to the current version, adding the allowlist, history, the search engine, site_zoom, and the quick-browse toggle and preserving rows", () => {
     const path = join(tempDir, "v2.db");
     const db = new Database(path);
     db.exec(V2_DDL);
@@ -255,13 +271,22 @@ describe("migrate", () => {
     migrate(db);
 
     const meta = db
-      .prepare("SELECT schemaVersion, activeSpaceId, enabled FROM meta WHERE id=0")
-      .get() as { schemaVersion: number; activeSpaceId: string; enabled: number };
-    expect(meta.schemaVersion).toBe(6);
+      .prepare(
+        "SELECT schemaVersion, activeSpaceId, enabled, quickBrowseExternal FROM meta WHERE id=0",
+      )
+      .get() as {
+      schemaVersion: number;
+      activeSpaceId: string;
+      enabled: number;
+      quickBrowseExternal: number;
+    };
+    expect(meta.schemaVersion).toBe(7);
     expect(hasAllowlistTable(db)).toBe(true);
     expect(hasHistoryTable(db)).toBe(true);
     expect(hasSearchEngineColumn(db)).toBe(true);
     expect(hasSiteZoomTable(db)).toBe(true);
+    expect(hasQuickBrowseExternalColumn(db)).toBe(true);
+    expect(meta.quickBrowseExternal).toBe(1);
     expect(
       db
         .prepare(
@@ -278,7 +303,7 @@ describe("migrate", () => {
     db.close();
   });
 
-  test("upgrades a v3 database to the current version, adding the history tables, the search engine, and site_zoom and preserving the allowlist and rows", () => {
+  test("upgrades a v3 database to the current version, adding the history tables, the search engine, site_zoom, and the quick-browse toggle and preserving the allowlist and rows", () => {
     const path = join(tempDir, "v3-to-current.db");
     const db = new Database(path);
     db.exec(V3_DDL);
@@ -297,12 +322,21 @@ describe("migrate", () => {
     migrate(db);
 
     const meta = db
-      .prepare("SELECT schemaVersion, activeSpaceId, enabled FROM meta WHERE id=0")
-      .get() as { schemaVersion: number; activeSpaceId: string; enabled: number };
-    expect(meta.schemaVersion).toBe(6);
+      .prepare(
+        "SELECT schemaVersion, activeSpaceId, enabled, quickBrowseExternal FROM meta WHERE id=0",
+      )
+      .get() as {
+      schemaVersion: number;
+      activeSpaceId: string;
+      enabled: number;
+      quickBrowseExternal: number;
+    };
+    expect(meta.schemaVersion).toBe(7);
     expect(hasHistoryTable(db)).toBe(true);
     expect(hasSearchEngineColumn(db)).toBe(true);
     expect(hasSiteZoomTable(db)).toBe(true);
+    expect(hasQuickBrowseExternalColumn(db)).toBe(true);
+    expect(meta.quickBrowseExternal).toBe(1);
     // Pre-existing allowlist, rows, and the enabled flag preserved.
     expect(hasAllowlistTable(db)).toBe(true);
     expect(db.prepare("SELECT host FROM blocking_allowlist").get()).toEqual({
@@ -314,7 +348,7 @@ describe("migrate", () => {
     db.close();
   });
 
-  test("upgrades a v4 database to the current version, adding the searchEngine column and site_zoom table and preserving rows", () => {
+  test("upgrades a v4 database to the current version, adding the searchEngine column, site_zoom table, and the quick-browse toggle and preserving rows", () => {
     const path = join(tempDir, "v4-to-current.db");
     const db = new Database(path);
     db.exec(V4_DDL);
@@ -331,19 +365,23 @@ describe("migrate", () => {
 
     const meta = db
       .prepare(
-        "SELECT schemaVersion, activeSpaceId, enabled, searchEngine FROM meta WHERE id=0",
+        "SELECT schemaVersion, activeSpaceId, enabled, searchEngine, quickBrowseExternal FROM meta WHERE id=0",
       )
       .get() as {
       schemaVersion: number;
       activeSpaceId: string;
       enabled: number;
       searchEngine: string;
+      quickBrowseExternal: number;
     };
-    expect(meta.schemaVersion).toBe(6);
+    expect(meta.schemaVersion).toBe(7);
     expect(hasSearchEngineColumn(db)).toBe(true);
     // The new column defaults to duckduckgo on the existing row.
     expect(meta.searchEngine).toBe("duckduckgo");
     expect(hasSiteZoomTable(db)).toBe(true);
+    expect(hasQuickBrowseExternalColumn(db)).toBe(true);
+    // The quick-browse toggle defaults to 1 (ON) on the existing row.
+    expect(meta.quickBrowseExternal).toBe(1);
     // Pre-existing rows and the enabled flag preserved.
     expect(meta.activeSpaceId).toBe("space-1");
     expect(meta.enabled).toBe(0);
@@ -353,8 +391,8 @@ describe("migrate", () => {
     db.close();
   });
 
-  test("upgrades a v5 database to v6, adding an empty site_zoom table and preserving the search engine and other state", () => {
-    const path = join(tempDir, "v5-to-v6.db");
+  test("upgrades a v5 database to the current version, adding an empty site_zoom table and the quick-browse toggle and preserving the search engine and other state", () => {
+    const path = join(tempDir, "v5-to-current.db");
     const db = new Database(path);
     db.exec(V5_DDL);
     // Seed enabled=0 and a non-default searchEngine so a spurious re-create/migrate
@@ -365,26 +403,31 @@ describe("migrate", () => {
 
     expect(hasSiteZoomTable(db)).toBe(false);
     expect(hasSearchEngineColumn(db)).toBe(true);
+    expect(hasQuickBrowseExternalColumn(db)).toBe(false);
 
     migrate(db);
 
     const meta = db
       .prepare(
-        "SELECT schemaVersion, activeSpaceId, enabled, searchEngine FROM meta WHERE id=0",
+        "SELECT schemaVersion, activeSpaceId, enabled, searchEngine, quickBrowseExternal FROM meta WHERE id=0",
       )
       .get() as {
       schemaVersion: number;
       activeSpaceId: string;
       enabled: number;
       searchEngine: string;
+      quickBrowseExternal: number;
     };
-    expect(meta.schemaVersion).toBe(6);
+    expect(meta.schemaVersion).toBe(7);
     expect(hasSiteZoomTable(db)).toBe(true);
     // The freshly-created table starts with no rows.
     const count = db
       .prepare("SELECT COUNT(*) AS n FROM site_zoom")
       .get() as { n: number };
     expect(count.n).toBe(0);
+    // The quick-browse toggle column is added and defaults to 1 (ON).
+    expect(hasQuickBrowseExternalColumn(db)).toBe(true);
+    expect(meta.quickBrowseExternal).toBe(1);
     // The search engine is preserved (not reset) and other seeded state survives.
     expect(meta.searchEngine).toBe("google");
     expect(meta.activeSpaceId).toBe("space-9");
@@ -392,16 +435,66 @@ describe("migrate", () => {
     db.close();
   });
 
-  test("creates a fresh v6 schema with enabled=1, the allowlist, history, and site_zoom tables, and the search engine on an empty database", () => {
+  test("upgrades a v6 database to v7, adding the quick-browse toggle (default ON) and preserving site_zoom, the search engine, and other state", () => {
+    const path = join(tempDir, "v6-to-v7.db");
+    const db = new Database(path);
+    db.exec(V6_DDL);
+    // Seed enabled=0 and a non-default searchEngine so a spurious re-create/migrate
+    // (which would reset them to their defaults) is detectable, plus a site_zoom row
+    // that must survive the column-add untouched.
+    db.prepare(
+      "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled,searchEngine) VALUES (0, 6, 'space-9', 0, 'google')",
+    ).run();
+    db.prepare(
+      "INSERT INTO site_zoom(host,factor,updatedAt) VALUES ('example.com', 1.5, 42)",
+    ).run();
+
+    expect(hasQuickBrowseExternalColumn(db)).toBe(false);
+
+    migrate(db);
+
+    const meta = db
+      .prepare(
+        "SELECT schemaVersion, activeSpaceId, enabled, searchEngine, quickBrowseExternal FROM meta WHERE id=0",
+      )
+      .get() as {
+      schemaVersion: number;
+      activeSpaceId: string;
+      enabled: number;
+      searchEngine: string;
+      quickBrowseExternal: number;
+    };
+    expect(meta.schemaVersion).toBe(7);
+    expect(hasQuickBrowseExternalColumn(db)).toBe(true);
+    // The new column defaults to 1 (ON) on the existing row.
+    expect(meta.quickBrowseExternal).toBe(1);
+    // Pre-existing state is preserved untouched by the column-add.
+    expect(meta.searchEngine).toBe("google");
+    expect(meta.activeSpaceId).toBe("space-9");
+    expect(meta.enabled).toBe(0);
+    expect(
+      db.prepare("SELECT host, factor, updatedAt FROM site_zoom").get(),
+    ).toEqual({ host: "example.com", factor: 1.5, updatedAt: 42 });
+    db.close();
+  });
+
+  test("creates a fresh v7 schema with enabled=1, the allowlist, history, and site_zoom tables, the search engine, and the quick-browse toggle on an empty database", () => {
     const path = join(tempDir, "fresh.db");
     const db = new Database(path);
 
     migrate(db);
 
     const meta = db
-      .prepare("SELECT schemaVersion, enabled, searchEngine FROM meta WHERE id=0")
-      .get() as { schemaVersion: number; enabled: number; searchEngine: string };
-    expect(meta.schemaVersion).toBe(6);
+      .prepare(
+        "SELECT schemaVersion, enabled, searchEngine, quickBrowseExternal FROM meta WHERE id=0",
+      )
+      .get() as {
+      schemaVersion: number;
+      enabled: number;
+      searchEngine: string;
+      quickBrowseExternal: number;
+    };
+    expect(meta.schemaVersion).toBe(7);
     expect(hasEnabledColumn(db)).toBe(true);
     expect(hasAllowlistTable(db)).toBe(true);
     expect(meta.enabled).toBe(1);
@@ -409,18 +502,20 @@ describe("migrate", () => {
     expect(hasSearchEngineColumn(db)).toBe(true);
     expect(meta.searchEngine).toBe("duckduckgo");
     expect(hasSiteZoomTable(db)).toBe(true);
+    expect(hasQuickBrowseExternalColumn(db)).toBe(true);
+    expect(meta.quickBrowseExternal).toBe(1);
     db.close();
   });
 
-  test("is a no-op on a database already at the current version (v6)", () => {
-    const path = join(tempDir, "v6.db");
+  test("is a no-op on a database already at the current version (v7)", () => {
+    const path = join(tempDir, "v7.db");
     const db = new Database(path);
-    db.exec(V6_DDL);
-    // Seed enabled=0 and a non-default searchEngine so a spurious re-create/migrate
-    // (which would reset them to their defaults) is detectable, and a site_zoom row
-    // so a re-create would be observable.
+    db.exec(V7_DDL);
+    // Seed enabled=0, a non-default searchEngine, and quickBrowseExternal=0 so a
+    // spurious re-create/migrate (which would reset them to their defaults) is
+    // detectable, and a site_zoom row so a re-create would be observable.
     db.prepare(
-      "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled,searchEngine) VALUES (0, 6, 'space-9', 0, 'google')",
+      "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled,searchEngine,quickBrowseExternal) VALUES (0, 7, 'space-9', 0, 'google', 0)",
     ).run();
     db.prepare(
       "INSERT INTO site_zoom(host,factor,updatedAt) VALUES ('example.com', 1.5, 42)",
@@ -430,18 +525,21 @@ describe("migrate", () => {
 
     const meta = db
       .prepare(
-        "SELECT schemaVersion, activeSpaceId, enabled, searchEngine FROM meta WHERE id=0",
+        "SELECT schemaVersion, activeSpaceId, enabled, searchEngine, quickBrowseExternal FROM meta WHERE id=0",
       )
       .get() as {
       schemaVersion: number;
       activeSpaceId: string;
       enabled: number;
       searchEngine: string;
+      quickBrowseExternal: number;
     };
-    expect(meta.schemaVersion).toBe(6);
+    expect(meta.schemaVersion).toBe(7);
     expect(meta.activeSpaceId).toBe("space-9");
     expect(meta.enabled).toBe(0);
     expect(meta.searchEngine).toBe("google");
+    // The seeded quick-browse toggle is left untouched (no re-create reset it to 1).
+    expect(meta.quickBrowseExternal).toBe(0);
     // The existing site_zoom row is left untouched (no re-create wiped it).
     expect(
       db.prepare("SELECT host, factor, updatedAt FROM site_zoom").get(),
@@ -452,12 +550,12 @@ describe("migrate", () => {
 
 describe("readAllowlist / insertAllowlistHost / deleteAllowlistHost", () => {
   test("round-trip: insert (ordered), INSERT OR IGNORE on a dup is a no-op, delete removes one", () => {
-    // Hand-build a valid current (v6) database at the path loadStore will open.
+    // Hand-build a valid current (v7) database at the path loadStore will open.
     const path = join(tempDir, "zeo.db");
     const seed = new Database(path);
-    seed.exec(V6_DDL);
+    seed.exec(V7_DDL);
     seed.prepare(
-      "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled) VALUES (0, 6, 'space-x', 1)",
+      "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled) VALUES (0, 7, 'space-x', 1)",
     ).run();
     seedRows(seed, "space-x");
     seed.close();
@@ -537,12 +635,12 @@ describe("readSiteZoom / upsertSiteZoom / deleteSiteZoom", () => {
 
 describe("readBlockingEnabled / writeBlockingEnabled", () => {
   test("writeBlockingEnabled(false) round-trips and leaves schemaVersion/activeSpaceId intact", () => {
-    // Hand-build a valid current (v6) database at the path loadStore will open.
+    // Hand-build a valid current (v7) database at the path loadStore will open.
     const path = join(tempDir, "zeo.db");
     const seed = new Database(path);
-    seed.exec(V6_DDL);
+    seed.exec(V7_DDL);
     seed.prepare(
-      "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled) VALUES (0, 6, 'space-x', 1)",
+      "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled) VALUES (0, 7, 'space-x', 1)",
     ).run();
     seedRows(seed, "space-x");
     seed.close();
@@ -559,7 +657,7 @@ describe("readBlockingEnabled / writeBlockingEnabled", () => {
     const meta = inspect
       .prepare("SELECT schemaVersion, activeSpaceId, enabled FROM meta WHERE id=0")
       .get() as { schemaVersion: number; activeSpaceId: string; enabled: number };
-    expect(meta.schemaVersion).toBe(6);
+    expect(meta.schemaVersion).toBe(7);
     expect(meta.activeSpaceId).toBe("space-x");
     expect(meta.enabled).toBe(0);
     inspect.close();
@@ -567,14 +665,14 @@ describe("readBlockingEnabled / writeBlockingEnabled", () => {
 });
 
 describe("readSearchEngine / writeSearchEngine", () => {
-  /** Hand-builds a valid current (v6) database at the loadStore path, opens the
+  /** Hand-builds a valid current (v7) database at the loadStore path, opens the
    *  module-level handle the accessors use, and returns the db file path. */
   function seedAndLoad(): string {
     const path = join(tempDir, "zeo.db");
     const seed = new Database(path);
-    seed.exec(V6_DDL);
+    seed.exec(V7_DDL);
     seed.prepare(
-      "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled) VALUES (0, 6, 'space-x', 1)",
+      "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled) VALUES (0, 7, 'space-x', 1)",
     ).run();
     seedRows(seed, "space-x");
     seed.close();
@@ -633,6 +731,87 @@ describe("readSearchEngine / writeSearchEngine", () => {
     raw.close();
 
     expect(() => writeSearchEngine("google")).toThrow();
+
+    // No meta row was resurrected: the zero-row UPDATE persisted nothing.
+    const inspect = new Database(path, { readonly: true });
+    const count = inspect
+      .prepare("SELECT COUNT(*) AS n FROM meta")
+      .get() as { n: number };
+    expect(count.n).toBe(0);
+    inspect.close();
+  });
+});
+
+describe("readQuickBrowseExternal / writeQuickBrowseExternal", () => {
+  /** Hand-builds a valid current (v7) database at the loadStore path, opens the
+   *  module-level handle the accessors use, and returns the db file path. */
+  function seedAndLoad(): string {
+    const path = join(tempDir, "zeo.db");
+    const seed = new Database(path);
+    seed.exec(V7_DDL);
+    seed.prepare(
+      "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled) VALUES (0, 7, 'space-x', 1)",
+    ).run();
+    seedRows(seed, "space-x");
+    seed.close();
+    loadStore();
+    return path;
+  }
+
+  test("round-trips the flag true → false → true", () => {
+    seedAndLoad();
+    // The freshly-added column defaults to 1 (ON), read as true.
+    expect(readQuickBrowseExternal()).toBe(true);
+
+    writeQuickBrowseExternal(false);
+    expect(readQuickBrowseExternal()).toBe(false);
+
+    writeQuickBrowseExternal(true);
+    expect(readQuickBrowseExternal()).toBe(true);
+  });
+
+  test("defaults to true when the column value is the default", () => {
+    seedAndLoad();
+    // No write has occurred; the DEFAULT 1 column maps to true.
+    expect(readQuickBrowseExternal()).toBe(true);
+  });
+
+  test("defaults to true when the stored value is NULL", () => {
+    // A meta row whose quickBrowseExternal is genuinely NULL (a nullable column,
+    // as a legacy/hand-modified row could carry); readQuickBrowseExternal must
+    // still default to true. The migration column is NOT NULL, so build a fixture
+    // whose column allows NULL and seed the row at the current version so migrate
+    // is a no-op that leaves the NULL in place.
+    const path = join(tempDir, "zeo.db");
+    const seed = new Database(path);
+    seed.exec(V6_DDL);
+    seed.exec("ALTER TABLE meta ADD COLUMN quickBrowseExternal INTEGER;");
+    seed.prepare(
+      "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled,quickBrowseExternal) VALUES (0, 7, 'space-x', 1, NULL)",
+    ).run();
+    seedRows(seed, "space-x");
+    seed.close();
+    loadStore();
+    expect(readQuickBrowseExternal()).toBe(true);
+  });
+
+  test("defaults to true when the meta row is absent", () => {
+    const path = seedAndLoad();
+    const raw = new Database(path);
+    raw.prepare("DELETE FROM meta WHERE id=0").run();
+    raw.close();
+    expect(readQuickBrowseExternal()).toBe(true);
+  });
+
+  test("writeQuickBrowseExternal throws (and changes nothing) when the meta row is absent", () => {
+    const path = seedAndLoad();
+    // Remove the id=0 row via a separate connection so the module handle's UPDATE
+    // affects zero rows.
+    const raw = new Database(path);
+    raw.prepare("DELETE FROM meta WHERE id=0").run();
+    raw.close();
+
+    expect(() => writeQuickBrowseExternal(false)).toThrow();
 
     // No meta row was resurrected: the zero-row UPDATE persisted nothing.
     const inspect = new Database(path, { readonly: true });
