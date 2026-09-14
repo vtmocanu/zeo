@@ -3,6 +3,8 @@ import {
   commandBarBounds,
   settingsBounds,
   findBarBounds,
+  splitPaneBounds,
+  DIVIDER_WIDTH,
   COMMAND_BAR_HEIGHT,
   SUGGESTION_ROW_HEIGHT,
   SIDEBAR_WIDTH,
@@ -125,6 +127,43 @@ describe("findBarBounds", () => {
     expect(bounds).toEqual({ x: 0, y: 0, width: 0, height: 0 });
     expect(bounds.width).toBeGreaterThanOrEqual(0);
     expect(bounds.height).toBeGreaterThanOrEqual(0);
+  });
+});
+
+describe("splitPaneBounds", () => {
+  it("tiles two equal panes plus the divider across the page region at ratio 0.5", () => {
+    // contentWidth 1280 → pageWidth 1040, usable 1034, leftW round(1034*0.5)=517.
+    const bounds = splitPaneBounds(1280, 800, 0.5);
+    expect(bounds.left.width).toBe(517);
+    expect(bounds.right.width).toBe(517);
+    expect(bounds.divider.x).toBe(757);
+    expect(bounds.left.width + DIVIDER_WIDTH + bounds.right.width).toBe(1040);
+    // Panes abut the divider with no gap or overlap.
+    expect(bounds.left.x).toBe(SIDEBAR_WIDTH);
+    expect(bounds.divider.x).toBe(bounds.left.x + bounds.left.width);
+    expect(bounds.right.x).toBe(bounds.divider.x + DIVIDER_WIDTH);
+  });
+
+  it("clamps an out-of-range ratio to the max fraction", () => {
+    // ratio 0.9 clamps to 0.8 → leftW round(1034*0.8)=827.
+    expect(splitPaneBounds(1280, 800, 0.9).left.width).toBe(827);
+  });
+
+  it("returns all-zero rects when the page region cannot seat the divider", () => {
+    // contentWidth 244 → pageWidth 4, usable 4-6=-2 ≤ 0.
+    const zero = { x: 0, y: 0, width: 0, height: 0 };
+    expect(splitPaneBounds(244, 800, 0.5)).toEqual({
+      left: zero,
+      divider: zero,
+      right: zero,
+    });
+  });
+
+  it("gives every rect the full content height", () => {
+    const bounds = splitPaneBounds(1280, 640, 0.5);
+    expect(bounds.left.height).toBe(640);
+    expect(bounds.divider.height).toBe(640);
+    expect(bounds.right.height).toBe(640);
   });
 });
 
