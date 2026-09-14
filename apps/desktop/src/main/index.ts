@@ -1425,6 +1425,21 @@ function scheduleLayoutSave(): void {
 }
 
 /**
+ * Flushes a pending debounced layout save SYNCHRONOUSLY, cancelling the timer
+ * first. Called at quit alongside {@link flush} so a divider drag that settled
+ * within {@link LAYOUT_SAVE_DEBOUNCE_MS} of Cmd+Q is still persisted — the layout
+ * lives outside the store snapshot, so the store flush does not cover it.
+ */
+function flushLayoutSave(): void {
+  if (layoutSaveTimer === null) {
+    return;
+  }
+  clearTimeout(layoutSaveTimer);
+  layoutSaveTimer = null;
+  persistLayout();
+}
+
+/**
  * Sends the divider view its current geometry (the left-pane `ratio` and the
  * usable `dividableWidth` the ratio applies to) over
  * {@link IPC.splitViewDividerLayout}, so the gutter can translate a pixel drag
@@ -3592,4 +3607,5 @@ app.on("window-all-closed", () => {
 // never broadcast (e.g. the window-focus lastActiveAt re-stamp) is still saved.
 app.on("before-quit", () => {
   flush(store);
+  flushLayoutSave();
 });
