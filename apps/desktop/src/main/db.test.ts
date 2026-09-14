@@ -723,6 +723,22 @@ describe("readWindowLayout / writeWindowLayout", () => {
     raw.close();
     expect(readWindowLayout()).toEqual({ mode: "single" });
   });
+
+  test("a stored split with a NULL left pane tab id reads back single", () => {
+    writeWindowLayout({
+      mode: "split",
+      left: "tL",
+      right: "tR",
+      ratio: 0.5,
+      focused: "left",
+    });
+    // Symmetric to the right-pane case: clearing the LEFT pane id also reads
+    // back as single, exercising that pane of the both-ids-present guard.
+    const raw = new Database(join(tempDir, "zeo.db"));
+    raw.prepare("UPDATE meta SET layoutLeftTabId=NULL WHERE id=0").run();
+    raw.close();
+    expect(readWindowLayout()).toEqual({ mode: "single" });
+  });
 });
 
 describe("readBlockingEnabled / writeBlockingEnabled", () => {
