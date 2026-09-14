@@ -194,8 +194,9 @@ function historyScore(entry: HistoryEntry, terms: string[]): number {
  * then catalog order, and capped at eight before row 0 is prepended. A history
  * candidate is skipped when an open tab shares its {@link historyKey} (the tab
  * row wins). `commands` mode ignores history entirely; `history` mode returns
- * only history rows (no row 0, no other kinds). Pure — reads only its
- * arguments.
+ * only history rows (no row 0, no other kinds); `split` mode returns only the
+ * active space's other open tabs (no row 0), MRU-first on an empty query and
+ * term-filtered otherwise. Pure — reads only its arguments.
  */
 export function suggest(query: string, catalog: SuggestCatalog, options: SuggestOptions): Suggestion[] {
   if (options.mode === "commands") {
@@ -245,6 +246,32 @@ export function suggest(query: string, catalog: SuggestCatalog, options: Suggest
     }
     ranked.sort((a, b) => a.score - b.score || a.order - b.order);
     return ranked.slice(0, MAX_MATCHES).map((c) => c.suggestion);
+  }
+
+  if (options.mode === "split") {
+    // Split mode offers the ACTIVE SPACE's other open tabs to fill the second
+    // pane: no row-0 text action and no spaces, commands, history, or archived
+    // tabs. The active tab (`options.activeTabId`) and tabs from other spaces are
+    // excluded. An empty/whitespace query lists the remaining tabs MRU-first
+    // (`lastActiveAt` descending); a non-empty query keeps those whose title or
+    // scheme-stripped url contains every whitespace-separated term, in that same
+    // MRU order, capped at MAX_MATCHES.
+    const activeSpaceId = catalog.spaces.find((s) => s.active)?.id ?? null;
+    const trimmed = query.trim();
+    const terms = trimmed === "" ? [] : trimmed.toLowerCase().split(/\s+/);
+    return catalog.tabs
+      .filter((t) => t.tabId !== options.activeTabId && t.spaceId === activeSpaceId)
+      .filter((t) => {
+        if (terms.length === 0) {
+          return true;
+        }
+        const haystack = `${t.title} ${schemeStripped(t.url)}`.toLowerCase();
+        return matchesAll(haystack, terms);
+      })
+      .slice()
+      .sort((a, b) => b.lastActiveAt - a.lastActiveAt)
+      .slice(0, MAX_MATCHES)
+      .map(tabSuggestion);
   }
 
   const resolved = resolveInput(query, options.searchEngine);

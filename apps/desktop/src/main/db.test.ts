@@ -29,6 +29,8 @@ import {
   readSiteZoom,
   upsertSiteZoom,
   deleteSiteZoom,
+  readWindowLayout,
+  writeWindowLayout,
   closeDb,
   recordVisit,
   updateVisitTitle,
@@ -116,10 +118,19 @@ const V5_DDL =
   V4_DDL +
   "ALTER TABLE meta ADD COLUMN searchEngine TEXT NOT NULL DEFAULT 'duckduckgo';";
 
-/** The current (schema v6) DDL: v5 plus the site_zoom table. */
+/** The schema v6 DDL: v5 plus the site_zoom table. */
 const V6_DDL =
   V5_DDL +
   "CREATE TABLE site_zoom (host TEXT PRIMARY KEY, factor REAL NOT NULL, updatedAt INTEGER NOT NULL);";
+
+/** The current (schema v7) DDL: v6 plus the five meta layout columns. */
+const V7_DDL =
+  V6_DDL +
+  "ALTER TABLE meta ADD COLUMN layoutMode TEXT NOT NULL DEFAULT 'single';" +
+  "ALTER TABLE meta ADD COLUMN layoutLeftTabId TEXT;" +
+  "ALTER TABLE meta ADD COLUMN layoutRightTabId TEXT;" +
+  "ALTER TABLE meta ADD COLUMN layoutRatio REAL NOT NULL DEFAULT 0.5;" +
+  "ALTER TABLE meta ADD COLUMN layoutFocused TEXT NOT NULL DEFAULT 'left';";
 
 /** True when the `history_visits` table exists in the database. */
 function hasHistoryTable(db: Database.Database): boolean {
@@ -140,6 +151,19 @@ function hasSiteZoomTable(db: Database.Database): boolean {
         "SELECT name FROM sqlite_master WHERE type='table' AND name='site_zoom'",
       )
       .get() !== undefined
+  );
+}
+
+/** True when the `meta` table has all five window-layout columns. */
+function hasLayoutColumns(db: Database.Database): boolean {
+  const cols = db.prepare("PRAGMA table_info(meta)").all() as { name: string }[];
+  const names = new Set(cols.map((c) => c.name));
+  return (
+    names.has("layoutMode") &&
+    names.has("layoutLeftTabId") &&
+    names.has("layoutRightTabId") &&
+    names.has("layoutRatio") &&
+    names.has("layoutFocused")
   );
 }
 
@@ -222,7 +246,7 @@ describe("migrate", () => {
       enabled: number;
       searchEngine: string;
     };
-    expect(meta.schemaVersion).toBe(6);
+    expect(meta.schemaVersion).toBe(7);
     expect(hasEnabledColumn(db)).toBe(true);
     expect(hasAllowlistTable(db)).toBe(true);
     expect(meta.enabled).toBe(1);
@@ -230,6 +254,7 @@ describe("migrate", () => {
     expect(hasSearchEngineColumn(db)).toBe(true);
     expect(meta.searchEngine).toBe("duckduckgo");
     expect(hasSiteZoomTable(db)).toBe(true);
+    expect(hasLayoutColumns(db)).toBe(true);
     // Pre-existing rows preserved.
     expect(meta.activeSpaceId).toBe("space-1");
     expect(db.prepare("SELECT id FROM profiles").get()).toEqual({ id: "p1" });
@@ -257,11 +282,12 @@ describe("migrate", () => {
     const meta = db
       .prepare("SELECT schemaVersion, activeSpaceId, enabled FROM meta WHERE id=0")
       .get() as { schemaVersion: number; activeSpaceId: string; enabled: number };
-    expect(meta.schemaVersion).toBe(6);
+    expect(meta.schemaVersion).toBe(7);
     expect(hasAllowlistTable(db)).toBe(true);
     expect(hasHistoryTable(db)).toBe(true);
     expect(hasSearchEngineColumn(db)).toBe(true);
     expect(hasSiteZoomTable(db)).toBe(true);
+    expect(hasLayoutColumns(db)).toBe(true);
     expect(
       db
         .prepare(
@@ -299,10 +325,11 @@ describe("migrate", () => {
     const meta = db
       .prepare("SELECT schemaVersion, activeSpaceId, enabled FROM meta WHERE id=0")
       .get() as { schemaVersion: number; activeSpaceId: string; enabled: number };
-    expect(meta.schemaVersion).toBe(6);
+    expect(meta.schemaVersion).toBe(7);
     expect(hasHistoryTable(db)).toBe(true);
     expect(hasSearchEngineColumn(db)).toBe(true);
     expect(hasSiteZoomTable(db)).toBe(true);
+    expect(hasLayoutColumns(db)).toBe(true);
     // Pre-existing allowlist, rows, and the enabled flag preserved.
     expect(hasAllowlistTable(db)).toBe(true);
     expect(db.prepare("SELECT host FROM blocking_allowlist").get()).toEqual({
@@ -339,11 +366,12 @@ describe("migrate", () => {
       enabled: number;
       searchEngine: string;
     };
-    expect(meta.schemaVersion).toBe(6);
+    expect(meta.schemaVersion).toBe(7);
     expect(hasSearchEngineColumn(db)).toBe(true);
     // The new column defaults to duckduckgo on the existing row.
     expect(meta.searchEngine).toBe("duckduckgo");
     expect(hasSiteZoomTable(db)).toBe(true);
+    expect(hasLayoutColumns(db)).toBe(true);
     // Pre-existing rows and the enabled flag preserved.
     expect(meta.activeSpaceId).toBe("space-1");
     expect(meta.enabled).toBe(0);
@@ -353,8 +381,8 @@ describe("migrate", () => {
     db.close();
   });
 
-  test("upgrades a v5 database to v6, adding an empty site_zoom table and preserving the search engine and other state", () => {
-    const path = join(tempDir, "v5-to-v6.db");
+  test("upgrades a v5 database to the current version, adding an empty site_zoom table and the layout columns and preserving the search engine and other state", () => {
+    const path = join(tempDir, "v5-to-current.db");
     const db = new Database(path);
     db.exec(V5_DDL);
     // Seed enabled=0 and a non-default searchEngine so a spurious re-create/migrate
@@ -378,8 +406,9 @@ describe("migrate", () => {
       enabled: number;
       searchEngine: string;
     };
-    expect(meta.schemaVersion).toBe(6);
+    expect(meta.schemaVersion).toBe(7);
     expect(hasSiteZoomTable(db)).toBe(true);
+    expect(hasLayoutColumns(db)).toBe(true);
     // The freshly-created table starts with no rows.
     const count = db
       .prepare("SELECT COUNT(*) AS n FROM site_zoom")
@@ -392,16 +421,27 @@ describe("migrate", () => {
     db.close();
   });
 
-  test("creates a fresh v6 schema with enabled=1, the allowlist, history, and site_zoom tables, and the search engine on an empty database", () => {
+  test("creates a fresh v7 schema with enabled=1, the allowlist, history, and site_zoom tables, the search engine, and the layout columns on an empty database", () => {
     const path = join(tempDir, "fresh.db");
     const db = new Database(path);
 
     migrate(db);
 
     const meta = db
-      .prepare("SELECT schemaVersion, enabled, searchEngine FROM meta WHERE id=0")
-      .get() as { schemaVersion: number; enabled: number; searchEngine: string };
-    expect(meta.schemaVersion).toBe(6);
+      .prepare(
+        "SELECT schemaVersion, enabled, searchEngine, layoutMode, layoutLeftTabId, layoutRightTabId, layoutRatio, layoutFocused FROM meta WHERE id=0",
+      )
+      .get() as {
+      schemaVersion: number;
+      enabled: number;
+      searchEngine: string;
+      layoutMode: string;
+      layoutLeftTabId: string | null;
+      layoutRightTabId: string | null;
+      layoutRatio: number;
+      layoutFocused: string;
+    };
+    expect(meta.schemaVersion).toBe(7);
     expect(hasEnabledColumn(db)).toBe(true);
     expect(hasAllowlistTable(db)).toBe(true);
     expect(meta.enabled).toBe(1);
@@ -409,18 +449,78 @@ describe("migrate", () => {
     expect(hasSearchEngineColumn(db)).toBe(true);
     expect(meta.searchEngine).toBe("duckduckgo");
     expect(hasSiteZoomTable(db)).toBe(true);
+    // The layout columns exist and carry their DDL defaults on the seeded row.
+    expect(hasLayoutColumns(db)).toBe(true);
+    expect(meta.layoutMode).toBe("single");
+    expect(meta.layoutLeftTabId).toBe(null);
+    expect(meta.layoutRightTabId).toBe(null);
+    expect(meta.layoutRatio).toBe(0.5);
+    expect(meta.layoutFocused).toBe("left");
     db.close();
   });
 
-  test("is a no-op on a database already at the current version (v6)", () => {
-    const path = join(tempDir, "v6.db");
+  test("upgrades a v6 database to v7, adding the layout columns with their defaults and preserving rows", () => {
+    const path = join(tempDir, "v6-to-current.db");
     const db = new Database(path);
     db.exec(V6_DDL);
-    // Seed enabled=0 and a non-default searchEngine so a spurious re-create/migrate
-    // (which would reset them to their defaults) is detectable, and a site_zoom row
-    // so a re-create would be observable.
+    // Seed enabled=0, a non-default searchEngine, and a site_zoom row so a
+    // spurious re-create (which would wipe them) is detectable.
     db.prepare(
-      "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled,searchEngine) VALUES (0, 6, 'space-9', 0, 'google')",
+      "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled,searchEngine) VALUES (0, 6, 'space-1', 0, 'google')",
+    ).run();
+    seedRows(db, "space-1");
+    db.prepare(
+      "INSERT INTO site_zoom(host,factor,updatedAt) VALUES ('example.com', 1.5, 42)",
+    ).run();
+
+    expect(hasLayoutColumns(db)).toBe(false);
+
+    migrate(db);
+
+    const meta = db
+      .prepare(
+        "SELECT schemaVersion, activeSpaceId, enabled, searchEngine, layoutMode, layoutLeftTabId, layoutRightTabId, layoutRatio, layoutFocused FROM meta WHERE id=0",
+      )
+      .get() as {
+      schemaVersion: number;
+      activeSpaceId: string;
+      enabled: number;
+      searchEngine: string;
+      layoutMode: string;
+      layoutLeftTabId: string | null;
+      layoutRightTabId: string | null;
+      layoutRatio: number;
+      layoutFocused: string;
+    };
+    expect(meta.schemaVersion).toBe(7);
+    // The five layout columns are present with their defaults on the existing row.
+    expect(hasLayoutColumns(db)).toBe(true);
+    expect(meta.layoutMode).toBe("single");
+    expect(meta.layoutLeftTabId).toBe(null);
+    expect(meta.layoutRightTabId).toBe(null);
+    expect(meta.layoutRatio).toBe(0.5);
+    expect(meta.layoutFocused).toBe("left");
+    // Pre-existing state preserved (no re-create wiped it).
+    expect(meta.activeSpaceId).toBe("space-1");
+    expect(meta.enabled).toBe(0);
+    expect(meta.searchEngine).toBe("google");
+    expect(db.prepare("SELECT id FROM tabs").get()).toEqual({ id: "t1" });
+    expect(
+      db.prepare("SELECT host, factor, updatedAt FROM site_zoom").get(),
+    ).toEqual({ host: "example.com", factor: 1.5, updatedAt: 42 });
+    db.close();
+  });
+
+  test("is a no-op on a database already at the current version (v7) with non-default layout values", () => {
+    const path = join(tempDir, "v7.db");
+    const db = new Database(path);
+    db.exec(V7_DDL);
+    // Seed enabled=0, a non-default searchEngine, and NON-default layout values so
+    // a spurious re-create/migrate (which would reset them to their defaults) is
+    // detectable, plus a site_zoom row so a re-create would be observable.
+    db.prepare(
+      "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled,searchEngine,layoutMode,layoutLeftTabId,layoutRightTabId,layoutRatio,layoutFocused) " +
+        "VALUES (0, 7, 'space-9', 0, 'google', 'split', 'tL', 'tR', 0.35, 'right')",
     ).run();
     db.prepare(
       "INSERT INTO site_zoom(host,factor,updatedAt) VALUES ('example.com', 1.5, 42)",
@@ -430,18 +530,29 @@ describe("migrate", () => {
 
     const meta = db
       .prepare(
-        "SELECT schemaVersion, activeSpaceId, enabled, searchEngine FROM meta WHERE id=0",
+        "SELECT schemaVersion, activeSpaceId, enabled, searchEngine, layoutMode, layoutLeftTabId, layoutRightTabId, layoutRatio, layoutFocused FROM meta WHERE id=0",
       )
       .get() as {
       schemaVersion: number;
       activeSpaceId: string;
       enabled: number;
       searchEngine: string;
+      layoutMode: string;
+      layoutLeftTabId: string | null;
+      layoutRightTabId: string | null;
+      layoutRatio: number;
+      layoutFocused: string;
     };
-    expect(meta.schemaVersion).toBe(6);
+    expect(meta.schemaVersion).toBe(7);
     expect(meta.activeSpaceId).toBe("space-9");
     expect(meta.enabled).toBe(0);
     expect(meta.searchEngine).toBe("google");
+    // The non-default layout values are left untouched (no re-run of step 7).
+    expect(meta.layoutMode).toBe("split");
+    expect(meta.layoutLeftTabId).toBe("tL");
+    expect(meta.layoutRightTabId).toBe("tR");
+    expect(meta.layoutRatio).toBe(0.35);
+    expect(meta.layoutFocused).toBe("right");
     // The existing site_zoom row is left untouched (no re-create wiped it).
     expect(
       db.prepare("SELECT host, factor, updatedAt FROM site_zoom").get(),
@@ -452,12 +563,12 @@ describe("migrate", () => {
 
 describe("readAllowlist / insertAllowlistHost / deleteAllowlistHost", () => {
   test("round-trip: insert (ordered), INSERT OR IGNORE on a dup is a no-op, delete removes one", () => {
-    // Hand-build a valid current (v6) database at the path loadStore will open.
+    // Hand-build a valid current (v7) database at the path loadStore will open.
     const path = join(tempDir, "zeo.db");
     const seed = new Database(path);
-    seed.exec(V6_DDL);
+    seed.exec(V7_DDL);
     seed.prepare(
-      "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled) VALUES (0, 6, 'space-x', 1)",
+      "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled) VALUES (0, 7, 'space-x', 1)",
     ).run();
     seedRows(seed, "space-x");
     seed.close();
@@ -535,14 +646,109 @@ describe("readSiteZoom / upsertSiteZoom / deleteSiteZoom", () => {
   });
 });
 
+describe("readWindowLayout / writeWindowLayout", () => {
+  // Each test opens the module-level handle on a fresh, migrated (v7) database
+  // via loadStore(), so the helpers act on the same handle production uses.
+  beforeEach(() => {
+    loadStore();
+  });
+
+  test("a fresh database reads back the single layout", () => {
+    expect(readWindowLayout()).toEqual({ mode: "single" });
+  });
+
+  test("round-trips a split layout (ratio preserved when in range)", () => {
+    writeWindowLayout({
+      mode: "split",
+      left: "tL",
+      right: "tR",
+      ratio: 0.35,
+      focused: "right",
+    });
+    expect(readWindowLayout()).toEqual({
+      mode: "split",
+      left: "tL",
+      right: "tR",
+      ratio: 0.35,
+      focused: "right",
+    });
+  });
+
+  test("clamps an out-of-range stored ratio on read", () => {
+    writeWindowLayout({
+      mode: "split",
+      left: "tL",
+      right: "tR",
+      ratio: 0.35,
+      focused: "left",
+    });
+    // Force an out-of-range ratio via a separate connection; readWindowLayout
+    // returns it clamped to the [0.2, 0.8] band.
+    const raw = new Database(join(tempDir, "zeo.db"));
+    raw.prepare("UPDATE meta SET layoutRatio=? WHERE id=0").run(0.05);
+    raw.close();
+    expect(readWindowLayout()).toEqual({
+      mode: "split",
+      left: "tL",
+      right: "tR",
+      ratio: 0.2,
+      focused: "left",
+    });
+  });
+
+  test("writing single after a split reads back single", () => {
+    writeWindowLayout({
+      mode: "split",
+      left: "tL",
+      right: "tR",
+      ratio: 0.5,
+      focused: "left",
+    });
+    writeWindowLayout({ mode: "single" });
+    expect(readWindowLayout()).toEqual({ mode: "single" });
+  });
+
+  test("a stored split with a NULL pane tab id reads back single", () => {
+    writeWindowLayout({
+      mode: "split",
+      left: "tL",
+      right: "tR",
+      ratio: 0.5,
+      focused: "left",
+    });
+    // A split row whose right pane id was cleared (as a legacy/hand-modified row
+    // could carry) reads back as single rather than a broken split.
+    const raw = new Database(join(tempDir, "zeo.db"));
+    raw.prepare("UPDATE meta SET layoutRightTabId=NULL WHERE id=0").run();
+    raw.close();
+    expect(readWindowLayout()).toEqual({ mode: "single" });
+  });
+
+  test("a stored split with a NULL left pane tab id reads back single", () => {
+    writeWindowLayout({
+      mode: "split",
+      left: "tL",
+      right: "tR",
+      ratio: 0.5,
+      focused: "left",
+    });
+    // Symmetric to the right-pane case: clearing the LEFT pane id also reads
+    // back as single, exercising that pane of the both-ids-present guard.
+    const raw = new Database(join(tempDir, "zeo.db"));
+    raw.prepare("UPDATE meta SET layoutLeftTabId=NULL WHERE id=0").run();
+    raw.close();
+    expect(readWindowLayout()).toEqual({ mode: "single" });
+  });
+});
+
 describe("readBlockingEnabled / writeBlockingEnabled", () => {
   test("writeBlockingEnabled(false) round-trips and leaves schemaVersion/activeSpaceId intact", () => {
-    // Hand-build a valid current (v6) database at the path loadStore will open.
+    // Hand-build a valid current (v7) database at the path loadStore will open.
     const path = join(tempDir, "zeo.db");
     const seed = new Database(path);
-    seed.exec(V6_DDL);
+    seed.exec(V7_DDL);
     seed.prepare(
-      "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled) VALUES (0, 6, 'space-x', 1)",
+      "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled) VALUES (0, 7, 'space-x', 1)",
     ).run();
     seedRows(seed, "space-x");
     seed.close();
@@ -559,7 +765,7 @@ describe("readBlockingEnabled / writeBlockingEnabled", () => {
     const meta = inspect
       .prepare("SELECT schemaVersion, activeSpaceId, enabled FROM meta WHERE id=0")
       .get() as { schemaVersion: number; activeSpaceId: string; enabled: number };
-    expect(meta.schemaVersion).toBe(6);
+    expect(meta.schemaVersion).toBe(7);
     expect(meta.activeSpaceId).toBe("space-x");
     expect(meta.enabled).toBe(0);
     inspect.close();
@@ -567,14 +773,14 @@ describe("readBlockingEnabled / writeBlockingEnabled", () => {
 });
 
 describe("readSearchEngine / writeSearchEngine", () => {
-  /** Hand-builds a valid current (v6) database at the loadStore path, opens the
+  /** Hand-builds a valid current (v7) database at the loadStore path, opens the
    *  module-level handle the accessors use, and returns the db file path. */
   function seedAndLoad(): string {
     const path = join(tempDir, "zeo.db");
     const seed = new Database(path);
-    seed.exec(V6_DDL);
+    seed.exec(V7_DDL);
     seed.prepare(
-      "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled) VALUES (0, 6, 'space-x', 1)",
+      "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled) VALUES (0, 7, 'space-x', 1)",
     ).run();
     seedRows(seed, "space-x");
     seed.close();

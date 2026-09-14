@@ -242,7 +242,9 @@ export function CommandBar() {
             ? "Run a command"
             : mode === "history"
               ? "Search history"
-              : "Search or enter address"
+              : mode === "split"
+                ? "Split with tab…"
+                : "Search or enter address"
         }
         spellCheck={false}
         autoComplete="off"
