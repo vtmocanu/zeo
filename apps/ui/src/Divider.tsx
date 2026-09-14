@@ -87,6 +87,13 @@ export function Divider() {
     draggingRef.current = false;
   };
 
+  // A pointercancel (or an implicit capture loss) ends the drag WITHOUT a
+  // pointerup, so clear the flag here too — otherwise draggingRef stays true and
+  // a later bare hover-move would move the divider with no press.
+  const onDragInterrupted = (): void => {
+    draggingRef.current = false;
+  };
+
   return (
     <div
       className="divider-handle"
@@ -94,6 +101,8 @@ export function Divider() {
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
+      onPointerCancel={onDragInterrupted}
+      onLostPointerCapture={onDragInterrupted}
     />
   );
 }
