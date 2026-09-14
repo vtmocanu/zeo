@@ -40,7 +40,12 @@ export type CommandId =
   | "find.open"
   | "find.next"
   | "find.previous"
-  | "find.close";
+  | "find.close"
+  | "quickBrowse.promote"
+  | "quickBrowse.promoteToSpace"
+  | "quickBrowse.dismiss"
+  | "quickBrowse.openInTab"
+  | "browser.setDefault";
 
 /**
  * One registry entry: its {@link CommandId}, human title, search `keywords`,
@@ -64,9 +69,10 @@ export interface CommandDescriptor {
  * (`TabsState.zoom.byHost[siteHost]`, or `1.0`/{@link DEFAULT_ZOOM_FACTOR} when
  * the host has no entry or the tab is non-http(s)) — or `null` when no tab is
  * active; the number of spaces; `settingsOpen`, whether the settings view is
- * currently open; and `find`, whether the find session is `open` and whether it
- * currently `hasQuery` (a non-empty committed query), which gate the directional
- * find commands.
+ * currently open; `quickBrowseOpen`, whether the quick-browse window is
+ * currently open (gates the `quickBrowse.*` commands); and `find`, whether the
+ * find session is `open` and whether it currently `hasQuery` (a non-empty
+ * committed query), which gate the directional find commands.
  */
 export interface CommandContext {
   activeTab: {
@@ -79,6 +85,7 @@ export interface CommandContext {
   } | null;
   spaceCount: number;
   settingsOpen: boolean;
+  quickBrowseOpen: boolean;
   find: { open: boolean; hasQuery: boolean };
 }
 
@@ -120,6 +127,11 @@ export const COMMANDS: readonly CommandDescriptor[] = [
   { id: "find.next", title: "Find Next", keywords: ["find", "next", "search"], accelerator: "CmdOrCtrl+G", menu: "view" },
   { id: "find.previous", title: "Find Previous", keywords: ["find", "previous", "search"], accelerator: "CmdOrCtrl+Shift+G", menu: "view" },
   { id: "find.close", title: "Close Find", keywords: ["find", "close", "search"], accelerator: null, menu: null },
+  { id: "quickBrowse.promote", title: "Promote to Current Space", keywords: ["promote", "quick", "browse", "space", "keep"], accelerator: null, menu: null },
+  { id: "quickBrowse.promoteToSpace", title: "Promote to Space…", keywords: ["promote", "quick", "browse", "space", "move"], accelerator: null, menu: null },
+  { id: "quickBrowse.dismiss", title: "Dismiss Quick-Browse", keywords: ["dismiss", "quick", "browse", "close", "discard"], accelerator: null, menu: null },
+  { id: "quickBrowse.openInTab", title: "Open Link in New Tab", keywords: ["open", "tab", "quick", "browse", "link"], accelerator: null, menu: null },
+  { id: "browser.setDefault", title: "Set zeo as Default Browser", keywords: ["default", "browser", "open", "links"], accelerator: null, menu: null },
 ];
 
 /**
@@ -139,6 +151,8 @@ export const COMMANDS: readonly CommandDescriptor[] = [
  * is nothing to reset when the host is already at actual size). `find.open`
  * needs an active tab; `find.next` and `find.previous` need the find session
  * open with a non-empty query (`context.find.open && context.find.hasQuery`).
+ * The four `quickBrowse.*` commands need the quick-browse window open
+ * (`context.quickBrowseOpen`); `browser.setDefault` is always enabled.
  */
 export function isCommandEnabled(id: CommandId, context: CommandContext): boolean {
   switch (id) {
@@ -197,6 +211,13 @@ export function isCommandEnabled(id: CommandId, context: CommandContext): boolea
       return context.find.open && context.find.hasQuery;
     case "find.close":
       return context.find.open;
+    case "quickBrowse.promote":
+    case "quickBrowse.promoteToSpace":
+    case "quickBrowse.dismiss":
+    case "quickBrowse.openInTab":
+      return context.quickBrowseOpen;
+    case "browser.setDefault":
+      return true;
     default: {
       const exhaustive: never = id;
       return exhaustive;

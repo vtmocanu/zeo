@@ -8,6 +8,7 @@ import type { HistoryEntry, HistoryVisit } from "./history.js";
 import type { ZoomState } from "./zoom.js";
 import type { FindState } from "./page-search.js";
 import type { SettingsSectionId, SearchEngineId } from "./settings.js";
+import type { QuickBrowse } from "./quick-browse.js";
 
 /**
  * A single space's tab payload, in the pre-space shape. This is what
@@ -76,6 +77,10 @@ export interface TabsState extends StoreSnapshot {
   settingsSection: SettingsSectionId;
   settingsSectionNonce: number;
   find: FindState;
+  /** The current quick-browse entry, or `null` when no quick-browse window is open. */
+  quickBrowse: QuickBrowse | null;
+  /** Whether zeo is currently the OS default browser (drives the set-default affordance). */
+  isDefaultBrowser: boolean;
 }
 
 /**
@@ -301,6 +306,11 @@ export interface HistoryApi {
  */
 export interface Settings {
   searchEngine: SearchEngineId;
+  /**
+   * When `true`, external links open in the transient quick-browse window
+   * rather than a new tab in the active space.
+   */
+  quickBrowseExternal: boolean;
 }
 
 /**
@@ -315,6 +325,29 @@ export interface Settings {
 export interface SettingsApi {
   get(): Promise<Settings>;
   setSearchEngine(id: SearchEngineId): Promise<void>;
+  /**
+   * Sets whether external links open in the quick-browse window: it resolves
+   * without side effects when `enabled` is already current, rejects with a
+   * `TypeError` (changing nothing) when `enabled` is not a boolean, otherwise
+   * persists the new value then updates the in-memory state and broadcasts — a
+   * persistence failure rejects and changes nothing.
+   */
+  setQuickBrowseExternal(enabled: boolean): Promise<void>;
+}
+
+/**
+ * Quick-browse commands the renderer invokes over IPC, handled in main against
+ * the single transient quick-browse window. Quick-browse rides the
+ * `stateChange` broadcast on `TabsState.quickBrowse` — there is no dedicated
+ * change channel.
+ */
+export interface QuickBrowseApi {
+  /** The current quick-browse entry, or null when no window is open. */
+  state(): Promise<QuickBrowse | null>;
+  /** Promote the current link into the ACTIVE space, then tear the window down. */
+  promote(): Promise<void>;
+  /** Throw the current link away and tear the window down. */
+  dismiss(): Promise<void>;
 }
 
 /**
@@ -369,6 +402,7 @@ export interface ZeoApi {
   history: HistoryApi;
   zoom: ZoomApi;
   settings: SettingsApi;
+  quickBrowse: QuickBrowseApi;
   find: FindApi;
   onStateChange(listener: (state: TabsState) => void): () => void;
   /** Registers a listener for main-pushed command-bar state updates and returns
@@ -439,5 +473,9 @@ export const IPC = {
   findState: "zeo:find:state",
   settingsGet: "zeo:settings:get",
   settingsSetSearchEngine: "zeo:settings:set-search-engine",
+  settingsSetQuickBrowseExternal: "zeo:settings:set-quick-browse-external",
+  quickBrowseState: "zeo:quick-browse:state",
+  quickBrowsePromote: "zeo:quick-browse:promote",
+  quickBrowseDismiss: "zeo:quick-browse:dismiss",
   stateChange: "zeo:state-change",
 } as const;

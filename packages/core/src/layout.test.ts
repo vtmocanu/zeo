@@ -3,6 +3,7 @@ import {
   commandBarBounds,
   settingsBounds,
   findBarBounds,
+  quickBrowsePageBounds,
   COMMAND_BAR_HEIGHT,
   SUGGESTION_ROW_HEIGHT,
   SIDEBAR_WIDTH,
@@ -10,6 +11,7 @@ import {
   FIND_BAR_HEIGHT,
   FIND_BAR_INSET,
   FIND_BAR_TOP,
+  QUICK_BROWSE_CHROME_HEIGHT,
 } from "./layout.js";
 
 describe("commandBarBounds", () => {
@@ -124,6 +126,28 @@ describe("findBarBounds", () => {
     const bounds = findBarBounds(SIDEBAR_WIDTH);
     expect(bounds).toEqual({ x: 0, y: 0, width: 0, height: 0 });
     expect(bounds.width).toBeGreaterThanOrEqual(0);
+    expect(bounds.height).toBeGreaterThanOrEqual(0);
+  });
+});
+
+describe("quickBrowsePageBounds", () => {
+  it("fills the width below the chrome bar for a normal window", () => {
+    expect(quickBrowsePageBounds(480, 640)).toEqual({
+      x: 0,
+      y: QUICK_BROWSE_CHROME_HEIGHT,
+      width: 480,
+      height: 640 - QUICK_BROWSE_CHROME_HEIGHT,
+    });
+  });
+
+  it("floors the height at 0 when the window is shorter than the chrome bar", () => {
+    const bounds = quickBrowsePageBounds(480, QUICK_BROWSE_CHROME_HEIGHT - 10);
+    expect(bounds).toEqual({
+      x: 0,
+      y: QUICK_BROWSE_CHROME_HEIGHT,
+      width: 480,
+      height: 0,
+    });
     expect(bounds.height).toBeGreaterThanOrEqual(0);
   });
 });
