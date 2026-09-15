@@ -9,6 +9,24 @@ milestone, a minor bump only for very large breakthroughs.
 
 ## [Unreleased]
 
+## [0.0.20] - 2026-09-14
+
+### Added
+
+- Quick-browse window: a lightweight window for a link opened from another app
+  via the macOS default-browser handoff (`open-url`). At most one is open at a
+  time — a second link replaces the url in place rather than stacking windows.
+  The page renders in a throwaway, in-memory session isolated from every profile
+  and never persisted, so nothing it loads survives the window. `Return` (or the
+  Promote button) adopts the link into the current space as a normal tab,
+  "Promote to space…" adopts it into a chosen space through the command bar,
+  `Cmd+Shift+Return` opens it in a background tab, and `Escape` dismisses it and
+  throws the link away. A General-settings toggle ("Open external links in
+  quick-browse", on by default) routes external links to a normal new tab
+  instead when turned off, and a "Set zeo as default browser" button in the same
+  section registers zeo for `http`/`https`. The persisted toggle bumps the
+  database to schema version 7.
+
 ## [0.0.19] - 2026-09-07
 
 ### Added

@@ -40,17 +40,24 @@ const ALL_IDS: CommandId[] = [
   "find.next",
   "find.previous",
   "find.close",
+  "quickBrowse.promote",
+  "quickBrowse.promoteToSpace",
+  "quickBrowse.dismiss",
+  "quickBrowse.openInTab",
+  "browser.setDefault",
 ];
 
 /**
  * Builds a command context, defaulting to no active tab, a single space, a
- * closed settings view, and a closed find session with no query.
+ * closed settings view, a closed quick-browse window, and a closed find session
+ * with no query.
  */
 function context(partial: Partial<CommandContext> = {}): CommandContext {
   return {
     activeTab: partial.activeTab === undefined ? null : partial.activeTab,
     spaceCount: partial.spaceCount ?? 1,
     settingsOpen: partial.settingsOpen ?? false,
+    quickBrowseOpen: partial.quickBrowseOpen ?? false,
     find: partial.find ?? { open: false, hasQuery: false },
   };
 }
@@ -364,6 +371,44 @@ describe("find commands", () => {
   });
 });
 
+describe("quick-browse and set-default commands", () => {
+  const quickBrowseIds = [
+    "quickBrowse.promote",
+    "quickBrowse.promoteToSpace",
+    "quickBrowse.dismiss",
+    "quickBrowse.openInTab",
+  ] as const;
+  const newIds = [...quickBrowseIds, "browser.setDefault"] as const;
+
+  test("the five new ids are present, unique, and have no accelerator or menu", () => {
+    for (const id of newIds) {
+      const matches = COMMANDS.filter((c) => c.id === id);
+      expect(matches).toHaveLength(1);
+      expect(matches[0]?.accelerator).toBeNull();
+      expect(matches[0]?.menu).toBeNull();
+    }
+  });
+
+  test("the four quickBrowse.* commands are enabled only when quickBrowseOpen is true", () => {
+    for (const id of quickBrowseIds) {
+      expect(isCommandEnabled(id, context({ quickBrowseOpen: true }))).toBe(true);
+      // Disabled when closed, including with no active tab.
+      expect(isCommandEnabled(id, context({ quickBrowseOpen: false }))).toBe(false);
+      expect(
+        isCommandEnabled(id, context({ quickBrowseOpen: false, activeTab: null })),
+      ).toBe(false);
+    }
+  });
+
+  test("browser.setDefault is always enabled", () => {
+    expect(isCommandEnabled("browser.setDefault", context({ quickBrowseOpen: true }))).toBe(true);
+    expect(isCommandEnabled("browser.setDefault", context({ quickBrowseOpen: false }))).toBe(true);
+    expect(
+      isCommandEnabled("browser.setDefault", context({ quickBrowseOpen: false, activeTab: null })),
+    ).toBe(true);
+  });
+});
+
 describe("isCommandEnabled — no active tab yields exactly the expected set", () => {
   function enabledIds(ctx: CommandContext): CommandId[] {
     return ALL_IDS.filter((id) => isCommandEnabled(id, ctx)).sort();
@@ -371,13 +416,13 @@ describe("isCommandEnabled — no active tab yields exactly the expected set", (
 
   test("with one space: only the always-enabled commands", () => {
     expect(enabledIds(context({ activeTab: null, spaceCount: 1 }))).toEqual(
-      ["bar.open-commands", "bar.open-location", "blocking.toggle", "history.clear", "history.open", "settings.open", "settings.openGeneral", "settings.openHistory", "settings.openProfiles", "space.new", "space.rename", "tab.new"].sort(),
+      ["bar.open-commands", "bar.open-location", "blocking.toggle", "browser.setDefault", "history.clear", "history.open", "settings.open", "settings.openGeneral", "settings.openHistory", "settings.openProfiles", "space.new", "space.rename", "tab.new"].sort(),
     );
   });
 
   test("with more than one space: the always-enabled commands plus space.delete", () => {
     expect(enabledIds(context({ activeTab: null, spaceCount: 2 }))).toEqual(
-      ["bar.open-commands", "bar.open-location", "blocking.toggle", "history.clear", "history.open", "settings.open", "settings.openGeneral", "settings.openHistory", "settings.openProfiles", "space.delete", "space.new", "space.rename", "tab.new"].sort(),
+      ["bar.open-commands", "bar.open-location", "blocking.toggle", "browser.setDefault", "history.clear", "history.open", "settings.open", "settings.openGeneral", "settings.openHistory", "settings.openProfiles", "space.delete", "space.new", "space.rename", "tab.new"].sort(),
     );
   });
 });

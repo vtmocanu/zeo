@@ -3154,6 +3154,10 @@ test.describe("zeo desktop app", () => {
     // the commands-mode list. find.next/find.previous are disabled while find is
     // closed (which it is here), so they do NOT appear.
     "find.open",
+    // PRD 7.2 — browser.setDefault is the always-enabled default-browser command
+    // that trails the registry (the four quickBrowse.* commands sit before it but
+    // are disabled with no quick-browse window open, so only this one appears).
+    "browser.setDefault",
   ];
 
   // §5 bullet 1 — commands mode opens empty, lists only enabled command rows in

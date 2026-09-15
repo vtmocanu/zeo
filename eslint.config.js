@@ -17,6 +17,23 @@ export default tseslint.config(
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
+    // Treat a leading underscore as "intentionally unused" for arguments, locals,
+    // and caught errors — the convention already used across the codebase (e.g.
+    // `_event`, `_unused`). Without this, a lone unused `_`-prefixed argument
+    // (one not followed by a used argument) still trips no-unused-vars.
+    rules: {
+      "@typescript-eslint/no-unused-vars": [
+        "error",
+        {
+          args: "after-used",
+          argsIgnorePattern: "^_",
+          varsIgnorePattern: "^_",
+          caughtErrorsIgnorePattern: "^_",
+        },
+      ],
+    },
+  },
+  {
     // Node-executed tooling: build scripts and config files run under Node and
     // may use Node globals such as console/process.
     files: ["**/*.mjs", "**/*.config.{js,ts}", "**/scripts/**"],

@@ -71,6 +71,23 @@ export function settingsBounds(
   };
 }
 
+export const QUICK_BROWSE_WIDTH = 480;
+export const QUICK_BROWSE_HEIGHT = 640;
+/** Height of the quick-browse chrome bar above the page view. */
+export const QUICK_BROWSE_CHROME_HEIGHT = 44;
+/**
+ * The quick-browse page WebContentsView's rectangle WITHIN the quick-browse
+ * window's content area: full width, starting below the chrome bar, filling the
+ * remaining height. Floored at 0 so a window shorter than the chrome bar never
+ * yields a negative height.
+ */
+export function quickBrowsePageBounds(
+  contentWidth: number,
+  contentHeight: number,
+): { x: number; y: number; width: number; height: number } {
+  return { x: 0, y: QUICK_BROWSE_CHROME_HEIGHT, width: contentWidth, height: Math.max(0, contentHeight - QUICK_BROWSE_CHROME_HEIGHT) };
+}
+
 /**
  * Computes the find bar overlay's on-screen rectangle within the window's
  * content area. The bar is anchored to the top-right of the PAGE region (the

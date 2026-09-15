@@ -15,8 +15,16 @@ import type { Suggestion } from "./suggest.js";
  *   reads "Search history", the typed text filters recent/matching visits, there
  *   is no text (navigate/search) action row, and accepting a row navigates the
  *   active tab to that url.
+ * - `"promote"` opens the bar to pick a target SPACE for the quick-browse link:
+ *   the typed text filters spaces by name, there is no text (navigate/search)
+ *   action row, and every row is a `"space"` suggestion.
  */
-export type CommandBarMode = "navigate" | "new-tab" | "commands" | "history";
+export type CommandBarMode =
+  | "navigate"
+  | "new-tab"
+  | "commands"
+  | "history"
+  | "promote";
 
 /**
  * The command bar's serializable state, broadcast from main to the renderer.
