@@ -1072,7 +1072,12 @@ function openQuickBrowseWindow(url: string): void {
   // 6. Filter the ephemeral session when blocking is enabled and the engine has
   //    loaded (same condition as the profile-session attach).
   if (blocking.enabled && blocker) {
-    blocker.attach(quickBrowseSession);
+    try {
+      blocker.attach(quickBrowseSession);
+    } catch (err) {
+      teardownQuickBrowse();
+      throw err;
+    }
   }
 
   // 7. Seed the pure state.
@@ -3485,7 +3490,11 @@ app.whenReady().then(async () => {
               // Cover the transient quick-browse window's ephemeral session too if
               // one is open when the deferred engine arrives.
               if (quickBrowseSession !== null) {
-                b.attach(quickBrowseSession);
+                try {
+                  b.attach(quickBrowseSession);
+                } catch {
+                  teardownQuickBrowse();
+                }
               }
             }
             wireOnBlocked(b);
