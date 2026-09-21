@@ -285,6 +285,18 @@ async function commandBarWindow(app: ElectronApplication): Promise<Page> {
 }
 
 /**
+ * Canonicalize a stored tab url for equality comparison so a pre-normalization
+ * snapshot (e.g. "https://example.com", captured before the view's did-navigate
+ * mirrors the live "https://example.com/" into the store) compares equal to the
+ * settled value. Chromium normalizes a bare authority to a trailing-slash path on
+ * commit, and the main process mirrors that live url into the store asynchronously,
+ * so a raw string compare across two reads is timing-flaky (issue #144). Passes
+ * null through so an absent active tab still compares by identity.
+ */
+const canonicalTabUrl = (u: string | null): string | null =>
+  u === null ? null : new URL(u).href;
+
+/**
  * Read the NATIVE geometry the main process gave the command-bar overlay: the
  * window's content size plus the overlay `WebContentsView`'s own bounds height.
  * Runs in the MAIN process via `app.evaluate` (the renderer cannot read its own
@@ -2176,7 +2188,7 @@ test.describe("zeo desktop app", () => {
       };
     }, before.active);
     expect(after.count).toBe(before.count);
-    expect(after.url).toBe(before.url);
+    expect(canonicalTabUrl(after.url)).toBe(canonicalTabUrl(before.url));
   });
 
   // §5 bullet 5 — the headless seam: submit works with the bar CLOSED. Navigating,
@@ -2234,7 +2246,7 @@ test.describe("zeo desktop app", () => {
       };
     });
     expect(r3.postCount).toBe(r3.preCount);
-    expect(r3.postUrl).toBe(r3.preUrl);
+    expect(canonicalTabUrl(r3.postUrl)).toBe(canonicalTabUrl(r3.preUrl));
   });
 
   // §5 bullet 6 — core-level scheme rejection surfaces end to end: a `file:` scheme
