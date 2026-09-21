@@ -994,6 +994,93 @@ body {
   border-color: #6b6bff;
 }
 
+/* Quick-browse window ----------------------------------------------------- */
+
+/* The chrome bar of the quick-browse window (selected by `?view=quick-browse`).
+   Main sizes this WebContentsView to a ~44px bar anchored at the top of the
+   window, with the transient page view below it. It is a single horizontal row
+   that FILLS the viewport. Reuses the dark surface tokens. */
+.quick-browse {
+  height: 100vh;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 12px;
+  background: #1e1e28;
+  color: #e6e6ee;
+  border-bottom: 1px solid #2c2c3a;
+  overflow: hidden;
+}
+
+/* The url/title line; truncates so a long external url never pushes the actions
+   off-screen. */
+.quick-browse__meta {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  overflow: hidden;
+}
+
+.quick-browse__title {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  color: #e6e6ee;
+}
+
+.quick-browse__url {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: #9a9ab0;
+}
+
+.quick-browse__actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.quick-browse__button {
+  flex: 0 0 auto;
+  padding: 6px 10px;
+  color: #e6e6ee;
+  background: #2a2a38;
+  border: 1px solid #3a3a4c;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.quick-browse__button:hover:not(:disabled) {
+  background: #34344a;
+}
+
+.quick-browse__button:focus-visible {
+  outline: none;
+  border-color: #6b6bff;
+}
+
+.quick-browse__button--ghost {
+  background: transparent;
+  border-color: #2c2c3a;
+  color: #9a9ab0;
+}
+
+.quick-browse__button--ghost:hover:not(:disabled) {
+  background: #2a2a38;
+  color: #e6e6ee;
+}
+
 /* Split divider handle ---------------------------------------------------- */
 
 /* The draggable gutter between the two split panes, rendered in its own

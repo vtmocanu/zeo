@@ -13,6 +13,7 @@ import type {
   HistoryVisit,
   PaneSide,
   Profile,
+  QuickBrowse,
   SearchEngineId,
   Settings,
   Space,
@@ -113,6 +114,13 @@ const api = {
     get: (): Promise<Settings> => ipcRenderer.invoke(IPC.settingsGet),
     setSearchEngine: (id: SearchEngineId): Promise<void> =>
       ipcRenderer.invoke(IPC.settingsSetSearchEngine, id),
+    setQuickBrowseExternal: (enabled: boolean): Promise<void> =>
+      ipcRenderer.invoke(IPC.settingsSetQuickBrowseExternal, enabled),
+  },
+  quickBrowse: {
+    state: (): Promise<QuickBrowse | null> => ipcRenderer.invoke(IPC.quickBrowseState),
+    promote: (): Promise<void> => ipcRenderer.invoke(IPC.quickBrowsePromote),
+    dismiss: (): Promise<void> => ipcRenderer.invoke(IPC.quickBrowseDismiss),
   },
   zoom: {
     zoomIn: (): Promise<void> => ipcRenderer.invoke(IPC.zoomIn),

@@ -34,6 +34,7 @@ export type {
   FindApi,
   Settings,
   SettingsApi,
+  QuickBrowseApi,
   ZeoApi,
   TabContextMenuItem,
   TabContextMenuResult,
@@ -136,9 +137,22 @@ export {
   FIND_BAR_INSET,
   FIND_BAR_TOP,
   findBarBounds,
+  QUICK_BROWSE_WIDTH,
+  QUICK_BROWSE_HEIGHT,
+  QUICK_BROWSE_CHROME_HEIGHT,
+  quickBrowsePageBounds,
   DIVIDER_WIDTH,
   splitPaneBounds,
 } from "./layout.js";
+export {
+  openQuickBrowse,
+  replaceQuickBrowseUrl,
+  setQuickBrowseUrl,
+  setQuickBrowseTitle,
+  promoteQuickBrowse,
+  dismissQuickBrowse,
+} from "./quick-browse.js";
+export type { QuickBrowse, QuickBrowseState } from "./quick-browse.js";
 export {
   SINGLE_LAYOUT,
   DEFAULT_SPLIT_RATIO,

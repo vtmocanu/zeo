@@ -631,6 +631,81 @@ describe("suggest — history mode", () => {
   });
 });
 
+describe("suggest — promote mode", () => {
+  test("returns only space rows, no row 0 and no other kinds", () => {
+    const rows = suggest(
+      "work",
+      catalog({
+        // Tabs, commands, history and archived tabs present; promote mode must
+        // ignore them entirely and never emit a row-0 text action.
+        spaces: [
+          { id: "sp", name: "Work", active: false },
+          { id: "sp2", name: "Personal", active: true },
+        ],
+        tabs: [tab({ tabId: "t", title: "Work", url: "https://work.test/" })],
+        commands: [command({ id: "tab.new", title: "Work", keywords: ["work"] })],
+        history: [historyEntry({ url: "https://work.test/a", title: "Work" })],
+        archived: [archivedTab({ tabId: "a", title: "Work", url: "https://arch.test/" })],
+      }),
+      options({ mode: "promote" }),
+    );
+    expect(rows.every((r) => r.kind === "space")).toBe(true);
+    expect(rows).toEqual([{ kind: "space", spaceId: "sp", name: "Work" }]);
+  });
+
+  test("row 0 is never a navigate/search text action in promote mode", () => {
+    const rows = suggest(
+      "example.com",
+      catalog({
+        spaces: [{ id: "sp", name: "Example", active: false }],
+      }),
+      options({ mode: "promote" }),
+    );
+    // "example.com" resolves to a navigate URL in other modes; here it must not,
+    // and it matches no space name, so the list is empty.
+    expect(rows).toEqual([]);
+  });
+
+  test("an empty query lists all spaces in catalog order", () => {
+    const rows = suggest(
+      "  ",
+      catalog({
+        spaces: [
+          { id: "s1", name: "Personal", active: true },
+          { id: "s2", name: "Work", active: false },
+          { id: "s3", name: "Side", active: false },
+        ],
+      }),
+      options({ mode: "promote" }),
+    );
+    expect(rows).toEqual([
+      { kind: "space", spaceId: "s1", name: "Personal" },
+      { kind: "space", spaceId: "s2", name: "Work" },
+      { kind: "space", spaceId: "s3", name: "Side" },
+    ]);
+  });
+
+  test("a non-empty query filters spaces by name", () => {
+    const rows = suggest(
+      "work",
+      catalog({
+        spaces: [
+          { id: "s1", name: "Personal", active: true },
+          { id: "s2", name: "Work", active: false },
+          { id: "s3", name: "Homework", active: false },
+        ],
+      }),
+      options({ mode: "promote" }),
+    );
+    // Both "Work" (prefix, tier 1) and "Homework" (substring, tier 3) match;
+    // the prefix match ranks first.
+    expect(rows).toEqual([
+      { kind: "space", spaceId: "s2", name: "Work" },
+      { kind: "space", spaceId: "s3", name: "Homework" },
+    ]);
+  });
+});
+
 describe("suggest — split mode", () => {
   test("empty query returns the active space's other open tabs, MRU-first, active and archived excluded", () => {
     const rows = suggest(

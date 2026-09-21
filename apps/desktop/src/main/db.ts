@@ -48,7 +48,8 @@ import type {
  * at schema version 6, plus the downloads table added at schema version 7 —
  * nine tables in all. Schema version 8 adds the five window-layout columns to
  * `meta` (layoutMode, layoutLeftTabId, layoutRightTabId, layoutRatio,
- * layoutFocused) that persist the active space's split-view layout.
+ * layoutFocused) that persist the active space's split-view layout, and schema
+ * version 9 adds the quickBrowseExternal column to `meta`.
  * The PRIMARY KEYs (no duplicate ids), the foreign
  * keys, and `PRAGMA foreign_keys=ON` are the well-formedness contract the core
  * codec relies on: every on-disk state is guaranteed loadable. `spaces.activeTabId`
@@ -89,6 +90,7 @@ CREATE TABLE meta (
   id INTEGER PRIMARY KEY CHECK (id = 0), schemaVersion INTEGER NOT NULL, activeSpaceId TEXT,
   enabled INTEGER NOT NULL DEFAULT 1,
   searchEngine TEXT NOT NULL DEFAULT 'duckduckgo',
+  quickBrowseExternal INTEGER NOT NULL DEFAULT 1,
   layoutMode TEXT NOT NULL DEFAULT 'single',
   layoutLeftTabId TEXT,
   layoutRightTabId TEXT,
@@ -118,8 +120,8 @@ ${DOWNLOADS_DDL}
  * The ordered, in-place upgrade steps keyed by the version they PRODUCE: the
  * `v` entry is run to move a database from version `v-1` to `v`. {@link migrate}
  * runs every step from the on-disk version + 1 up through {@link SCHEMA_VERSION},
- * so a future 8→9 upgrade is added by appending a `9` entry here. Each step is a
- * plain SQL blob run inside the migrate transaction; the step MUST leave
+ * so a future N→N+1 upgrade is added by appending an `N+1` entry here. Each step
+ * is a plain SQL blob run inside the migrate transaction; the step MUST leave
  * `meta.schemaVersion` set to its own key.
  */
 const HISTORY_DDL =
@@ -152,6 +154,9 @@ const MIGRATION_STEPS: Record<number, string> = {
     "ALTER TABLE meta ADD COLUMN layoutRatio REAL NOT NULL DEFAULT 0.5;" +
     "ALTER TABLE meta ADD COLUMN layoutFocused TEXT NOT NULL DEFAULT 'left';" +
     "UPDATE meta SET schemaVersion = 8 WHERE id = 0;",
+  9:
+    "ALTER TABLE meta ADD COLUMN quickBrowseExternal INTEGER NOT NULL DEFAULT 1;" +
+    "UPDATE meta SET schemaVersion = 9 WHERE id = 0;",
 };
 
 /** The module-level database handle, `null` until {@link loadStore} opens it. */
@@ -294,6 +299,39 @@ export function writeSearchEngine(id: SearchEngineId): void {
   const info = database.prepare("UPDATE meta SET searchEngine=? WHERE id=0").run(id);
   if (info.changes === 0) {
     throw new Error("writeSearchEngine: no meta row (id=0) to update");
+  }
+}
+
+/**
+ * Reads the persisted "open external links in quick-browse" flag from the meta
+ * row, mapping SQLite's integer to a boolean. Returns `true` (the default) when
+ * the row is absent or the value is null/undefined. Managed ONLY here and by
+ * {@link writeQuickBrowseExternal}; like `enabled`/`searchEngine` it is kept out
+ * of the {@link writeState} full-state flush. Throws when the database is not open.
+ */
+export function readQuickBrowseExternal(): boolean {
+  const database = requireDb();
+  // SQLite-row boundary: .get() is typed `unknown`, cast to the known shape.
+  const row = database
+    .prepare("SELECT quickBrowseExternal FROM meta WHERE id=0")
+    .get() as { quickBrowseExternal: number } | undefined;
+  return (row?.quickBrowseExternal ?? 1) === 1;
+}
+
+/**
+ * Persists the quick-browse-external flag to the meta row, mapping the boolean
+ * to SQLite's integer. Synchronous (better-sqlite3). Like {@link writeSearchEngine}
+ * (and unlike {@link writeBlockingEnabled}) it checks the affected row count: an
+ * UPDATE that matches no `id = 0` row throws rather than silently succeeding, so
+ * the caller's ordered set-quick-browse-external contract surfaces the missing
+ * row as a write failure and never broadcasts an unpersisted value. Throws when
+ * the database is not open.
+ */
+export function writeQuickBrowseExternal(enabled: boolean): void {
+  const database = requireDb();
+  const info = database.prepare("UPDATE meta SET quickBrowseExternal=? WHERE id=0").run(enabled ? 1 : 0);
+  if (info.changes === 0) {
+    throw new Error("writeQuickBrowseExternal: no meta row (id=0) to update");
   }
 }
 
