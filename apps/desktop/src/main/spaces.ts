@@ -10,6 +10,7 @@ import { createViewFor, destroyView } from "./views.js";
 import { forgetTab } from "./tabs.js";
 import { reconcileAndApply } from "./layout.js";
 import { installDownloadHandler, logDownloadError } from "./downloads.js";
+import { attachBlockerToProfileSession } from "./blocking.js";
 
 /**
  * Full space-delete lifecycle. Validates deletability FIRST (unknown id or the
@@ -80,9 +81,7 @@ export function remapSpaceProfile(spaceId: string, profileId: string): void {
 
   // The recreated views below load on the NEW partition; attach the blocker to
   // it so they are filtered from their first request (enabled + engine loaded).
-  if (runtime.blocking.enabled && runtime.blocker) {
-    runtime.blocker.attach(session.fromPartition("persist:" + profileId));
-  }
+  attachBlockerToProfileSession(profileId);
   // Capture downloads started on the new partition's session; idempotent per
   // session, so a profile already carrying the handler is a no-op.
   installDownloadHandler(profileId);
@@ -251,9 +250,7 @@ ipcMain.handle(IPC.profilesCreate, (_event, name: string): Profile => {
   const profile = runtime.store.createProfile(name);
   // Cover the new partition so views created on it are filtered from their first
   // request (only while blocking is enabled and the engine has loaded).
-  if (runtime.blocking.enabled && runtime.blocker) {
-    runtime.blocker.attach(session.fromPartition("persist:" + profile.id));
-  }
+  attachBlockerToProfileSession(profile.id);
   // Capture downloads started on the new profile's session (always, not gated on
   // blocking); idempotent per session.
   installDownloadHandler(profile.id);

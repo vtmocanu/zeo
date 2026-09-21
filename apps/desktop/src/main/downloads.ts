@@ -8,8 +8,6 @@ import {
   safeFilename,
   stripUrlCredentials,
   upsertDownload,
-  removeDownload,
-  clearFinishedDownloads,
 } from "@zeo/core";
 import type { Download } from "@zeo/core";
 import {
@@ -23,6 +21,8 @@ import {
   applyDownloadEvent,
   createThrottledPersister,
   cleanupOrphanedDoneItem,
+  persistDownloadRow,
+  clearFinishedDownloadsSequenced,
 } from "./download-ops.js";
 import type { ApplyDownloadEventDeps } from "./download-ops.js";
 import { runtime } from "./state.js";
@@ -103,40 +103,39 @@ export function installDownloadHandler(profileId: string): void {
     );
     const path = join(dir, filename);
     runtime.reservedFilenames.add(filename);
-    let record: Download | null = null;
+    // setSavePath with an absolute path suppresses the save dialog. A throw here
+    // aborts the download entirely: nothing is tracked yet, so release the held
+    // name and stop.
     try {
-      // setSavePath with an absolute path suppresses the save dialog. A throw here
-      // (or from insertDownload) must leave no record, no row, and no held name.
       item.setSavePath(path);
-      const tabId = runtime.webContentsToTab.get(webContents.id);
-      record = {
-        id: randomUUID(),
-        url: stripUrlCredentials(item.getURL()),
-        filename,
-        path,
-        totalBytes: item.getTotalBytes(),
-        receivedBytes: 0,
-        state: "progressing",
-        startedAt: Date.now(),
-        completedAt: null,
-        // A download whose webContents maps to no live tab gets spaceId null; it is
-        // never dropped.
-        spaceId: tabId !== undefined ? (runtime.views.get(tabId)?.spaceId ?? null) : null,
-      };
-      // Register the live item BEFORE broadcasting so a cancel/remove arriving as
-      // soon as the renderer sees the row finds it.
-      runtime.downloadItems.set(record.id, { item, profileId });
-      runtime.downloads = upsertDownload(runtime.downloads, record);
-      insertDownload(record);
     } catch (err) {
-      if (record !== null) {
-        runtime.downloadItems.delete(record.id);
-        runtime.downloads = removeDownload(runtime.downloads, record.id);
-      }
       runtime.reservedFilenames.delete(filename);
       logDownloadError(err);
       return;
     }
+    const tabId = runtime.webContentsToTab.get(webContents.id);
+    const record: Download = {
+      id: randomUUID(),
+      url: stripUrlCredentials(item.getURL()),
+      filename,
+      path,
+      totalBytes: item.getTotalBytes(),
+      receivedBytes: 0,
+      state: "progressing",
+      startedAt: Date.now(),
+      completedAt: null,
+      // A download whose webContents maps to no live tab gets spaceId null; it is
+      // never dropped.
+      spaceId: tabId !== undefined ? (runtime.views.get(tabId)?.spaceId ?? null) : null,
+    };
+    // Register the live item BEFORE broadcasting so a cancel/remove arriving as
+    // soon as the renderer sees the row finds it.
+    runtime.downloadItems.set(record.id, { item, profileId });
+    runtime.downloads = upsertDownload(runtime.downloads, record);
+    // Persist the row, but keep tracking the live item if only persistence fails:
+    // its updated/done listeners, reservation, and in-memory record must survive a
+    // DB error (a cap-evicted record couldn't be restored by a rollback anyway).
+    persistDownloadRow(record, { insertRow: insertDownload, logError: logDownloadError });
     broadcast({ persist: false });
     const id = record.id;
 
@@ -276,13 +275,17 @@ ipcMain.handle(IPC.downloadsRemove, (_event, id: string): Promise<void> =>
 );
 
 ipcMain.handle(IPC.downloadsClearFinished, (): void => {
-  // Same body as the downloads.clearFinished command: clear memory + finished rows,
-  // then broadcast. Never deletes a file, never touches an active download.
-  runtime.downloads = clearFinishedDownloads(runtime.downloads);
-  try {
-    clearFinishedDownloadRows();
-  } catch (err) {
-    logDownloadError(err);
-  }
-  broadcast();
+  // Shared with the downloads.clearFinished command: delete the finished rows
+  // FIRST, then clear memory + broadcast (a failed delete leaves both untouched so
+  // cleared rows can't reappear next launch). Never deletes a file, never touches
+  // an active download.
+  clearFinishedDownloadsSequenced({
+    getState: () => runtime.downloads,
+    setState: (next) => {
+      runtime.downloads = next;
+    },
+    clearRows: clearFinishedDownloadRows,
+    broadcast,
+    logError: logDownloadError,
+  });
 });

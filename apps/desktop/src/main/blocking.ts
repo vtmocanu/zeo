@@ -1,4 +1,4 @@
-import { app, ipcMain } from "electron";
+import { app, ipcMain, session } from "electron";
 import { readFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { createBlocker, createBlockerFromFilters } from "@zeo/adblock";
@@ -63,6 +63,22 @@ export function installBypass(b: Blocker): void {
 export function attachBlockerToAllSessions(b: Blocker): void {
   for (const s of profileSessions()) {
     b.attach(s);
+  }
+}
+
+/**
+ * Attaches the content blocker to a profile's persistent session when blocking is
+ * enabled and the engine has loaded. Best-effort: Blocker.attach throws if the
+ * blocker was disposed or another blocker owns the session, so a failure is logged
+ * and swallowed — the caller's remaining lifecycle steps must still run.
+ */
+export function attachBlockerToProfileSession(profileId: string): void {
+  if (runtime.blocking.enabled && runtime.blocker) {
+    try {
+      runtime.blocker.attach(session.fromPartition("persist:" + profileId));
+    } catch (err) {
+      console.error(`[blocking] failed to attach profile session ${profileId}:`, err);
+    }
   }
 }
 

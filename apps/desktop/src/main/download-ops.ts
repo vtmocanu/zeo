@@ -16,6 +16,7 @@ import {
   removeDownload,
   upsertDownload,
   isFinished,
+  clearFinishedDownloads,
   type Download,
   type DownloadsState,
 } from "@zeo/core";
@@ -279,4 +280,46 @@ export function cleanupOrphanedDoneItem<I extends CancelableItem>(
     deps.releaseFilename(filename);
     deps.downloadItems.delete(id);
   }
+}
+
+/**
+ * Persists a new download's row, treating a failure as non-fatal: the live item is
+ * already registered in memory (registry entry, in-memory record, filename
+ * reservation), so a DB write failure must not abandon it — a rollback couldn't
+ * restore an {@link upsertDownload} cap-eviction anyway. Logs the persistence
+ * error and returns; never rethrows, never rolls back.
+ */
+export function persistDownloadRow(
+  record: Download,
+  deps: { insertRow: (record: Download) => void; logError: (err: unknown) => void },
+): void {
+  try {
+    deps.insertRow(record);
+  } catch (err) {
+    deps.logError(err);
+  }
+}
+
+/**
+ * Clears finished downloads in an ordered contract: delete the persisted rows
+ * FIRST, and only after that succeeds clear them from the in-memory state and
+ * broadcast. A row-deletion failure logs and returns, leaving memory and the
+ * renderer untouched so finished rows can't be cleared from the UI only to
+ * reappear after the next launch.
+ */
+export function clearFinishedDownloadsSequenced(deps: {
+  getState: () => DownloadsState;
+  setState: (next: DownloadsState) => void;
+  clearRows: () => void;
+  broadcast: () => void;
+  logError: (err: unknown) => void;
+}): void {
+  try {
+    deps.clearRows();
+  } catch (err) {
+    deps.logError(err);
+    return;
+  }
+  deps.setState(clearFinishedDownloads(deps.getState()));
+  deps.broadcast();
 }

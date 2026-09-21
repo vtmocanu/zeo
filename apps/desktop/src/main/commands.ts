@@ -7,7 +7,6 @@ import {
   hostMatchesAllowlist,
   DEFAULT_ZOOM_FACTOR,
   defaultSpaceName,
-  clearFinishedDownloads,
   isFinished,
   promoteQuickBrowse,
   titleForUrl,
@@ -29,6 +28,7 @@ import { openFindSession, findNext, findPrevious, closeFindSession } from "./fin
 import { teardownQuickBrowse, setAsDefaultBrowser } from "./quick-browse.js";
 import { reconcileAndApply, doSplit, doUnsplit, doFocusOther, doSwap } from "./layout.js";
 import { downloadsDir, logDownloadError } from "./downloads.js";
+import { clearFinishedDownloadsSequenced } from "./download-ops.js";
 
 /**
  * Builds the current {@link CommandContext} from the store and the active view.
@@ -204,15 +204,19 @@ const commandHandlers: Record<CommandId, () => void> = {
     void shell.openPath(downloadsDir());
   },
   "downloads.clearFinished": () => {
-    runtime.downloads = clearFinishedDownloads(runtime.downloads);
-    try {
-      clearFinishedDownloadRows();
-    } catch (err) {
-      logDownloadError(err);
-    }
-    // broadcast() mirrors the new DownloadsState and, via refreshCommandState,
-    // re-ranks an open downloads-mode bar and refreshes clearFinished enablement.
-    broadcast();
+    // Delete the finished rows first; only clear memory + broadcast on success so a
+    // failed delete can't make finished rows reappear on next launch. broadcast(),
+    // via refreshCommandState, re-ranks an open downloads-mode bar and refreshes
+    // clearFinished enablement.
+    clearFinishedDownloadsSequenced({
+      getState: () => runtime.downloads,
+      setState: (next) => {
+        runtime.downloads = next;
+      },
+      clearRows: clearFinishedDownloadRows,
+      broadcast,
+      logError: logDownloadError,
+    });
   },
   "zoom.in": () => {
     zoomActiveTab("in").catch((err) => console.error("[zoom] zoom.in failed:", err));

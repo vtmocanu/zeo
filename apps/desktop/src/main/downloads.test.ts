@@ -6,6 +6,8 @@ import {
   createThrottledPersister,
   terminalizeProfileDownloads,
   cleanupOrphanedDoneItem,
+  persistDownloadRow,
+  clearFinishedDownloadsSequenced,
 } from "./download-ops.js";
 import type { DownloadRegistryEntry } from "./download-ops.js";
 
@@ -429,5 +431,76 @@ describe("cleanupOrphanedDoneItem", () => {
     });
     expect(released).toEqual([]);
     expect(downloadItems.size).toBe(0);
+  });
+});
+
+describe("persistDownloadRow", () => {
+  test("keeps tracking when insertRow throws: logs the error, does not rethrow", () => {
+    const rec = makeDownload({ id: "d1" });
+    const logError = vi.fn();
+    const insertRow = vi.fn(() => {
+      throw new Error("db fail");
+    });
+    expect(() => persistDownloadRow(rec, { insertRow, logError })).not.toThrow();
+    expect(insertRow).toHaveBeenCalledTimes(1);
+    expect(logError).toHaveBeenCalledTimes(1);
+  });
+
+  test("success: inserts the row once and logs nothing", () => {
+    const rec = makeDownload({ id: "d1" });
+    const logError = vi.fn();
+    const insertRow = vi.fn();
+    persistDownloadRow(rec, { insertRow, logError });
+    expect(insertRow).toHaveBeenCalledWith(rec);
+    expect(logError).not.toHaveBeenCalled();
+  });
+});
+
+describe("clearFinishedDownloadsSequenced", () => {
+  test("success: deletes rows BEFORE clearing memory, then broadcasts; finished dropped, active kept", () => {
+    const finished = makeDownload({ id: "f1", state: "completed", completedAt: 5000 });
+    const active = makeDownload({ id: "a1", state: "progressing" });
+    let state: DownloadsState = { items: [finished, active] };
+    const order: string[] = [];
+    const logError = vi.fn();
+    clearFinishedDownloadsSequenced({
+      getState: () => state,
+      setState: (next) => {
+        state = next;
+        order.push("setState");
+      },
+      clearRows: () => order.push("clearRows"),
+      broadcast: () => order.push("broadcast"),
+      logError,
+    });
+    expect(order).toEqual(["clearRows", "setState", "broadcast"]);
+    expect(state.items).toEqual([active]);
+    expect(logError).not.toHaveBeenCalled();
+  });
+
+  test("clearRows throws: logs and returns; memory unchanged, never broadcasts", () => {
+    const finished = makeDownload({ id: "f1", state: "completed", completedAt: 5000 });
+    const active = makeDownload({ id: "a1", state: "progressing" });
+    let state: DownloadsState = { items: [finished, active] };
+    const before = state;
+    const setState = vi.fn((next: DownloadsState) => {
+      state = next;
+    });
+    const broadcast = vi.fn();
+    const logError = vi.fn();
+    clearFinishedDownloadsSequenced({
+      getState: () => state,
+      setState,
+      clearRows: () => {
+        throw new Error("db fail");
+      },
+      broadcast,
+      logError,
+    });
+    expect(logError).toHaveBeenCalledTimes(1);
+    expect(setState).not.toHaveBeenCalled();
+    expect(broadcast).not.toHaveBeenCalled();
+    expect(state).toBe(before);
+    expect(state.items).toEqual([finished, active]);
   });
 });
