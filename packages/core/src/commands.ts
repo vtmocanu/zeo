@@ -16,6 +16,8 @@ export type CommandId =
   | "tab.unpin"
   | "tab.archive"
   | "tab.copy-url"
+  | "tab.moveToTop"
+  | "tab.moveToBottom"
   | "tab.reload"
   | "tab.back"
   | "tab.forward"
@@ -96,10 +98,12 @@ export interface CommandContext {
 export const COMMANDS: readonly CommandDescriptor[] = [
   { id: "tab.new", title: "New Tab", keywords: ["new", "tab", "create"], accelerator: "CmdOrCtrl+T", menu: "tabs" },
   { id: "tab.close", title: "Close Tab", keywords: ["close", "tab"], accelerator: "CmdOrCtrl+W", menu: "tabs" },
-  { id: "tab.pin", title: "Pin Tab", keywords: ["pin", "tab", "favorite"], accelerator: "CmdOrCtrl+Shift+P", menu: "tabs" },
+  { id: "tab.pin", title: "Pin Tab", keywords: ["pin", "tab", "favorite", "essentials"], accelerator: "CmdOrCtrl+Shift+P", menu: "tabs" },
   { id: "tab.unpin", title: "Unpin Tab", keywords: ["unpin", "pin", "tab"], accelerator: "CmdOrCtrl+Shift+P", menu: "tabs" },
   { id: "tab.archive", title: "Archive Tab", keywords: ["archive", "tab", "hide"], accelerator: "CmdOrCtrl+Shift+W", menu: "tabs" },
   { id: "tab.copy-url", title: "Copy URL", keywords: ["copy", "url", "link", "address"], accelerator: "CmdOrCtrl+Shift+C", menu: "tabs" },
+  { id: "tab.moveToTop", title: "Move Tab to Top", keywords: ["move", "top", "tab", "reorder", "first"], accelerator: null, menu: "tabs" },
+  { id: "tab.moveToBottom", title: "Move Tab to Bottom", keywords: ["move", "bottom", "tab", "reorder", "last"], accelerator: null, menu: "tabs" },
   { id: "tab.reload", title: "Reload Page", keywords: ["reload", "refresh", "page"], accelerator: "CmdOrCtrl+R", menu: "view" },
   { id: "tab.back", title: "Go Back", keywords: ["back", "history", "previous"], accelerator: "CmdOrCtrl+[", menu: "view" },
   { id: "tab.forward", title: "Go Forward", keywords: ["forward", "history", "next"], accelerator: "CmdOrCtrl+]", menu: "view" },
@@ -138,7 +142,9 @@ export const COMMANDS: readonly CommandDescriptor[] = [
  * `settings.openHistory`, `downloads.open`, `downloads.openFolder`.
  * `downloads.clearFinished` needs at least one finished download
  * (`hasFinishedDownload`). Every other
- * `tab.*` needs an active tab; on top of that `tab.pin` needs it unpinned,
+ * `tab.*` needs an active tab — `tab.close`, `tab.copy-url`, `tab.moveToTop`,
+ * `tab.moveToBottom`, and `tab.reload` need nothing more; on top of that
+ * `tab.pin` needs it unpinned,
  * `tab.unpin` pinned, `tab.archive` unpinned, and `tab.back` / `tab.forward`
  * the matching history flag. `space.delete` needs more than one space.
  * `blocking.allowSite` needs an active tab with an http(s) `siteHost` that is
@@ -183,6 +189,8 @@ export function isCommandEnabled(id: CommandId, context: CommandContext): boolea
       return context.settingsOpen;
     case "tab.close":
     case "tab.copy-url":
+    case "tab.moveToTop":
+    case "tab.moveToBottom":
     case "tab.reload":
       return context.activeTab !== null;
     case "tab.pin":

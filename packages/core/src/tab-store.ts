@@ -414,6 +414,29 @@ export class TabStore {
   }
 
   /**
+   * Moves an OPEN tab to the FIRST position of its own group (pinned or
+   * unpinned). Delegates to {@link reorder}, which performs all validation
+   * (unknown/archived id, non-integer index) and leaves the other group and
+   * archived tabs in place. An already-first or single-tab move is a no-op.
+   */
+  moveToTop(id: string): void {
+    this.reorder(id, 0);
+  }
+
+  /**
+   * Moves an OPEN tab to the LAST position of its own group (pinned or
+   * unpinned). {@link reorder} clamps an out-of-range index to the last slot of
+   * the tab's group and performs all validation (unknown/archived id,
+   * non-integer index); `Number.MAX_SAFE_INTEGER` is a finite integer, so it
+   * passes the integer guard and lands the tab last. (`Infinity` would throw —
+   * reorder rejects non-integers.) An already-last or single-tab move is a
+   * no-op.
+   */
+  moveToBottom(id: string): void {
+    this.reorder(id, Number.MAX_SAFE_INTEGER);
+  }
+
+  /**
    * Archives `id`: flags it with `archivedAt` and an `archivalSeq` stamp so it
    * drops out of `list()` but STAYS in the internal array (recoverable via
    * `restore`). Throws on an unknown id, or if the tab is pinned. If the
