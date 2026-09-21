@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 // tabs.ts imports electron at runtime (`ipcMain`, `Menu`, `clipboard`) and, like
 // its transitive imports (views/layout/history/zoom), self-registers IPC via a
@@ -22,9 +22,10 @@ vi.mock("electron", () => ({
 }));
 
 import { SpaceStore, initialBlockingState } from "@zeo/core";
+import type { Space, Tab } from "@zeo/core";
 import { runtime } from "./state.js";
 import type { TrackedView } from "./state.js";
-import { forgetTab } from "./tabs.js";
+import { forgetTab, openPopupAsTab } from "./tabs.js";
 
 describe("forgetTab", () => {
   const tabId = "tab-1";
@@ -85,5 +86,98 @@ describe("forgetTab", () => {
     // views is left entirely alone (forgetTab does NOT destroy the view).
     expect(runtime.views.get(tabId)).toBe(trackedView);
     expect(runtime.views.size).toBe(1);
+  });
+});
+
+describe("openPopupAsTab", () => {
+  // The seeded "Personal" space stays ACTIVE throughout; `other` is a second,
+  // INACTIVE space. Each space owns one tab so we can prove a popup lands in the
+  // OWNER's space and nowhere else. Only the inactive-owner branch is exercised
+  // here: the active-owner branch materializes a real WebContentsView (mocked as
+  // an empty class), so it is left to m4 e2e.
+  let activeSpaceId: string;
+  let activeOwner: Tab;
+  let other: Space;
+  let inactiveOwner: Tab;
+
+  beforeEach(() => {
+    // broadcast() (fired by the inactive-space branch) schedules a debounced
+    // store save via a real setTimeout; fake timers keep that timer from
+    // outliving the test. We never advance/run them (do NOT persist), and clear
+    // + restore in afterEach so no handle leaks into the next test.
+    vi.useFakeTimers();
+
+    runtime.store = new SpaceStore();
+    runtime.win = null;
+    runtime.views.clear();
+
+    activeSpaceId = runtime.store.activeSpaceId;
+    activeOwner = runtime.store.create({ url: "https://active-owner.test", title: "a" });
+    other = runtime.store.createSpace("Other");
+    inactiveOwner = runtime.store.createInSpace(other.id, { url: "https://inactive-owner.test" });
+  });
+
+  afterEach(() => {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+  });
+
+  test("a null/unknown owner is a no-op — no tab, no view, anywhere", () => {
+    openPopupAsTab("no-such-tab", "https://evil.test");
+
+    // The active space is untouched, the owner space is untouched, and no view
+    // was materialized.
+    expect(runtime.store.list().map((t) => t.id)).toEqual([activeOwner.id]);
+    expect(runtime.store.tabsOfSpace(other.id).map((t) => t.id)).toEqual([inactiveOwner.id]);
+    expect(runtime.views.size).toBe(0);
+  });
+
+  test.each([
+    "javascript:alert(1)",
+    "data:text/html,x",
+    "file:///etc/passwd",
+    "blob:https://x.test/abc",
+    "chrome://settings",
+    "not a url",
+    "",
+  ])("drops non-http(s)/unparseable url %j into an inactive space", (url) => {
+    // Owner is the INACTIVE space, so the view branch is never touched: a drop
+    // must add NO tab and create no view. Asserting the exact tab list (not just
+    // "no view") is what makes this gate the protocol check — remove it and the
+    // tab count would grow.
+    openPopupAsTab(inactiveOwner.id, url);
+
+    expect(runtime.store.tabsOfSpace(other.id).map((t) => t.id)).toEqual([inactiveOwner.id]);
+    expect(runtime.views.size).toBe(0);
+  });
+
+  test("a valid https popup lands in the OWNER (inactive) space, no view, active space untouched", () => {
+    openPopupAsTab(inactiveOwner.id, "https://popup.test/child");
+
+    const ownerTabs = runtime.store.tabsOfSpace(other.id);
+    const created = ownerTabs.find((t) => t.url === "https://popup.test/child");
+    // The new tab exists in the owner space, alongside the original owner tab.
+    expect(created).toBeDefined();
+    expect(ownerTabs.map((t) => t.id)).toEqual([inactiveOwner.id, created!.id]);
+    // It is the owner space's own active tab (createInSpace activates it).
+    expect(runtime.store.activeTabIdOf(other.id)).toBe(created!.id);
+
+    // The ACTIVE space is entirely unchanged: same active space id, same tab list.
+    expect(runtime.store.activeSpaceId).toBe(activeSpaceId);
+    expect(runtime.store.list().map((t) => t.id)).toEqual([activeOwner.id]);
+
+    // No view materialized for an inactive-space popup (lazy: it appears on the
+    // next space switch).
+    expect(runtime.views.size).toBe(0);
+  });
+
+  test("an http popup into an inactive space is accepted the same way", () => {
+    openPopupAsTab(inactiveOwner.id, "http://plain.test/");
+
+    const ownerTabs = runtime.store.tabsOfSpace(other.id);
+    const created = ownerTabs.find((t) => t.url === "http://plain.test/");
+    expect(created).toBeDefined();
+    expect(ownerTabs.map((t) => t.id)).toEqual([inactiveOwner.id, created!.id]);
+    expect(runtime.views.size).toBe(0);
   });
 });
