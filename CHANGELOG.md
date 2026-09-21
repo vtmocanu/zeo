@@ -9,6 +9,11 @@ milestone, a minor bump only for very large breakthroughs.
 
 ## [Unreleased]
 
+### Fixed
+
+- Sidebar: the pinned tabs section now stays fixed (sticky) at the top of the
+  scroll area instead of scrolling out of view with a long unpinned list.
+
 ## [0.0.19] - 2026-09-07
 
 ### Added
