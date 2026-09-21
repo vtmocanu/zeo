@@ -146,7 +146,16 @@ body {
   flex-direction: column;
 }
 
+/* Stick the pinned section to the top of the `.sidebar__sections` scrollport so
+   a long unpinned list scrolls beneath it instead of carrying it off-screen. The
+   opaque `background` (the sidebar's own colour) stops scrolled unpinned rows
+   bleeding through; `z-index` keeps it above a dragged row, which becomes its own
+   stacking context via `.tab-item--dragging`'s `opacity`. */
 .sidebar__section--pinned {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #1e1e28;
   border-bottom: 1px solid #2c2c3a;
 }
 

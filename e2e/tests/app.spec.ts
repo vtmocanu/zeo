@@ -756,6 +756,71 @@ test.describe("zeo desktop app", () => {
     await expect(pinnedSection.getByTestId("tab-item")).toHaveCount(1);
   });
 
+  // Issue #36 — the pinned section stays fixed at the top of the scroll area even
+  // when a long unpinned list is scrolled to the bottom. Guards the BEHAVIOR, not
+  // just the CSS: we overflow the `.sidebar__sections` scrollport, scroll it to the
+  // end, and assert the pinned section's viewport top still tracks the container's
+  // top. Regressing to a non-sticky rule would let it scroll out of view here.
+  test("the pinned section stays stuck to the top when the unpinned list overflows", async () => {
+    // Pin the seeded/active tab (mirrors the neighbor test) so a pinned section
+    // exists to stay put.
+    const targetId = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      const state = await zeo.tabs.list();
+      return state.activeTabId ?? state.tabs[0].id;
+    });
+    await sidebar.evaluate(async (id) => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.tabs.pin(id);
+    }, targetId);
+    await expect(sidebar.getByTestId("pinned-section")).toBeVisible();
+
+    // Create enough UNPINNED tabs to overflow the scrollport. 30 rows comfortably
+    // exceed the default 800px-tall test window's sidebar; the overflow assertion
+    // below fails loudly if a future layout change makes that untrue. Use tiny
+    // `data:` URLs (NOT network — the CI docker sidecar is offline): a `data:` load
+    // commits instantly and each row renders from the broadcast state regardless of
+    // navigation completion, so this stays fast and deterministic.
+    const unpinnedCount = 30;
+    await sidebar.evaluate(async (count) => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      for (let i = 0; i < count; i += 1) {
+        await zeo.tabs.create(`data:text/html,<title>row-${i}</title>`);
+      }
+    }, unpinnedCount);
+    // Wait for the rows to render before measuring layout.
+    await expect(sidebar.getByTestId("unpinned-section").getByTestId("tab-item")).toHaveCount(
+      unpinnedCount,
+    );
+
+    // Scroll the container to the bottom and measure the sticky section in one
+    // synchronous evaluate: setting `scrollTop` and reading `getBoundingClientRect`
+    // both flush layout, so a single pass is stable (no polling needed).
+    const measured = await sidebar.evaluate(() => {
+      const sections = document.querySelector(".sidebar__sections");
+      const pinned = document.querySelector(".sidebar__section--pinned");
+      if (sections === null || pinned === null) {
+        throw new Error("sidebar sections or pinned section not found");
+      }
+      const overflowed = sections.scrollHeight > sections.clientHeight;
+      sections.scrollTop = sections.scrollHeight;
+      return {
+        overflowed,
+        position: getComputedStyle(pinned).position,
+        containerTop: sections.getBoundingClientRect().top,
+        pinnedTop: pinned.getBoundingClientRect().top,
+      };
+    });
+
+    // The list really overflowed (otherwise there is nothing to scroll and the
+    // test would pass vacuously), the section is `sticky`, and after scrolling to
+    // the bottom the pinned section's top still sits at the container's top. The
+    // 2px tolerance absorbs subpixel/border rounding.
+    expect(measured.overflowed).toBe(true);
+    expect(measured.position).toBe("sticky");
+    expect(Math.abs(measured.pinnedTop - measured.containerTop)).toBeLessThanOrEqual(2);
+  });
+
   // Case (d): the renderer's state carries the archived tab in `archived`.
   test("archiving a tab surfaces it in the broadcast state's archived list", async () => {
     // Create a dedicated non-pinned tab and archive it, then read the state via
