@@ -931,6 +931,8 @@ test.describe("zeo desktop app", () => {
     expect(res.tabId).toBe(id);
     expect(res.items.map((item) => item.id)).toEqual([
       "pin",
+      "moveToTop",
+      "moveToBottom",
       "archive",
       "close",
       "copyUrl",
@@ -940,6 +942,10 @@ test.describe("zeo desktop app", () => {
     expect(byId.get("archive")?.enabled).toBe(true);
     expect(byId.get("close")?.enabled).toBe(true);
     expect(byId.get("copyUrl")?.enabled).toBe(true);
+    // Issue #135 — the seeded tab is alone in its group (N=1), so both move
+    // items are present but disabled.
+    expect(byId.get("moveToTop")).toMatchObject({ id: "moveToTop", label: "Move to Top", enabled: false });
+    expect(byId.get("moveToBottom")).toMatchObject({ id: "moveToBottom", label: "Move to Bottom", enabled: false });
 
     await sidebar.evaluate(async (tabId) => {
       delete (globalThis as unknown as { __zeoLastContextMenu?: BridgeMenuResult })
@@ -950,7 +956,7 @@ test.describe("zeo desktop app", () => {
     await row.click({ button: "right" });
     await expect
       .poll(async () => (await lastMenu())?.items.map((item) => item.id) ?? null)
-      .toEqual(["unpin", "archive", "close", "copyUrl"]);
+      .toEqual(["unpin", "moveToTop", "moveToBottom", "archive", "close", "copyUrl"]);
 
     const pinnedRes = (await lastMenu()) as BridgeMenuResult;
     expect(pinnedRes.tabId).toBe(id);
@@ -958,6 +964,81 @@ test.describe("zeo desktop app", () => {
     expect(pinnedById.get("unpin")).toMatchObject({ id: "unpin", label: "Unpin" });
     expect(pinnedById.has("pin")).toBe(false);
     expect(pinnedById.get("archive")?.enabled).toBe(false);
+    // Issue #135 — pinning moved the tab into the (now single-member) pinned
+    // group, so both move items remain present but disabled.
+    expect(pinnedById.get("moveToTop")?.enabled).toBe(false);
+    expect(pinnedById.get("moveToBottom")?.enabled).toBe(false);
+  });
+
+  // Issue #135 — the context menu's Move to Top / Move to Bottom items enable per
+  // the TARGET row's position within its own pinned/unpinned group: moveToTop iff
+  // a tab sits above it, moveToBottom iff one sits below. Drive showContextMenu
+  // directly (under ZEO_E2E=1 it returns the descriptor without popping a native
+  // menu), so the three positions are deterministic without pointer events.
+  test("context-menu move items enable per position within the group", async () => {
+    const positions = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      // Fresh launch seeds one unpinned tab; capture its id before creating more,
+      // so the unpinned group is [seeded, t1, t2] in creation order.
+      const seeded = await zeo.tabs.list();
+      const seededId = seeded.activeTabId ?? seeded.tabs[0].id;
+      const t1 = await zeo.tabs.create();
+      const t2 = await zeo.tabs.create();
+      const moveFlags = async (id: string) => {
+        const menu = await zeo.tabs.showContextMenu(id, 0, 0);
+        const byId = new Map(menu.items.map((item) => [item.id, item.enabled]));
+        return { top: byId.get("moveToTop") ?? null, bottom: byId.get("moveToBottom") ?? null };
+      };
+      return {
+        first: await moveFlags(seededId),
+        middle: await moveFlags(t1.id),
+        last: await moveFlags(t2.id),
+      };
+    });
+
+    // First in the group: nothing above (moveToTop off), a tab below (moveToBottom on).
+    expect(positions.first).toEqual({ top: false, bottom: true });
+    // Middle: a tab on each side, so both are enabled.
+    expect(positions.middle).toEqual({ top: true, bottom: true });
+    // Last: a tab above (moveToTop on), nothing below (moveToBottom off).
+    expect(positions.last).toEqual({ top: true, bottom: false });
+  });
+
+  // Issue #135 — tab.moveToTop / tab.moveToBottom reorder the ACTIVE tab to the
+  // first/last slot of its group. Native menu clicks aren't drivable headlessly,
+  // so exercise the command path via commands.run. Each is a synchronous store
+  // reorder that main broadcasts, so a straight await-then-read of tabs.list()
+  // (pinned-first then unpinned; all unpinned here) is deterministic — no overlay.
+  test("the move-to-top/bottom commands reorder the active tab within its group", async () => {
+    // Fresh launch seeds one unpinned tab; add two more so the unpinned group is
+    // [seeded, t1, t2] with t2 (the last created) active.
+    const ids = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      const seeded = await zeo.tabs.list();
+      const seededId = seeded.activeTabId ?? seeded.tabs[0].id;
+      const t1 = await zeo.tabs.create();
+      const t2 = await zeo.tabs.create();
+      return { seededId, t1: t1.id, t2: t2.id };
+    });
+
+    // moveToTop acts on the active tab (t2), lifting it to the front of the group.
+    const afterTop = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.commands.run("tab.moveToTop");
+      const s = await zeo.tabs.list();
+      return s.tabs.map((t) => t.id);
+    });
+    expect(afterTop).toEqual([ids.t2, ids.seededId, ids.t1]);
+
+    // Activate the seeded tab, then send it to the bottom of the group.
+    const afterBottom = await sidebar.evaluate(async (seededId) => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.tabs.activate(seededId);
+      await zeo.commands.run("tab.moveToBottom");
+      const s = await zeo.tabs.list();
+      return s.tabs.map((t) => t.id);
+    }, ids.seededId);
+    expect(afterBottom).toEqual([ids.t2, ids.t1, ids.seededId]);
   });
 
   test("pointer drag reorders pinned rows and moves tabs across the pin boundary", async () => {
@@ -3096,6 +3177,10 @@ test.describe("zeo desktop app", () => {
     "tab.pin",
     "tab.archive",
     "tab.copy-url",
+    // Issue #135 — tab.moveToTop / tab.moveToBottom are always enabled when a
+    // tab is active, so they list in registry order right after tab.copy-url.
+    "tab.moveToTop",
+    "tab.moveToBottom",
     "tab.reload",
     "space.new",
     "space.rename",
