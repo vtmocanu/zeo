@@ -214,6 +214,9 @@ export class TabStore {
    * remaining OPEN tab becomes active (greatest `lastActiveAt`, tie-broken by
    * `activationSeq`); if none remain, the active pointer becomes null. Closing
    * a non-active tab leaves the active pointer unchanged.
+   *
+   * A pinned tab cannot be closed — `close` is a no-op on it (unpin first),
+   * matching the archive/idle-sweep protection that already exempts pinned tabs.
    */
   close(id: string): void {
     const index = this.tabs.findIndex((tab) => tab.id === id);
@@ -222,6 +225,15 @@ export class TabStore {
     }
     if (this.tabs[index].archivedAt !== null) {
       throw new Error(`Cannot close an archived tab: ${id}`);
+    }
+    // A pinned tab is protected from closing: it must be unpinned first. This
+    // mirrors the existing pinned exemptions (`archive` throws on a pinned tab;
+    // the idle auto-sweep skips pinned tabs) and fixes the inversion where
+    // Cmd+W could destroy a pinned tab outright (issue #33). Closing a pinned
+    // tab is a NO-OP — the record is left in place and the active pointer is
+    // untouched.
+    if (this.tabs[index].pinned) {
+      return;
     }
 
     const wasActive = this.activeId === id;
