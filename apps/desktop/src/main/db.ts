@@ -23,6 +23,8 @@ import {
   UnsupportedSchemaVersionError,
   DEFAULT_SEARCH_ENGINE_ID,
   searchEngine,
+  clampRatio,
+  SINGLE_LAYOUT,
 } from "@zeo/core";
 import type {
   PersistedState,
@@ -34,14 +36,20 @@ import type {
   HistoryEntry,
   HistoryVisit,
   SearchEngineId,
+  WindowLayout,
+  Download,
 } from "@zeo/core";
 
 /**
  * The schema: the four core tables (profiles, spaces, tabs, meta), the
  * blocking_allowlist table added at schema version 3, the two history
  * tables (history_entries, history_visits) added at schema version 4, the
- * searchEngine column added at schema version 5, plus the site_zoom table added
- * at schema version 6 — eight tables in all.
+ * searchEngine column added at schema version 5, the site_zoom table added
+ * at schema version 6, plus the downloads table added at schema version 7 —
+ * nine tables in all. Schema version 8 adds the five window-layout columns to
+ * `meta` (layoutMode, layoutLeftTabId, layoutRightTabId, layoutRatio,
+ * layoutFocused) that persist the active space's split-view layout, and schema
+ * version 9 adds the quickBrowseExternal column to `meta`.
  * The PRIMARY KEYs (no duplicate ids), the foreign
  * keys, and `PRAGMA foreign_keys=ON` are the well-formedness contract the core
  * codec relies on: every on-disk state is guaranteed loadable. `spaces.activeTabId`
@@ -51,6 +59,16 @@ import type {
  */
 const SITE_ZOOM_DDL =
   "CREATE TABLE site_zoom (host TEXT PRIMARY KEY, factor REAL NOT NULL, updatedAt INTEGER NOT NULL);";
+
+/**
+ * The downloads table (schema version 7): one column per {@link Download} field.
+ * `state` is stored as its string; `completedAt` and `spaceId` are nullable; byte
+ * counts and timestamps are integers. Download rows live OUTSIDE the
+ * {@link writeState} full-state flush (like the allowlist, history, and site_zoom
+ * tables) — they are managed only by the dedicated row helpers below.
+ */
+const DOWNLOADS_DDL =
+  "CREATE TABLE downloads (id TEXT PRIMARY KEY, url TEXT NOT NULL, filename TEXT NOT NULL, path TEXT NOT NULL, totalBytes INTEGER NOT NULL, receivedBytes INTEGER NOT NULL, state TEXT NOT NULL, startedAt INTEGER NOT NULL, completedAt INTEGER, spaceId TEXT);";
 
 const DDL = `
 CREATE TABLE profiles (
@@ -71,7 +89,13 @@ CREATE TABLE tabs (
 CREATE TABLE meta (
   id INTEGER PRIMARY KEY CHECK (id = 0), schemaVersion INTEGER NOT NULL, activeSpaceId TEXT,
   enabled INTEGER NOT NULL DEFAULT 1,
-  searchEngine TEXT NOT NULL DEFAULT 'duckduckgo'
+  searchEngine TEXT NOT NULL DEFAULT 'duckduckgo',
+  quickBrowseExternal INTEGER NOT NULL DEFAULT 1,
+  layoutMode TEXT NOT NULL DEFAULT 'single',
+  layoutLeftTabId TEXT,
+  layoutRightTabId TEXT,
+  layoutRatio REAL NOT NULL DEFAULT 0.5,
+  layoutFocused TEXT NOT NULL DEFAULT 'left'
 );
 CREATE TABLE blocking_allowlist (host TEXT PRIMARY KEY, createdAt INTEGER NOT NULL);
 CREATE TABLE history_entries (
@@ -89,14 +113,15 @@ CREATE TABLE history_visits (
 CREATE INDEX history_visits_visitedAt ON history_visits(visitedAt);
 CREATE INDEX history_entries_lastVisitedAt ON history_entries(lastVisitedAt);
 ${SITE_ZOOM_DDL}
+${DOWNLOADS_DDL}
 `;
 
 /**
  * The ordered, in-place upgrade steps keyed by the version they PRODUCE: the
  * `v` entry is run to move a database from version `v-1` to `v`. {@link migrate}
  * runs every step from the on-disk version + 1 up through {@link SCHEMA_VERSION},
- * so a future 6→7 upgrade is added by appending a `7` entry here. Each step is a
- * plain SQL blob run inside the migrate transaction; the step MUST leave
+ * so a future N→N+1 upgrade is added by appending an `N+1` entry here. Each step
+ * is a plain SQL blob run inside the migrate transaction; the step MUST leave
  * `meta.schemaVersion` set to its own key.
  */
 const HISTORY_DDL =
@@ -121,6 +146,17 @@ const MIGRATION_STEPS: Record<number, string> = {
     "ALTER TABLE meta ADD COLUMN searchEngine TEXT NOT NULL DEFAULT 'duckduckgo';" +
     "UPDATE meta SET schemaVersion = 5 WHERE id = 0;",
   6: SITE_ZOOM_DDL + "UPDATE meta SET schemaVersion = 6 WHERE id = 0;",
+  7: DOWNLOADS_DDL + "UPDATE meta SET schemaVersion = 7 WHERE id = 0;",
+  8:
+    "ALTER TABLE meta ADD COLUMN layoutMode TEXT NOT NULL DEFAULT 'single';" +
+    "ALTER TABLE meta ADD COLUMN layoutLeftTabId TEXT;" +
+    "ALTER TABLE meta ADD COLUMN layoutRightTabId TEXT;" +
+    "ALTER TABLE meta ADD COLUMN layoutRatio REAL NOT NULL DEFAULT 0.5;" +
+    "ALTER TABLE meta ADD COLUMN layoutFocused TEXT NOT NULL DEFAULT 'left';" +
+    "UPDATE meta SET schemaVersion = 8 WHERE id = 0;",
+  9:
+    "ALTER TABLE meta ADD COLUMN quickBrowseExternal INTEGER NOT NULL DEFAULT 1;" +
+    "UPDATE meta SET schemaVersion = 9 WHERE id = 0;",
 };
 
 /** The module-level database handle, `null` until {@link loadStore} opens it. */
@@ -140,7 +176,7 @@ function dbPath(): string {
 /**
  * Reads the schema version currently on disk and applies {@link migrationAction}:
  * `"abort"` throws {@link UnsupportedSchemaVersionError}, `"create"` builds the
- * fresh schema (all eight tables) and seeds the single meta row, `"migrate"` runs the
+ * fresh schema (all nine tables) and seeds the single meta row, `"migrate"` runs the
  * ordered {@link MIGRATION_STEPS} from the on-disk version + 1 through
  * {@link SCHEMA_VERSION} inside a single transaction (so a partially-applied
  * upgrade never lands), and `"noop"` leaves an up-to-date database untouched.
@@ -264,6 +300,108 @@ export function writeSearchEngine(id: SearchEngineId): void {
   if (info.changes === 0) {
     throw new Error("writeSearchEngine: no meta row (id=0) to update");
   }
+}
+
+/**
+ * Reads the persisted "open external links in quick-browse" flag from the meta
+ * row, mapping SQLite's integer to a boolean. Returns `true` (the default) when
+ * the row is absent or the value is null/undefined. Managed ONLY here and by
+ * {@link writeQuickBrowseExternal}; like `enabled`/`searchEngine` it is kept out
+ * of the {@link writeState} full-state flush. Throws when the database is not open.
+ */
+export function readQuickBrowseExternal(): boolean {
+  const database = requireDb();
+  // SQLite-row boundary: .get() is typed `unknown`, cast to the known shape.
+  const row = database
+    .prepare("SELECT quickBrowseExternal FROM meta WHERE id=0")
+    .get() as { quickBrowseExternal: number } | undefined;
+  return (row?.quickBrowseExternal ?? 1) === 1;
+}
+
+/**
+ * Persists the quick-browse-external flag to the meta row, mapping the boolean
+ * to SQLite's integer. Synchronous (better-sqlite3). Like {@link writeSearchEngine}
+ * (and unlike {@link writeBlockingEnabled}) it checks the affected row count: an
+ * UPDATE that matches no `id = 0` row throws rather than silently succeeding, so
+ * the caller's ordered set-quick-browse-external contract surfaces the missing
+ * row as a write failure and never broadcasts an unpersisted value. Throws when
+ * the database is not open.
+ */
+export function writeQuickBrowseExternal(enabled: boolean): void {
+  const database = requireDb();
+  const info = database.prepare("UPDATE meta SET quickBrowseExternal=? WHERE id=0").run(enabled ? 1 : 0);
+  if (info.changes === 0) {
+    throw new Error("writeQuickBrowseExternal: no meta row (id=0) to update");
+  }
+}
+
+/**
+ * Reads the persisted active-space window {@link WindowLayout} from the meta row.
+ * Returns {@link SINGLE_LAYOUT} when `layoutMode` is not `"split"` or either
+ * pane's tab id is null; otherwise the split layout with a {@link clampRatio}-
+ * clamped `ratio` and the stored focused pane (defaulting to `"left"` for any
+ * value other than `"right"`). This does NOT validate the pane tab ids against
+ * the live tabs — main's {@link reconcileLayout} does that at restore. Managed
+ * ONLY here and by {@link writeWindowLayout}; like the other meta helpers it is
+ * kept out of the {@link writeState} full-state flush. Throws when the database
+ * is not open.
+ */
+export function readWindowLayout(): WindowLayout {
+  const database = requireDb();
+  // SQLite-row boundary: .get() is typed `unknown`, cast to the known shape.
+  const row = database
+    .prepare(
+      "SELECT layoutMode, layoutLeftTabId, layoutRightTabId, layoutRatio, layoutFocused FROM meta WHERE id=0",
+    )
+    .get() as
+    | {
+        layoutMode: string;
+        layoutLeftTabId: string | null;
+        layoutRightTabId: string | null;
+        layoutRatio: number;
+        layoutFocused: string;
+      }
+    | undefined;
+  if (
+    row === undefined ||
+    row.layoutMode !== "split" ||
+    row.layoutLeftTabId === null ||
+    row.layoutRightTabId === null
+  ) {
+    return SINGLE_LAYOUT;
+  }
+  return {
+    mode: "split",
+    left: row.layoutLeftTabId,
+    right: row.layoutRightTabId,
+    ratio: clampRatio(row.layoutRatio),
+    focused: row.layoutFocused === "right" ? "right" : "left",
+  };
+}
+
+/**
+ * Persists the active-space window {@link WindowLayout} to the meta row. A split
+ * writes both pane tab ids, the ratio, and the focused pane; a single clears the
+ * pane tab ids and resets the mode (leaving the stored ratio/focused columns
+ * as-is). Synchronous (better-sqlite3). Throws when the database is not open, so
+ * a caller's ordered layout-write contract sees the failure before it changes
+ * anything else.
+ */
+export function writeWindowLayout(layout: WindowLayout): void {
+  const database = requireDb();
+  if (layout.mode === "split") {
+    database
+      .prepare(
+        "UPDATE meta SET layoutMode='split', layoutLeftTabId=?, layoutRightTabId=?, layoutRatio=?, layoutFocused=? WHERE id=0",
+      )
+      .run(layout.left, layout.right, layout.ratio, layout.focused);
+    return;
+  }
+  database
+    .prepare(
+      "UPDATE meta SET layoutMode='single', layoutLeftTabId=NULL, layoutRightTabId=NULL WHERE id=0",
+    )
+    .run();
 }
 
 /**
@@ -573,6 +711,135 @@ export function upsertSiteZoom(host: string, factor: number, updatedAt: number):
 export function deleteSiteZoom(host: string): void {
   const database = requireDb();
   database.prepare("DELETE FROM site_zoom WHERE host = ?").run(host);
+}
+
+/**
+ * The SQLite shape of a `downloads` row: `state` comes back as a plain string,
+ * `completedAt`/`spaceId` as `number | null` / `string | null`. The DDL above is
+ * the source of truth for these columns.
+ */
+interface DownloadRow {
+  id: string;
+  url: string;
+  filename: string;
+  path: string;
+  totalBytes: number;
+  receivedBytes: number;
+  state: string;
+  startedAt: number;
+  completedAt: number | null;
+  spaceId: string | null;
+}
+
+/** Maps a SQLite `downloads` row to a {@link Download}: the stored `state` string
+ *  is narrowed to the union and the nullable columns stay `null`. */
+function rowToDownload(row: DownloadRow): Download {
+  return {
+    id: row.id,
+    url: row.url,
+    filename: row.filename,
+    path: row.path,
+    totalBytes: row.totalBytes,
+    receivedBytes: row.receivedBytes,
+    state: row.state as Download["state"],
+    startedAt: row.startedAt,
+    completedAt: row.completedAt ?? null,
+    spaceId: row.spaceId ?? null,
+  };
+}
+
+/**
+ * Inserts one download row, then prunes the table to the newest 100 rows by
+ * `startedAt DESC, id DESC`, both in one transaction. The prune keeps the on-disk
+ * table bounded and matches the in-memory 100-cap so disk and memory drop the same
+ * oldest entry. Throws when the database is not open.
+ */
+export function insertDownload(d: Download): void {
+  const database = requireDb();
+  const insert = database.prepare(
+    "INSERT INTO downloads(id,url,filename,path,totalBytes,receivedBytes,state,startedAt,completedAt,spaceId) " +
+      "VALUES (@id,@url,@filename,@path,@totalBytes,@receivedBytes,@state,@startedAt,@completedAt,@spaceId)",
+  );
+  const prune = database.prepare(
+    "DELETE FROM downloads WHERE id NOT IN (SELECT id FROM downloads ORDER BY startedAt DESC, id DESC LIMIT 100)",
+  );
+  const run = database.transaction((download: Download): void => {
+    insert.run(download);
+    prune.run();
+  });
+  run(d);
+}
+
+/**
+ * Updates every mutable column of the download row with id `d.id`. An UPDATE that
+ * matches no row (the id is absent — e.g. a throttled write for a record already
+ * removed) affects zero rows and is a silent no-op. Throws when the database is
+ * not open.
+ */
+export function updateDownload(d: Download): void {
+  const database = requireDb();
+  database
+    .prepare(
+      "UPDATE downloads SET url=@url, filename=@filename, path=@path, totalBytes=@totalBytes, " +
+        "receivedBytes=@receivedBytes, state=@state, startedAt=@startedAt, completedAt=@completedAt, " +
+        "spaceId=@spaceId WHERE id=@id",
+    )
+    .run(d);
+}
+
+/**
+ * Deletes the download row with id `id`; a no-op when the id is absent.
+ * Synchronous (better-sqlite3). Throws when the database is not open.
+ */
+export function deleteDownload(id: string): void {
+  const database = requireDb();
+  database.prepare("DELETE FROM downloads WHERE id = ?").run(id);
+}
+
+/**
+ * Deletes every finished download row (`state` one of the three terminal states),
+ * never touching an active (`progressing`/`paused`) row. Backs
+ * `downloads.clearFinished`. Throws when the database is not open.
+ */
+export function clearFinishedDownloadRows(): void {
+  const database = requireDb();
+  database
+    .prepare(
+      "DELETE FROM downloads WHERE state IN ('completed','cancelled','interrupted')",
+    )
+    .run();
+}
+
+/**
+ * Returns the newest 100 downloads ordered by `startedAt DESC, id DESC` (the same
+ * total order the reducer and prune use), mapped back to {@link Download}s. Feeds
+ * the in-memory `DownloadsState` at startup. Throws when the database is not open.
+ */
+export function listDownloads(): Download[] {
+  const database = requireDb();
+  // SQLite-row boundary: .all() is typed `unknown[]`; the columns are DownloadRow.
+  const rows = database
+    .prepare(
+      "SELECT id,url,filename,path,totalBytes,receivedBytes,state,startedAt,completedAt,spaceId " +
+        "FROM downloads ORDER BY startedAt DESC, id DESC LIMIT 100",
+    )
+    .all() as DownloadRow[];
+  return rows.map(rowToDownload);
+}
+
+/**
+ * Rewrites every active (`progressing`/`paused`) download row to `interrupted`
+ * with its `completedAt` set to `launchTime`. Run once at startup BEFORE
+ * {@link listDownloads} so a download interrupted by a crash or quit is never
+ * shown as still running. Throws when the database is not open.
+ */
+export function markInterruptedDownloadsOnLaunch(launchTime: number): void {
+  const database = requireDb();
+  database
+    .prepare(
+      "UPDATE downloads SET state = 'interrupted', completedAt = @t WHERE state IN ('progressing','paused')",
+    )
+    .run({ t: launchTime });
 }
 
 /**

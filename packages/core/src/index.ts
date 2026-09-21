@@ -29,16 +29,20 @@ export type {
   CommandsApi,
   BlockingApi,
   HistoryApi,
+  DownloadsApi,
   ZoomApi,
   FindApi,
   Settings,
   SettingsApi,
+  QuickBrowseApi,
   ZeoApi,
   TabContextMenuItem,
   TabContextMenuResult,
   SpaceContextMenuItem,
   SpaceContextMenuResult,
   SpaceMenuAction,
+  DividerGeometry,
+  SplitViewApi,
 } from "./ipc.js";
 export { IPC } from "./ipc.js";
 export type { BlockingState } from "./blocking.js";
@@ -104,6 +108,19 @@ export {
   HISTORY_RETENTION_MS,
 } from "./history.js";
 export type { HistoryEntry, HistoryVisit } from "./history.js";
+export type { Download, DownloadsState } from "./downloads.js";
+export {
+  upsertDownload,
+  removeDownload,
+  clearFinishedDownloads,
+  uniqueFilename,
+  safeFilename,
+  stripUrlCredentials,
+  isFinished,
+  isActive,
+  downloadDetail,
+  DOWNLOADS_CAP,
+} from "./downloads.js";
 export { defaultSpaceName } from "./space-name.js";
 export { buildSpaceContextMenu } from "./space-menu.js";
 export type { SpaceContextMenuInput } from "./space-menu.js";
@@ -120,4 +137,36 @@ export {
   FIND_BAR_INSET,
   FIND_BAR_TOP,
   findBarBounds,
+  QUICK_BROWSE_WIDTH,
+  QUICK_BROWSE_HEIGHT,
+  QUICK_BROWSE_CHROME_HEIGHT,
+  quickBrowsePageBounds,
+  DIVIDER_WIDTH,
+  splitPaneBounds,
 } from "./layout.js";
+export {
+  openQuickBrowse,
+  replaceQuickBrowseUrl,
+  setQuickBrowseUrl,
+  setQuickBrowseTitle,
+  promoteQuickBrowse,
+  dismissQuickBrowse,
+} from "./quick-browse.js";
+export type { QuickBrowse, QuickBrowseState } from "./quick-browse.js";
+export {
+  SINGLE_LAYOUT,
+  DEFAULT_SPLIT_RATIO,
+  MIN_SPLIT_RATIO,
+  MAX_SPLIT_RATIO,
+  clampRatio,
+  enterSplit,
+  unsplit,
+  swapPanes,
+  setRatio,
+  focusOtherPane,
+  reconcileLayout,
+  focusedPaneTab,
+  paneOf,
+  layoutsEqual,
+} from "./split-view.js";
+export type { PaneSide, SingleLayout, SplitLayout, WindowLayout } from "./split-view.js";

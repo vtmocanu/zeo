@@ -199,7 +199,11 @@ export function Settings() {
 
       <div className="settings__panel">
         {selected === "general" && state !== null && (
-          <GeneralSection searchEngine={state.settings.searchEngine} />
+          <GeneralSection
+            searchEngine={state.settings.searchEngine}
+            quickBrowseExternal={state.settings.quickBrowseExternal}
+            isDefaultBrowser={state.isDefaultBrowser}
+          />
         )}
         {selected === "blocking" && state !== null && (
           <BlockingSection blocking={state.blocking} />
@@ -215,13 +219,28 @@ export function Settings() {
 
 /**
  * The general settings body: a radio group over the fixed {@link SEARCH_ENGINES}
- * catalog for the default search engine. The checked control is driven purely by
- * the broadcast `searchEngine`, so a rejected `setSearchEngine` never leaves the
- * UI showing an unpersisted choice; the rejection surfaces in an inline error.
+ * catalog for the default search engine, a toggle for opening external links in
+ * the quick-browse window, and the OS default-browser affordance. Every control
+ * is driven purely by the broadcast value, so a rejected mutation never leaves
+ * the UI showing an unpersisted choice; a rejection surfaces in an inline error.
  */
-function GeneralSection({ searchEngine }: { searchEngine: SearchEngineId }) {
+function GeneralSection({
+  searchEngine,
+  quickBrowseExternal,
+  isDefaultBrowser,
+}: {
+  searchEngine: SearchEngineId;
+  quickBrowseExternal: boolean;
+  isDefaultBrowser: boolean;
+}) {
   // Error text for a rejected setSearchEngine call.
   const [error, setError] = useState<string | null>(null);
+  // Error text for a rejected setQuickBrowseExternal call.
+  const [quickBrowseError, setQuickBrowseError] = useState<string | null>(null);
+  // Error text for a rejected browser.setDefault command.
+  const [defaultBrowserError, setDefaultBrowserError] = useState<string | null>(
+    null,
+  );
 
   /**
    * Requests the picked engine. The radios stay bound to the broadcast value, so
@@ -236,36 +255,116 @@ function GeneralSection({ searchEngine }: { searchEngine: SearchEngineId }) {
     });
   };
 
-  return (
-    <section className="settings__group">
-      <h2 className="settings__group-title">Default search engine</h2>
+  /**
+   * Toggles the quick-browse-external setting. The checkbox stays bound to the
+   * broadcast value, so a rejected call falls back to the persisted value on the
+   * next render (no optimistic keep) and the error message is surfaced.
+   */
+  const onToggleQuickBrowse = (event: ChangeEvent<HTMLInputElement>): void => {
+    const next = event.target.checked;
+    const api = window.zeo;
+    if (!api) {
+      return;
+    }
+    setQuickBrowseError(null);
+    void api.settings.setQuickBrowseExternal(next).catch((err: unknown) => {
+      setQuickBrowseError(err instanceof Error ? err.message : String(err));
+    });
+  };
 
-      <div className="settings__radio-group" role="radiogroup">
-        {SEARCH_ENGINES.map((engine) => (
-          <label key={engine.id} className="settings__radio-label">
+  /** Requests that zeo be made the OS default browser (idempotent in main). */
+  const onSetDefaultBrowser = (): void => {
+    const api = window.zeo;
+    if (!api) {
+      return;
+    }
+    setDefaultBrowserError(null);
+    void api.commands.run("browser.setDefault").catch((err: unknown) => {
+      setDefaultBrowserError(err instanceof Error ? err.message : String(err));
+    });
+  };
+
+  return (
+    <>
+      <section className="settings__group">
+        <h2 className="settings__group-title">Default search engine</h2>
+
+        <div className="settings__radio-group" role="radiogroup">
+          {SEARCH_ENGINES.map((engine) => (
+            <label key={engine.id} className="settings__radio-label">
+              <input
+                type="radio"
+                className="settings__radio"
+                name="settings-search-engine"
+                data-testid={`settings-search-engine-${engine.id}`}
+                value={engine.id}
+                checked={searchEngine === engine.id}
+                onChange={onSelect}
+              />
+              <span>{engine.name}</span>
+            </label>
+          ))}
+        </div>
+        {error !== null && (
+          <p
+            className="settings__error"
+            data-testid="settings-search-engine-error"
+            role="alert"
+          >
+            {error}
+          </p>
+        )}
+      </section>
+
+      <section className="settings__group">
+        <h2 className="settings__group-title">External links</h2>
+
+        <div className="settings__row">
+          <label className="settings__toggle-label">
             <input
-              type="radio"
-              className="settings__radio"
-              name="settings-search-engine"
-              data-testid={`settings-search-engine-${engine.id}`}
-              value={engine.id}
-              checked={searchEngine === engine.id}
-              onChange={onSelect}
+              type="checkbox"
+              className="settings__checkbox"
+              data-testid="settings-quick-browse-external"
+              checked={quickBrowseExternal}
+              onChange={onToggleQuickBrowse}
             />
-            <span>{engine.name}</span>
+            <span>Open external links in quick-browse</span>
           </label>
-        ))}
-      </div>
-      {error !== null && (
-        <p
-          className="settings__error"
-          data-testid="settings-search-engine-error"
-          role="alert"
-        >
-          {error}
-        </p>
-      )}
-    </section>
+        </div>
+        {quickBrowseError !== null && (
+          <p
+            className="settings__error"
+            data-testid="settings-quick-browse-external-error"
+            role="alert"
+          >
+            {quickBrowseError}
+          </p>
+        )}
+
+        <div className="settings__row">
+          <button
+            type="button"
+            className="settings__button"
+            data-testid="settings-default-browser"
+            disabled={isDefaultBrowser}
+            onClick={onSetDefaultBrowser}
+          >
+            {isDefaultBrowser
+              ? "zeo is your default browser"
+              : "Set zeo as default browser"}
+          </button>
+        </div>
+        {defaultBrowserError !== null && (
+          <p
+            className="settings__error"
+            data-testid="settings-default-browser-error"
+            role="alert"
+          >
+            {defaultBrowserError}
+          </p>
+        )}
+      </section>
+    </>
   );
 }
 

@@ -16,6 +16,8 @@ export type CommandId =
   | "tab.unpin"
   | "tab.archive"
   | "tab.copy-url"
+  | "tab.moveToTop"
+  | "tab.moveToBottom"
   | "tab.reload"
   | "tab.back"
   | "tab.forward"
@@ -37,10 +39,23 @@ export type CommandId =
   | "settings.openGeneral"
   | "settings.openProfiles"
   | "settings.openHistory"
+  | "downloads.open"
+  | "downloads.openFolder"
+  | "downloads.clearFinished"
   | "find.open"
   | "find.next"
   | "find.previous"
-  | "find.close";
+  | "find.close"
+  | "quickBrowse.promote"
+  | "quickBrowse.promoteToSpace"
+  | "quickBrowse.dismiss"
+  | "quickBrowse.openInTab"
+  | "browser.setDefault"
+  | "view.split"
+  | "view.splitChoose"
+  | "view.unsplit"
+  | "view.focusOtherPane"
+  | "view.swapPanes";
 
 /**
  * One registry entry: its {@link CommandId}, human title, search `keywords`,
@@ -64,9 +79,15 @@ export interface CommandDescriptor {
  * (`TabsState.zoom.byHost[siteHost]`, or `1.0`/{@link DEFAULT_ZOOM_FACTOR} when
  * the host has no entry or the tab is non-http(s)) — or `null` when no tab is
  * active; the number of spaces; `settingsOpen`, whether the settings view is
- * currently open; and `find`, whether the find session is `open` and whether it
- * currently `hasQuery` (a non-empty committed query), which gate the directional
- * find commands.
+ * currently open; `quickBrowseOpen`, whether the quick-browse window is
+ * currently open (gates the `quickBrowse.*` commands); `hasFinishedDownload`,
+ * whether at least one finished download exists (which gates
+ * `downloads.clearFinished`); `find`, whether the find session is `open` and
+ * whether it currently `hasQuery` (a non-empty committed query), which gate the
+ * directional find commands; `layoutMode`, whether the active space's window is
+ * `"single"` or `"split"`, and `openTabCount`, the active space's open-tab
+ * count — together they gate the split-view commands (a split needs two open
+ * tabs; exiting or navigating a split needs one to already exist).
  */
 export interface CommandContext {
   activeTab: {
@@ -79,7 +100,11 @@ export interface CommandContext {
   } | null;
   spaceCount: number;
   settingsOpen: boolean;
+  quickBrowseOpen: boolean;
+  hasFinishedDownload: boolean;
   find: { open: boolean; hasQuery: boolean };
+  layoutMode: "single" | "split";
+  openTabCount: number;
 }
 
 /**
@@ -91,10 +116,12 @@ export interface CommandContext {
 export const COMMANDS: readonly CommandDescriptor[] = [
   { id: "tab.new", title: "New Tab", keywords: ["new", "tab", "create"], accelerator: "CmdOrCtrl+T", menu: "tabs" },
   { id: "tab.close", title: "Close Tab", keywords: ["close", "tab"], accelerator: "CmdOrCtrl+W", menu: "tabs" },
-  { id: "tab.pin", title: "Pin Tab", keywords: ["pin", "tab", "favorite"], accelerator: "CmdOrCtrl+Shift+P", menu: "tabs" },
+  { id: "tab.pin", title: "Pin Tab", keywords: ["pin", "tab", "favorite", "essentials"], accelerator: "CmdOrCtrl+Shift+P", menu: "tabs" },
   { id: "tab.unpin", title: "Unpin Tab", keywords: ["unpin", "pin", "tab"], accelerator: "CmdOrCtrl+Shift+P", menu: "tabs" },
   { id: "tab.archive", title: "Archive Tab", keywords: ["archive", "tab", "hide"], accelerator: "CmdOrCtrl+Shift+W", menu: "tabs" },
   { id: "tab.copy-url", title: "Copy URL", keywords: ["copy", "url", "link", "address"], accelerator: "CmdOrCtrl+Shift+C", menu: "tabs" },
+  { id: "tab.moveToTop", title: "Move Tab to Top", keywords: ["move", "top", "tab", "reorder", "first"], accelerator: null, menu: "tabs" },
+  { id: "tab.moveToBottom", title: "Move Tab to Bottom", keywords: ["move", "bottom", "tab", "reorder", "last"], accelerator: null, menu: "tabs" },
   { id: "tab.reload", title: "Reload Page", keywords: ["reload", "refresh", "page"], accelerator: "CmdOrCtrl+R", menu: "view" },
   { id: "tab.back", title: "Go Back", keywords: ["back", "history", "previous"], accelerator: "CmdOrCtrl+[", menu: "view" },
   { id: "tab.forward", title: "Go Forward", keywords: ["forward", "history", "next"], accelerator: "CmdOrCtrl+]", menu: "view" },
@@ -116,10 +143,23 @@ export const COMMANDS: readonly CommandDescriptor[] = [
   { id: "settings.openGeneral", title: "Open General Settings", keywords: ["settings", "general", "search", "engine", "preferences"], accelerator: null, menu: null },
   { id: "settings.openProfiles", title: "Open Profile Settings", keywords: ["settings", "profiles", "profile"], accelerator: null, menu: null },
   { id: "settings.openHistory", title: "Open History Settings", keywords: ["settings", "history", "clear"], accelerator: null, menu: null },
+  { id: "downloads.open", title: "Show Downloads", keywords: ["download", "downloads", "files", "saved"], accelerator: "CmdOrCtrl+Shift+J", menu: "view" },
+  { id: "downloads.openFolder", title: "Open Downloads Folder", keywords: ["download", "downloads", "folder", "finder"], accelerator: null, menu: "view" },
+  { id: "downloads.clearFinished", title: "Clear Finished Downloads", keywords: ["clear", "download", "downloads", "finished"], accelerator: null, menu: "view" },
   { id: "find.open", title: "Find in Page", keywords: ["find", "search", "page", "text"], accelerator: "CmdOrCtrl+F", menu: "view" },
   { id: "find.next", title: "Find Next", keywords: ["find", "next", "search"], accelerator: "CmdOrCtrl+G", menu: "view" },
   { id: "find.previous", title: "Find Previous", keywords: ["find", "previous", "search"], accelerator: "CmdOrCtrl+Shift+G", menu: "view" },
   { id: "find.close", title: "Close Find", keywords: ["find", "close", "search"], accelerator: null, menu: null },
+  { id: "quickBrowse.promote", title: "Promote to Current Space", keywords: ["promote", "quick", "browse", "space", "keep"], accelerator: null, menu: null },
+  { id: "quickBrowse.promoteToSpace", title: "Promote to Space…", keywords: ["promote", "quick", "browse", "space", "move"], accelerator: null, menu: null },
+  { id: "quickBrowse.dismiss", title: "Dismiss Quick-Browse", keywords: ["dismiss", "quick", "browse", "close", "discard"], accelerator: null, menu: null },
+  { id: "quickBrowse.openInTab", title: "Open Link in New Tab", keywords: ["open", "tab", "quick", "browse", "link"], accelerator: null, menu: null },
+  { id: "browser.setDefault", title: "Set zeo as Default Browser", keywords: ["default", "browser", "open", "links"], accelerator: null, menu: null },
+  { id: "view.split", title: "Split View", keywords: ["split", "view", "pane", "side", "columns"], accelerator: "CmdOrCtrl+\\", menu: "view" },
+  { id: "view.splitChoose", title: "Split View with Tab…", keywords: ["split", "view", "pane", "choose", "tab", "columns"], accelerator: null, menu: "view" },
+  { id: "view.unsplit", title: "Exit Split View", keywords: ["unsplit", "single", "exit", "split", "pane"], accelerator: "CmdOrCtrl+Shift+\\", menu: "view" },
+  { id: "view.focusOtherPane", title: "Focus Other Pane", keywords: ["focus", "pane", "other", "split", "switch"], accelerator: "CmdOrCtrl+Alt+Right", menu: "view" },
+  { id: "view.swapPanes", title: "Swap Panes", keywords: ["swap", "panes", "split", "exchange", "sides"], accelerator: "CmdOrCtrl+Alt+S", menu: "view" },
 ];
 
 /**
@@ -127,10 +167,14 @@ export const COMMANDS: readonly CommandDescriptor[] = [
  * `tab.new`, `space.new`, `space.rename`, `bar.open-location`,
  * `bar.open-commands`, `blocking.toggle`, `settings.open`, `history.open`,
  * `history.clear`, `settings.openGeneral`, `settings.openProfiles`,
- * `settings.openHistory`. Every other
- * `tab.*` needs an active tab; on top of that `tab.pin` needs it unpinned,
- * `tab.unpin` pinned, `tab.archive` unpinned, and `tab.back` / `tab.forward`
- * the matching history flag. `space.delete` needs more than one space.
+ * `settings.openHistory`, `downloads.open`, `downloads.openFolder`.
+ * `downloads.clearFinished` needs at least one finished download
+ * (`hasFinishedDownload`). Every other
+ * `tab.*` needs an active tab — `tab.copy-url`, `tab.moveToTop`,
+ * `tab.moveToBottom`, and `tab.reload` need nothing more; on top of that
+ * `tab.close` needs it unpinned (a pinned tab cannot be closed), `tab.pin` needs
+ * it unpinned, `tab.unpin` pinned, `tab.archive` unpinned, and `tab.back` /
+ * `tab.forward` the matching history flag. `space.delete` needs more than one space.
  * `blocking.allowSite` needs an active tab with an http(s) `siteHost` that is
  * not yet allowlisted; `blocking.disallowSite` needs an active tab whose site
  * is allowlisted; `settings.close` needs the settings view open. `zoom.in` and
@@ -139,6 +183,11 @@ export const COMMANDS: readonly CommandDescriptor[] = [
  * is nothing to reset when the host is already at actual size). `find.open`
  * needs an active tab; `find.next` and `find.previous` need the find session
  * open with a non-empty query (`context.find.open && context.find.hasQuery`).
+ * The four `quickBrowse.*` commands need the quick-browse window open
+ * (`context.quickBrowseOpen`); `browser.setDefault` is always enabled.
+ * `view.split` and `view.splitChoose` need a single-pane layout with at least two
+ * open tabs to split against; `view.unsplit`, `view.focusOtherPane`, and
+ * `view.swapPanes` need the layout to already be `"split"`.
  */
 export function isCommandEnabled(id: CommandId, context: CommandContext): boolean {
   switch (id) {
@@ -154,7 +203,11 @@ export function isCommandEnabled(id: CommandId, context: CommandContext): boolea
     case "settings.openGeneral":
     case "settings.openProfiles":
     case "settings.openHistory":
+    case "downloads.open":
+    case "downloads.openFolder":
       return true;
+    case "downloads.clearFinished":
+      return context.hasFinishedDownload;
     case "space.delete":
       return context.spaceCount > 1;
     case "blocking.allowSite":
@@ -167,10 +220,13 @@ export function isCommandEnabled(id: CommandId, context: CommandContext): boolea
       return context.activeTab !== null && context.activeTab.siteAllowlisted;
     case "settings.close":
       return context.settingsOpen;
-    case "tab.close":
     case "tab.copy-url":
+    case "tab.moveToTop":
+    case "tab.moveToBottom":
     case "tab.reload":
       return context.activeTab !== null;
+    case "tab.close":
+      return context.activeTab !== null && !context.activeTab.pinned;
     case "tab.pin":
       return context.activeTab !== null && !context.activeTab.pinned;
     case "tab.unpin":
@@ -197,6 +253,20 @@ export function isCommandEnabled(id: CommandId, context: CommandContext): boolea
       return context.find.open && context.find.hasQuery;
     case "find.close":
       return context.find.open;
+    case "quickBrowse.promote":
+    case "quickBrowse.promoteToSpace":
+    case "quickBrowse.dismiss":
+    case "quickBrowse.openInTab":
+      return context.quickBrowseOpen;
+    case "browser.setDefault":
+      return true;
+    case "view.split":
+    case "view.splitChoose":
+      return context.layoutMode === "single" && context.openTabCount >= 2;
+    case "view.unsplit":
+    case "view.focusOtherPane":
+    case "view.swapPanes":
+      return context.layoutMode === "split";
     default: {
       const exhaustive: never = id;
       return exhaustive;
