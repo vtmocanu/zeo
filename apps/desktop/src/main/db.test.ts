@@ -643,6 +643,60 @@ describe("migrate", () => {
     db.close();
   });
 
+  test("upgrades a v8 database to the current version (v9), adding only the quick-browse toggle and preserving the non-default layout values and other state", () => {
+    const path = join(tempDir, "v8-to-current.db");
+    const db = new Database(path);
+    db.exec(V8_DDL);
+    // Seed schemaVersion=8 with NON-default layout values plus enabled=0 and a
+    // non-default searchEngine so a spurious re-run of step 8 (which would reset
+    // the layout columns to their DDL defaults) or a re-create is detectable. This
+    // is the real 0.0.21 -> 0.0.22 upgrade path: a v8 DB already has the layout
+    // columns, so migrate must run ONLY step 9 to add quickBrowseExternal.
+    db.prepare(
+      "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled,searchEngine,layoutMode,layoutLeftTabId,layoutRightTabId,layoutRatio,layoutFocused) " +
+        "VALUES (0, 8, 'space-9', 0, 'google', 'split', 'tL', 'tR', 0.7, 'right')",
+    ).run();
+
+    expect(hasLayoutColumns(db)).toBe(true);
+    expect(hasQuickBrowseExternalColumn(db)).toBe(false);
+
+    migrate(db);
+
+    const meta = db
+      .prepare(
+        "SELECT schemaVersion, activeSpaceId, enabled, searchEngine, quickBrowseExternal, layoutMode, layoutLeftTabId, layoutRightTabId, layoutRatio, layoutFocused FROM meta WHERE id=0",
+      )
+      .get() as {
+      schemaVersion: number;
+      activeSpaceId: string;
+      enabled: number;
+      searchEngine: string;
+      quickBrowseExternal: number;
+      layoutMode: string;
+      layoutLeftTabId: string | null;
+      layoutRightTabId: string | null;
+      layoutRatio: number;
+      layoutFocused: string;
+    };
+    expect(meta.schemaVersion).toBe(9);
+    // Step 9 adds the quick-browse toggle column, defaulting to 1 (ON).
+    expect(hasQuickBrowseExternalColumn(db)).toBe(true);
+    expect(meta.quickBrowseExternal).toBe(1);
+    // Step 8 is NOT re-run: the existing layout columns keep their non-default
+    // seeded values.
+    expect(hasLayoutColumns(db)).toBe(true);
+    expect(meta.layoutMode).toBe("split");
+    expect(meta.layoutLeftTabId).toBe("tL");
+    expect(meta.layoutRightTabId).toBe("tR");
+    expect(meta.layoutRatio).toBe(0.7);
+    expect(meta.layoutFocused).toBe("right");
+    // Pre-existing state preserved (no re-create wiped it).
+    expect(meta.activeSpaceId).toBe("space-9");
+    expect(meta.enabled).toBe(0);
+    expect(meta.searchEngine).toBe("google");
+    db.close();
+  });
+
   test("creates a fresh v9 schema with enabled=1, the allowlist, history, site_zoom, and downloads tables, the search engine, the layout columns, and the quick-browse toggle on an empty database", () => {
     const path = join(tempDir, "fresh.db");
     const db = new Database(path);
