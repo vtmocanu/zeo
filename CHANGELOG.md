@@ -17,6 +17,38 @@ milestone, a minor bump only for very large breakthroughs.
   matching the existing rule that pinned tabs are exempt from archiving and the
   idle auto-sweep. Unpin a tab first to close it.
 
+- Sidebar: the pinned tabs section now stays fixed (sticky) at the top of the
+  scroll area instead of scrolling out of view with a long unpinned list.
+
+## [0.0.21] - 2026-09-21
+
+### Added
+
+- Split view: press `Cmd+\` to show two tabs of the active space side by side,
+  separated by a draggable divider (ratio clamped to 20–80%). `Cmd+Alt+Right`
+  moves keyboard focus between panes, `Cmd+Alt+S` swaps them, and `Cmd+Shift+\`
+  (or closing a paned tab) returns to a single view. "Split View with Tab…" opens
+  the command bar to pick which tab fills the second pane. The split (panes and
+  divider ratio) is persisted and restored across relaunch.
+
+## [0.0.20] - 2026-09-14
+
+### Added
+
+- Downloads: files a page initiates are saved to the downloads folder with no
+  save dialog, tracked with live progress and persisted across launches (SQLite
+  schema version 7). A download's URL is stripped of embedded credentials before
+  it is stored or shown, and a suggested filename is sanitized to a safe basename
+  and de-duplicated (`name (1).ext`) so it always stays inside the downloads
+  directory. `Cmd+Shift+J` (or the sidebar footer indicator, or "Show Downloads"
+  in the command bar) opens the command bar filtered to downloads, where Enter
+  opens a completed file, `Cmd+Enter` reveals it in Finder, and `Cmd+Backspace`
+  removes it from the list without deleting the file on disk; "Open Downloads
+  Folder" and "Clear Finished Downloads" round out the commands. The sidebar
+  footer shows the active download count and aggregate progress. A download
+  interrupted by a crash, quit, or a deleted profile shows as interrupted rather
+  than in progress.
+
 ## [0.0.19] - 2026-09-07
 
 ### Added

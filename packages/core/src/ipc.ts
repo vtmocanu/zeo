@@ -4,10 +4,12 @@ import type { Profile } from "./profile.js";
 import type { CommandBarMode, CommandBarState } from "./command-bar.js";
 import type { CommandDescriptor, CommandId } from "./commands.js";
 import type { BlockingState } from "./blocking.js";
+import type { Download, DownloadsState } from "./downloads.js";
 import type { HistoryEntry, HistoryVisit } from "./history.js";
 import type { ZoomState } from "./zoom.js";
 import type { FindState } from "./page-search.js";
 import type { SettingsSectionId, SearchEngineId } from "./settings.js";
+import type { PaneSide, WindowLayout } from "./split-view.js";
 
 /**
  * A single space's tab payload, in the pre-space shape. This is what
@@ -67,15 +69,22 @@ export interface StoreSnapshot extends SpacesState, TabsSlice {}
  * `find` carries the single in-page find session (see {@link FindState}) and
  * rides the `stateChange` broadcast exactly like `zoom` and `settings` — main
  * attaches it before every broadcast, so it is never absent.
+ *
+ * `layout` carries the active space's window {@link WindowLayout} (single pane or
+ * a two-pane split) and rides the `stateChange` broadcast exactly like
+ * `blocking`, `zoom`, and `find` — main attaches it before every broadcast, so
+ * it is never absent.
  */
 export interface TabsState extends StoreSnapshot {
   blocking: BlockingState;
+  downloads: DownloadsState;
   settingsOpen: boolean;
   zoom: ZoomState;
   settings: Settings;
   settingsSection: SettingsSectionId;
   settingsSectionNonce: number;
   find: FindState;
+  layout: WindowLayout;
 }
 
 /**
@@ -295,6 +304,29 @@ export interface HistoryApi {
 }
 
 /**
+ * Download commands the renderer invokes over IPC, handled in main against the
+ * single trusted global download manager (no per-profile or per-space ownership
+ * check — any handler may act on any record by `id`). `list()` returns the
+ * in-memory {@link Download} items (newest first, capped at 100). `cancel(id)`
+ * cancels the live item when it is active and is a no-op on a finished, unknown,
+ * or already-cleaned-up `id`. `open(id)` opens a completed file with the OS
+ * handler and rejects otherwise; `reveal(id)` shows the item's path in Finder
+ * and rejects for an unknown `id`. `remove(id)` forgets one record (commit-first;
+ * it never deletes the file on disk); `clearFinished()` forgets every finished
+ * record (never touching an active download or any file). Updates ride the
+ * existing `stateChange` broadcast on {@link TabsState}, so there is no separate
+ * change channel.
+ */
+export interface DownloadsApi {
+  list(): Promise<Download[]>;
+  cancel(id: string): Promise<void>;
+  open(id: string): Promise<void>;
+  reveal(id: string): Promise<void>;
+  remove(id: string): Promise<void>;
+  clearFinished(): Promise<void>;
+}
+
+/**
  * The persisted, broadcast settings slice. Currently just the chosen default
  * search engine; it rides the `stateChange` broadcast on {@link TabsState} the
  * same way {@link BlockingState} does, so a change needs no separate channel.
@@ -353,6 +385,40 @@ export interface FindApi {
 }
 
 /**
+ * The geometry the divider view needs to render and drag: the current left-pane
+ * `ratio` and `dividableWidth`, the usable page width (in px) the ratio applies
+ * to, so the view can translate a pixel drag back into a ratio.
+ */
+export interface DividerGeometry {
+  ratio: number;
+  dividableWidth: number;
+}
+
+/**
+ * Split-view commands the renderer invokes over IPC, handled in main against the
+ * active space's window {@link WindowLayout}. `split()` enters a split of the
+ * active tab with the most recent other open tab; `splitWith(tabId)` splits
+ * against a chosen tab; `unsplit()` collapses back to a single pane; `swap()`
+ * exchanges the two panes; `focusPane(pane)` focuses a specific pane and
+ * `focusOther()` toggles focus to the other one; `setRatio(ratio)` sets the
+ * clamped left-pane fraction; `dividerGeometry()` reads the current
+ * {@link DividerGeometry}; `state()` reads back the current {@link WindowLayout}.
+ * The layout rides the `stateChange` broadcast on `TabsState.layout` — there is
+ * no dedicated change channel for the layout itself.
+ */
+export interface SplitViewApi {
+  split(): Promise<void>;
+  splitWith(tabId: string): Promise<void>;
+  unsplit(): Promise<void>;
+  swap(): Promise<void>;
+  focusPane(pane: PaneSide): Promise<void>;
+  focusOther(): Promise<void>;
+  setRatio(ratio: number): Promise<void>;
+  dividerGeometry(): Promise<DividerGeometry>;
+  state(): Promise<WindowLayout>;
+}
+
+/**
  * The full bridge surface exposed on `window.zeo` by the preload script.
  *
  * `onStateChange` registers a listener for main-pushed state updates and
@@ -367,9 +433,11 @@ export interface ZeoApi {
   commands: CommandsApi;
   blocking: BlockingApi;
   history: HistoryApi;
+  downloads: DownloadsApi;
   zoom: ZoomApi;
   settings: SettingsApi;
   find: FindApi;
+  splitView: SplitViewApi;
   onStateChange(listener: (state: TabsState) => void): () => void;
   /** Registers a listener for main-pushed command-bar state updates and returns
    *  an unsubscribe function, mirroring onStateChange. */
@@ -377,6 +445,10 @@ export interface ZeoApi {
   /** Registers a listener for main-pushed space-menu actions (Rename / New
    *  profile…) and returns an unsubscribe function, mirroring onStateChange. */
   onSpaceMenuAction(listener: (action: SpaceMenuAction) => void): () => void;
+  /** Registers a listener for main-pushed divider layout geometry and returns an
+   *  unsubscribe function, mirroring onStateChange. Delivered ONLY to the divider
+   *  view (the draggable gutter between split panes), not to every renderer. */
+  onDividerLayout(listener: (geom: DividerGeometry) => void): () => void;
 }
 
 /**
@@ -427,6 +499,12 @@ export const IPC = {
   historyDeleteUrl: "zeo:history:delete-url",
   historyClear: "zeo:history:clear",
   historyStats: "zeo:history:stats",
+  downloadsList: "zeo:downloads:list",
+  downloadsCancel: "zeo:downloads:cancel",
+  downloadsOpen: "zeo:downloads:open",
+  downloadsReveal: "zeo:downloads:reveal",
+  downloadsRemove: "zeo:downloads:remove",
+  downloadsClearFinished: "zeo:downloads:clear-finished",
   zoomIn: "zeo:zoom:in",
   zoomOut: "zeo:zoom:out",
   zoomReset: "zeo:zoom:reset",
@@ -439,5 +517,15 @@ export const IPC = {
   findState: "zeo:find:state",
   settingsGet: "zeo:settings:get",
   settingsSetSearchEngine: "zeo:settings:set-search-engine",
+  splitViewSplit: "zeo:split-view:split",
+  splitViewSplitWith: "zeo:split-view:split-with",
+  splitViewUnsplit: "zeo:split-view:unsplit",
+  splitViewSwap: "zeo:split-view:swap",
+  splitViewFocusPane: "zeo:split-view:focus-pane",
+  splitViewFocusOther: "zeo:split-view:focus-other",
+  splitViewSetRatio: "zeo:split-view:set-ratio",
+  splitViewDividerGeometry: "zeo:split-view:divider-geometry",
+  splitViewState: "zeo:split-view:state",
+  splitViewDividerLayout: "zeo:split-view:divider-layout",
   stateChange: "zeo:state-change",
 } as const;

@@ -36,22 +36,34 @@ const ALL_IDS: CommandId[] = [
   "settings.openGeneral",
   "settings.openProfiles",
   "settings.openHistory",
+  "downloads.open",
+  "downloads.openFolder",
+  "downloads.clearFinished",
   "find.open",
   "find.next",
   "find.previous",
   "find.close",
+  "view.split",
+  "view.splitChoose",
+  "view.unsplit",
+  "view.focusOtherPane",
+  "view.swapPanes",
 ];
 
 /**
  * Builds a command context, defaulting to no active tab, a single space, a
- * closed settings view, and a closed find session with no query.
+ * closed settings view, no finished download, a closed find session with no
+ * query, a single-pane layout, and a single open tab.
  */
 function context(partial: Partial<CommandContext> = {}): CommandContext {
   return {
     activeTab: partial.activeTab === undefined ? null : partial.activeTab,
     spaceCount: partial.spaceCount ?? 1,
     settingsOpen: partial.settingsOpen ?? false,
+    hasFinishedDownload: partial.hasFinishedDownload ?? false,
     find: partial.find ?? { open: false, hasQuery: false },
+    layoutMode: partial.layoutMode ?? "single",
+    openTabCount: partial.openTabCount ?? 1,
   };
 }
 
@@ -147,6 +159,41 @@ describe("history commands", () => {
       expect(isCommandEnabled(id, context({ activeTab: null, spaceCount: 1 }))).toBe(true);
       expect(isCommandEnabled(id, context({ activeTab: activeTab(), spaceCount: 3 }))).toBe(true);
     }
+  });
+});
+
+describe("downloads commands", () => {
+  test("downloads.open is a view command with the Cmd+Shift+J accelerator", () => {
+    const entry = COMMANDS.find((c) => c.id === "downloads.open");
+    expect(entry).toBeDefined();
+    expect(entry?.menu).toBe("view");
+    expect(entry?.accelerator).toBe("CmdOrCtrl+Shift+J");
+  });
+
+  test("downloads.openFolder is a view command with no accelerator", () => {
+    const entry = COMMANDS.find((c) => c.id === "downloads.openFolder");
+    expect(entry).toBeDefined();
+    expect(entry?.menu).toBe("view");
+    expect(entry?.accelerator).toBeNull();
+  });
+
+  test("downloads.clearFinished is a view command with no accelerator", () => {
+    const entry = COMMANDS.find((c) => c.id === "downloads.clearFinished");
+    expect(entry).toBeDefined();
+    expect(entry?.menu).toBe("view");
+    expect(entry?.accelerator).toBeNull();
+  });
+
+  test("downloads.open and downloads.openFolder are always enabled", () => {
+    for (const id of ["downloads.open", "downloads.openFolder"] as const) {
+      expect(isCommandEnabled(id, context({ activeTab: null, spaceCount: 1 }))).toBe(true);
+      expect(isCommandEnabled(id, context({ activeTab: activeTab(), spaceCount: 3 }))).toBe(true);
+    }
+  });
+
+  test("downloads.clearFinished is gated on a finished download existing", () => {
+    expect(isCommandEnabled("downloads.clearFinished", context({ hasFinishedDownload: true }))).toBe(true);
+    expect(isCommandEnabled("downloads.clearFinished", context({ hasFinishedDownload: false }))).toBe(false);
   });
 });
 
@@ -365,6 +412,45 @@ describe("find commands", () => {
   });
 });
 
+describe("split-view commands", () => {
+  const splitPair = ["view.split", "view.splitChoose"] as const;
+  const inSplit = ["view.unsplit", "view.focusOtherPane", "view.swapPanes"] as const;
+
+  test("each is registered exactly once in the view menu", () => {
+    for (const id of [...splitPair, ...inSplit]) {
+      const matches = COMMANDS.filter((c) => c.id === id);
+      expect(matches).toHaveLength(1);
+      expect(matches[0]?.menu).toBe("view");
+    }
+  });
+
+  test("the split/unsplit accelerators are a single backslash and its shifted form", () => {
+    expect(COMMANDS.find((c) => c.id === "view.split")?.accelerator).toBe("CmdOrCtrl+\\");
+    expect(COMMANDS.find((c) => c.id === "view.unsplit")?.accelerator).toBe("CmdOrCtrl+Shift+\\");
+    expect(COMMANDS.find((c) => c.id === "view.splitChoose")?.accelerator).toBeNull();
+  });
+
+  test("view.split and view.splitChoose need a single layout with at least two open tabs", () => {
+    for (const id of splitPair) {
+      // Enabled only when single AND openTabCount >= 2.
+      expect(isCommandEnabled(id, context({ layoutMode: "single", openTabCount: 2 }))).toBe(true);
+      // The 1-vs-2 boundary: a single open tab has nothing to split against.
+      expect(isCommandEnabled(id, context({ layoutMode: "single", openTabCount: 1 }))).toBe(false);
+      // Already split: cannot split again.
+      expect(isCommandEnabled(id, context({ layoutMode: "split", openTabCount: 2 }))).toBe(false);
+      expect(isCommandEnabled(id, context({ layoutMode: "split", openTabCount: 5 }))).toBe(false);
+    }
+  });
+
+  test("view.unsplit, view.focusOtherPane, view.swapPanes need a split layout", () => {
+    for (const id of inSplit) {
+      expect(isCommandEnabled(id, context({ layoutMode: "split", openTabCount: 2 }))).toBe(true);
+      expect(isCommandEnabled(id, context({ layoutMode: "single", openTabCount: 2 }))).toBe(false);
+      expect(isCommandEnabled(id, context({ layoutMode: "single", openTabCount: 1 }))).toBe(false);
+    }
+  });
+});
+
 describe("isCommandEnabled — no active tab yields exactly the expected set", () => {
   function enabledIds(ctx: CommandContext): CommandId[] {
     return ALL_IDS.filter((id) => isCommandEnabled(id, ctx)).sort();
@@ -372,13 +458,13 @@ describe("isCommandEnabled — no active tab yields exactly the expected set", (
 
   test("with one space: only the always-enabled commands", () => {
     expect(enabledIds(context({ activeTab: null, spaceCount: 1 }))).toEqual(
-      ["bar.open-commands", "bar.open-location", "blocking.toggle", "history.clear", "history.open", "settings.open", "settings.openGeneral", "settings.openHistory", "settings.openProfiles", "space.new", "space.rename", "tab.new"].sort(),
+      ["bar.open-commands", "bar.open-location", "blocking.toggle", "downloads.open", "downloads.openFolder", "history.clear", "history.open", "settings.open", "settings.openGeneral", "settings.openHistory", "settings.openProfiles", "space.new", "space.rename", "tab.new"].sort(),
     );
   });
 
   test("with more than one space: the always-enabled commands plus space.delete", () => {
     expect(enabledIds(context({ activeTab: null, spaceCount: 2 }))).toEqual(
-      ["bar.open-commands", "bar.open-location", "blocking.toggle", "history.clear", "history.open", "settings.open", "settings.openGeneral", "settings.openHistory", "settings.openProfiles", "space.delete", "space.new", "space.rename", "tab.new"].sort(),
+      ["bar.open-commands", "bar.open-location", "blocking.toggle", "downloads.open", "downloads.openFolder", "history.clear", "history.open", "settings.open", "settings.openGeneral", "settings.openHistory", "settings.openProfiles", "space.delete", "space.new", "space.rename", "tab.new"].sort(),
     );
   });
 });
