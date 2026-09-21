@@ -9,6 +9,13 @@ milestone, a minor bump only for very large breakthroughs.
 
 ## [Unreleased]
 
+### Fixed
+
+- macOS: with all windows closed, tab and other menu accelerators (e.g. New Tab)
+  now recreate a window first instead of silently mutating hidden tab state or
+  opening a non-visible command bar; a command bar left open when the last window
+  closed no longer reappears as a phantom overlay on the next window.
+
 ## [0.0.20] - 2026-09-14
 
 ### Added
