@@ -48,7 +48,12 @@ export type CommandId =
   | "quickBrowse.promoteToSpace"
   | "quickBrowse.dismiss"
   | "quickBrowse.openInTab"
-  | "browser.setDefault";
+  | "browser.setDefault"
+  | "view.split"
+  | "view.splitChoose"
+  | "view.unsplit"
+  | "view.focusOtherPane"
+  | "view.swapPanes";
 
 /**
  * One registry entry: its {@link CommandId}, human title, search `keywords`,
@@ -75,9 +80,12 @@ export interface CommandDescriptor {
  * currently open; `quickBrowseOpen`, whether the quick-browse window is
  * currently open (gates the `quickBrowse.*` commands); `hasFinishedDownload`,
  * whether at least one finished download exists (which gates
- * `downloads.clearFinished`); and `find`, whether the
- * find session is `open` and whether it currently `hasQuery` (a non-empty
- * committed query), which gate the directional find commands.
+ * `downloads.clearFinished`); `find`, whether the find session is `open` and
+ * whether it currently `hasQuery` (a non-empty committed query), which gate the
+ * directional find commands; `layoutMode`, whether the active space's window is
+ * `"single"` or `"split"`, and `openTabCount`, the active space's open-tab
+ * count — together they gate the split-view commands (a split needs two open
+ * tabs; exiting or navigating a split needs one to already exist).
  */
 export interface CommandContext {
   activeTab: {
@@ -93,6 +101,8 @@ export interface CommandContext {
   quickBrowseOpen: boolean;
   hasFinishedDownload: boolean;
   find: { open: boolean; hasQuery: boolean };
+  layoutMode: "single" | "split";
+  openTabCount: number;
 }
 
 /**
@@ -141,6 +151,11 @@ export const COMMANDS: readonly CommandDescriptor[] = [
   { id: "quickBrowse.dismiss", title: "Dismiss Quick-Browse", keywords: ["dismiss", "quick", "browse", "close", "discard"], accelerator: null, menu: null },
   { id: "quickBrowse.openInTab", title: "Open Link in New Tab", keywords: ["open", "tab", "quick", "browse", "link"], accelerator: null, menu: null },
   { id: "browser.setDefault", title: "Set zeo as Default Browser", keywords: ["default", "browser", "open", "links"], accelerator: null, menu: null },
+  { id: "view.split", title: "Split View", keywords: ["split", "view", "pane", "side", "columns"], accelerator: "CmdOrCtrl+\\", menu: "view" },
+  { id: "view.splitChoose", title: "Split View with Tab…", keywords: ["split", "view", "pane", "choose", "tab", "columns"], accelerator: null, menu: "view" },
+  { id: "view.unsplit", title: "Exit Split View", keywords: ["unsplit", "single", "exit", "split", "pane"], accelerator: "CmdOrCtrl+Shift+\\", menu: "view" },
+  { id: "view.focusOtherPane", title: "Focus Other Pane", keywords: ["focus", "pane", "other", "split", "switch"], accelerator: "CmdOrCtrl+Alt+Right", menu: "view" },
+  { id: "view.swapPanes", title: "Swap Panes", keywords: ["swap", "panes", "split", "exchange", "sides"], accelerator: "CmdOrCtrl+Alt+S", menu: "view" },
 ];
 
 /**
@@ -164,6 +179,9 @@ export const COMMANDS: readonly CommandDescriptor[] = [
  * open with a non-empty query (`context.find.open && context.find.hasQuery`).
  * The four `quickBrowse.*` commands need the quick-browse window open
  * (`context.quickBrowseOpen`); `browser.setDefault` is always enabled.
+ * `view.split` and `view.splitChoose` need a single-pane layout with at least two
+ * open tabs to split against; `view.unsplit`, `view.focusOtherPane`, and
+ * `view.swapPanes` need the layout to already be `"split"`.
  */
 export function isCommandEnabled(id: CommandId, context: CommandContext): boolean {
   switch (id) {
@@ -233,6 +251,13 @@ export function isCommandEnabled(id: CommandId, context: CommandContext): boolea
       return context.quickBrowseOpen;
     case "browser.setDefault":
       return true;
+    case "view.split":
+    case "view.splitChoose":
+      return context.layoutMode === "single" && context.openTabCount >= 2;
+    case "view.unsplit":
+    case "view.focusOtherPane":
+    case "view.swapPanes":
+      return context.layoutMode === "split";
     default: {
       const exhaustive: never = id;
       return exhaustive;

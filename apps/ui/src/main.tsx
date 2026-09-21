@@ -4,17 +4,19 @@ import { App } from "./App.js";
 import { Overlay } from "./Overlay.js";
 import { QuickBrowse } from "./QuickBrowse.js";
 import { Settings } from "./Settings.js";
+import { Divider } from "./Divider.js";
 
 const container = document.getElementById("root");
 if (!container) {
   throw new Error("Root container #root not found");
 }
 
-// The command-bar overlay, the settings view, the quick-browse chrome, and the
-// main sidebar share this bundle; the hosting WebContentsView picks which to
-// mount via the `view` query param (main injects `?view=command-bar` for the
-// overlay, `?view=settings` for the settings surface, and `?view=quick-browse`
-// for the quick-browse chrome), defaulting to the app sidebar.
+// The command-bar overlay, the settings view, the quick-browse chrome, the
+// split divider, and the main sidebar share this bundle; the hosting
+// WebContentsView picks which to mount via the `view` query param (main injects
+// `?view=command-bar` for the overlay, `?view=settings` for the settings
+// surface, `?view=quick-browse` for the quick-browse chrome, and `?view=divider`
+// for the draggable gutter between split panes), defaulting to the app sidebar.
 const view = new URLSearchParams(window.location.search).get("view");
 
 createRoot(container).render(
@@ -25,6 +27,8 @@ createRoot(container).render(
       <Settings />
     ) : view === "quick-browse" ? (
       <QuickBrowse />
+    ) : view === "divider" ? (
+      <Divider />
     ) : (
       <App />
     )}

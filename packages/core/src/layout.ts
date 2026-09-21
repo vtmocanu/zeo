@@ -1,3 +1,5 @@
+import { clampRatio } from "./split-view.js";
+
 export const SIDEBAR_WIDTH = 240;
 
 /** Fixed height of the command bar overlay's input row. */
@@ -86,6 +88,56 @@ export function quickBrowsePageBounds(
   contentHeight: number,
 ): { x: number; y: number; width: number; height: number } {
   return { x: 0, y: QUICK_BROWSE_CHROME_HEIGHT, width: contentWidth, height: Math.max(0, contentHeight - QUICK_BROWSE_CHROME_HEIGHT) };
+}
+
+/** Width, in px, of the draggable divider gutter drawn between split panes. */
+export const DIVIDER_WIDTH = 6;
+
+/**
+ * Computes the two page-region rectangles of a split view plus the divider
+ * gutter between them, within the window's content area. The panes tile the PAGE
+ * region (the content to the right of the sidebar): the left pane, then the
+ * {@link DIVIDER_WIDTH}-wide divider, then the right pane, all filling the
+ * content height.
+ *
+ * The usable page width is `pageWidth - DIVIDER_WIDTH`. When that is non-positive
+ * (the page region cannot seat even the divider), all three rects are all-zero so
+ * no negative or off-screen dimensions reach the caller, mirroring the guard in
+ * {@link commandBarBounds}. Otherwise the left pane takes `round(usable * r)` of
+ * the usable width (with `r` the {@link clampRatio}-clamped `ratio`) and the
+ * right pane takes the remainder, so the two pane widths plus the divider sum to
+ * the page width exactly.
+ */
+export function splitPaneBounds(
+  contentWidth: number,
+  contentHeight: number,
+  ratio: number,
+): {
+  left: { x: number; y: number; width: number; height: number };
+  divider: { x: number; y: number; width: number; height: number };
+  right: { x: number; y: number; width: number; height: number };
+} {
+  const pageWidth = contentWidth - SIDEBAR_WIDTH;
+  const usable = pageWidth - DIVIDER_WIDTH;
+  if (usable <= 0) {
+    return {
+      left: { x: 0, y: 0, width: 0, height: 0 },
+      divider: { x: 0, y: 0, width: 0, height: 0 },
+      right: { x: 0, y: 0, width: 0, height: 0 },
+    };
+  }
+  const r = clampRatio(ratio);
+  const leftW = Math.round(usable * r);
+  return {
+    left: { x: SIDEBAR_WIDTH, y: 0, width: leftW, height: contentHeight },
+    divider: { x: SIDEBAR_WIDTH + leftW, y: 0, width: DIVIDER_WIDTH, height: contentHeight },
+    right: {
+      x: SIDEBAR_WIDTH + leftW + DIVIDER_WIDTH,
+      y: 0,
+      width: usable - leftW,
+      height: contentHeight,
+    },
+  };
 }
 
 /**

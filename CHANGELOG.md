@@ -9,7 +9,7 @@ milestone, a minor bump only for very large breakthroughs.
 
 ## [Unreleased]
 
-## [0.0.21] - 2026-09-21
+## [0.0.22] - 2026-09-21
 
 ### Added
 
@@ -25,7 +25,18 @@ milestone, a minor bump only for very large breakthroughs.
   quick-browse", on by default) routes external links to a normal new tab
   instead when turned off, and a "Set zeo as default browser" button in the same
   section registers zeo for `http`/`https`. The persisted toggle bumps the
-  database to schema version 8.
+  database to schema version 9.
+
+## [0.0.21] - 2026-09-21
+
+### Added
+
+- Split view: press `Cmd+\` to show two tabs of the active space side by side,
+  separated by a draggable divider (ratio clamped to 20–80%). `Cmd+Alt+Right`
+  moves keyboard focus between panes, `Cmd+Alt+S` swaps them, and `Cmd+Shift+\`
+  (or closing a paned tab) returns to a single view. "Split View with Tab…" opens
+  the command bar to pick which tab fills the second pane. The split (panes and
+  divider ratio) is persisted and restored across relaunch.
 
 ## [0.0.20] - 2026-09-14
 

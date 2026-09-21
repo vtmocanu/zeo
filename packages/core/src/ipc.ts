@@ -10,6 +10,7 @@ import type { ZoomState } from "./zoom.js";
 import type { FindState } from "./page-search.js";
 import type { SettingsSectionId, SearchEngineId } from "./settings.js";
 import type { QuickBrowse } from "./quick-browse.js";
+import type { PaneSide, WindowLayout } from "./split-view.js";
 
 /**
  * A single space's tab payload, in the pre-space shape. This is what
@@ -69,6 +70,11 @@ export interface StoreSnapshot extends SpacesState, TabsSlice {}
  * `find` carries the single in-page find session (see {@link FindState}) and
  * rides the `stateChange` broadcast exactly like `zoom` and `settings` — main
  * attaches it before every broadcast, so it is never absent.
+ *
+ * `layout` carries the active space's window {@link WindowLayout} (single pane or
+ * a two-pane split) and rides the `stateChange` broadcast exactly like
+ * `blocking`, `zoom`, and `find` — main attaches it before every broadcast, so
+ * it is never absent.
  */
 export interface TabsState extends StoreSnapshot {
   blocking: BlockingState;
@@ -83,6 +89,7 @@ export interface TabsState extends StoreSnapshot {
   quickBrowse: QuickBrowse | null;
   /** Whether zeo is currently the OS default browser (drives the set-default affordance). */
   isDefaultBrowser: boolean;
+  layout: WindowLayout;
 }
 
 /**
@@ -411,6 +418,40 @@ export interface FindApi {
 }
 
 /**
+ * The geometry the divider view needs to render and drag: the current left-pane
+ * `ratio` and `dividableWidth`, the usable page width (in px) the ratio applies
+ * to, so the view can translate a pixel drag back into a ratio.
+ */
+export interface DividerGeometry {
+  ratio: number;
+  dividableWidth: number;
+}
+
+/**
+ * Split-view commands the renderer invokes over IPC, handled in main against the
+ * active space's window {@link WindowLayout}. `split()` enters a split of the
+ * active tab with the most recent other open tab; `splitWith(tabId)` splits
+ * against a chosen tab; `unsplit()` collapses back to a single pane; `swap()`
+ * exchanges the two panes; `focusPane(pane)` focuses a specific pane and
+ * `focusOther()` toggles focus to the other one; `setRatio(ratio)` sets the
+ * clamped left-pane fraction; `dividerGeometry()` reads the current
+ * {@link DividerGeometry}; `state()` reads back the current {@link WindowLayout}.
+ * The layout rides the `stateChange` broadcast on `TabsState.layout` — there is
+ * no dedicated change channel for the layout itself.
+ */
+export interface SplitViewApi {
+  split(): Promise<void>;
+  splitWith(tabId: string): Promise<void>;
+  unsplit(): Promise<void>;
+  swap(): Promise<void>;
+  focusPane(pane: PaneSide): Promise<void>;
+  focusOther(): Promise<void>;
+  setRatio(ratio: number): Promise<void>;
+  dividerGeometry(): Promise<DividerGeometry>;
+  state(): Promise<WindowLayout>;
+}
+
+/**
  * The full bridge surface exposed on `window.zeo` by the preload script.
  *
  * `onStateChange` registers a listener for main-pushed state updates and
@@ -430,6 +471,7 @@ export interface ZeoApi {
   settings: SettingsApi;
   quickBrowse: QuickBrowseApi;
   find: FindApi;
+  splitView: SplitViewApi;
   onStateChange(listener: (state: TabsState) => void): () => void;
   /** Registers a listener for main-pushed command-bar state updates and returns
    *  an unsubscribe function, mirroring onStateChange. */
@@ -437,6 +479,10 @@ export interface ZeoApi {
   /** Registers a listener for main-pushed space-menu actions (Rename / New
    *  profile…) and returns an unsubscribe function, mirroring onStateChange. */
   onSpaceMenuAction(listener: (action: SpaceMenuAction) => void): () => void;
+  /** Registers a listener for main-pushed divider layout geometry and returns an
+   *  unsubscribe function, mirroring onStateChange. Delivered ONLY to the divider
+   *  view (the draggable gutter between split panes), not to every renderer. */
+  onDividerLayout(listener: (geom: DividerGeometry) => void): () => void;
 }
 
 /**
@@ -509,5 +555,15 @@ export const IPC = {
   quickBrowseState: "zeo:quick-browse:state",
   quickBrowsePromote: "zeo:quick-browse:promote",
   quickBrowseDismiss: "zeo:quick-browse:dismiss",
+  splitViewSplit: "zeo:split-view:split",
+  splitViewSplitWith: "zeo:split-view:split-with",
+  splitViewUnsplit: "zeo:split-view:unsplit",
+  splitViewSwap: "zeo:split-view:swap",
+  splitViewFocusPane: "zeo:split-view:focus-pane",
+  splitViewFocusOther: "zeo:split-view:focus-other",
+  splitViewSetRatio: "zeo:split-view:set-ratio",
+  splitViewDividerGeometry: "zeo:split-view:divider-geometry",
+  splitViewState: "zeo:split-view:state",
+  splitViewDividerLayout: "zeo:split-view:divider-layout",
   stateChange: "zeo:state-change",
 } as const;

@@ -23,6 +23,8 @@ import {
   UnsupportedSchemaVersionError,
   DEFAULT_SEARCH_ENGINE_ID,
   searchEngine,
+  clampRatio,
+  SINGLE_LAYOUT,
 } from "@zeo/core";
 import type {
   PersistedState,
@@ -34,6 +36,7 @@ import type {
   HistoryEntry,
   HistoryVisit,
   SearchEngineId,
+  WindowLayout,
   Download,
 } from "@zeo/core";
 
@@ -42,8 +45,11 @@ import type {
  * blocking_allowlist table added at schema version 3, the two history
  * tables (history_entries, history_visits) added at schema version 4, the
  * searchEngine column added at schema version 5, the site_zoom table added
- * at schema version 6, the downloads table added at schema version 7, plus the
- * quickBrowseExternal column added at schema version 8 — nine tables in all.
+ * at schema version 6, plus the downloads table added at schema version 7 —
+ * nine tables in all. Schema version 8 adds the five window-layout columns to
+ * `meta` (layoutMode, layoutLeftTabId, layoutRightTabId, layoutRatio,
+ * layoutFocused) that persist the active space's split-view layout, and schema
+ * version 9 adds the quickBrowseExternal column to `meta`.
  * The PRIMARY KEYs (no duplicate ids), the foreign
  * keys, and `PRAGMA foreign_keys=ON` are the well-formedness contract the core
  * codec relies on: every on-disk state is guaranteed loadable. `spaces.activeTabId`
@@ -84,7 +90,12 @@ CREATE TABLE meta (
   id INTEGER PRIMARY KEY CHECK (id = 0), schemaVersion INTEGER NOT NULL, activeSpaceId TEXT,
   enabled INTEGER NOT NULL DEFAULT 1,
   searchEngine TEXT NOT NULL DEFAULT 'duckduckgo',
-  quickBrowseExternal INTEGER NOT NULL DEFAULT 1
+  quickBrowseExternal INTEGER NOT NULL DEFAULT 1,
+  layoutMode TEXT NOT NULL DEFAULT 'single',
+  layoutLeftTabId TEXT,
+  layoutRightTabId TEXT,
+  layoutRatio REAL NOT NULL DEFAULT 0.5,
+  layoutFocused TEXT NOT NULL DEFAULT 'left'
 );
 CREATE TABLE blocking_allowlist (host TEXT PRIMARY KEY, createdAt INTEGER NOT NULL);
 CREATE TABLE history_entries (
@@ -137,8 +148,15 @@ const MIGRATION_STEPS: Record<number, string> = {
   6: SITE_ZOOM_DDL + "UPDATE meta SET schemaVersion = 6 WHERE id = 0;",
   7: DOWNLOADS_DDL + "UPDATE meta SET schemaVersion = 7 WHERE id = 0;",
   8:
-    "ALTER TABLE meta ADD COLUMN quickBrowseExternal INTEGER NOT NULL DEFAULT 1;" +
+    "ALTER TABLE meta ADD COLUMN layoutMode TEXT NOT NULL DEFAULT 'single';" +
+    "ALTER TABLE meta ADD COLUMN layoutLeftTabId TEXT;" +
+    "ALTER TABLE meta ADD COLUMN layoutRightTabId TEXT;" +
+    "ALTER TABLE meta ADD COLUMN layoutRatio REAL NOT NULL DEFAULT 0.5;" +
+    "ALTER TABLE meta ADD COLUMN layoutFocused TEXT NOT NULL DEFAULT 'left';" +
     "UPDATE meta SET schemaVersion = 8 WHERE id = 0;",
+  9:
+    "ALTER TABLE meta ADD COLUMN quickBrowseExternal INTEGER NOT NULL DEFAULT 1;" +
+    "UPDATE meta SET schemaVersion = 9 WHERE id = 0;",
 };
 
 /** The module-level database handle, `null` until {@link loadStore} opens it. */
@@ -315,6 +333,75 @@ export function writeQuickBrowseExternal(enabled: boolean): void {
   if (info.changes === 0) {
     throw new Error("writeQuickBrowseExternal: no meta row (id=0) to update");
   }
+}
+
+/**
+ * Reads the persisted active-space window {@link WindowLayout} from the meta row.
+ * Returns {@link SINGLE_LAYOUT} when `layoutMode` is not `"split"` or either
+ * pane's tab id is null; otherwise the split layout with a {@link clampRatio}-
+ * clamped `ratio` and the stored focused pane (defaulting to `"left"` for any
+ * value other than `"right"`). This does NOT validate the pane tab ids against
+ * the live tabs — main's {@link reconcileLayout} does that at restore. Managed
+ * ONLY here and by {@link writeWindowLayout}; like the other meta helpers it is
+ * kept out of the {@link writeState} full-state flush. Throws when the database
+ * is not open.
+ */
+export function readWindowLayout(): WindowLayout {
+  const database = requireDb();
+  // SQLite-row boundary: .get() is typed `unknown`, cast to the known shape.
+  const row = database
+    .prepare(
+      "SELECT layoutMode, layoutLeftTabId, layoutRightTabId, layoutRatio, layoutFocused FROM meta WHERE id=0",
+    )
+    .get() as
+    | {
+        layoutMode: string;
+        layoutLeftTabId: string | null;
+        layoutRightTabId: string | null;
+        layoutRatio: number;
+        layoutFocused: string;
+      }
+    | undefined;
+  if (
+    row === undefined ||
+    row.layoutMode !== "split" ||
+    row.layoutLeftTabId === null ||
+    row.layoutRightTabId === null
+  ) {
+    return SINGLE_LAYOUT;
+  }
+  return {
+    mode: "split",
+    left: row.layoutLeftTabId,
+    right: row.layoutRightTabId,
+    ratio: clampRatio(row.layoutRatio),
+    focused: row.layoutFocused === "right" ? "right" : "left",
+  };
+}
+
+/**
+ * Persists the active-space window {@link WindowLayout} to the meta row. A split
+ * writes both pane tab ids, the ratio, and the focused pane; a single clears the
+ * pane tab ids and resets the mode (leaving the stored ratio/focused columns
+ * as-is). Synchronous (better-sqlite3). Throws when the database is not open, so
+ * a caller's ordered layout-write contract sees the failure before it changes
+ * anything else.
+ */
+export function writeWindowLayout(layout: WindowLayout): void {
+  const database = requireDb();
+  if (layout.mode === "split") {
+    database
+      .prepare(
+        "UPDATE meta SET layoutMode='split', layoutLeftTabId=?, layoutRightTabId=?, layoutRatio=?, layoutFocused=? WHERE id=0",
+      )
+      .run(layout.left, layout.right, layout.ratio, layout.focused);
+    return;
+  }
+  database
+    .prepare(
+      "UPDATE meta SET layoutMode='single', layoutLeftTabId=NULL, layoutRightTabId=NULL WHERE id=0",
+    )
+    .run();
 }
 
 /**

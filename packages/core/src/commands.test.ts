@@ -48,12 +48,18 @@ const ALL_IDS: CommandId[] = [
   "quickBrowse.dismiss",
   "quickBrowse.openInTab",
   "browser.setDefault",
+  "view.split",
+  "view.splitChoose",
+  "view.unsplit",
+  "view.focusOtherPane",
+  "view.swapPanes",
 ];
 
 /**
  * Builds a command context, defaulting to no active tab, a single space, a
- * closed settings view, a closed quick-browse window, no finished download, and
- * a closed find session with no query.
+ * closed settings view, a closed quick-browse window, no finished download, a
+ * closed find session with no query, a single-pane layout, and a single open
+ * tab.
  */
 function context(partial: Partial<CommandContext> = {}): CommandContext {
   return {
@@ -63,6 +69,8 @@ function context(partial: Partial<CommandContext> = {}): CommandContext {
     quickBrowseOpen: partial.quickBrowseOpen ?? false,
     hasFinishedDownload: partial.hasFinishedDownload ?? false,
     find: partial.find ?? { open: false, hasQuery: false },
+    layoutMode: partial.layoutMode ?? "single",
+    openTabCount: partial.openTabCount ?? 1,
   };
 }
 
@@ -445,6 +453,45 @@ describe("quick-browse and set-default commands", () => {
     expect(
       isCommandEnabled("browser.setDefault", context({ quickBrowseOpen: false, activeTab: null })),
     ).toBe(true);
+  });
+});
+
+describe("split-view commands", () => {
+  const splitPair = ["view.split", "view.splitChoose"] as const;
+  const inSplit = ["view.unsplit", "view.focusOtherPane", "view.swapPanes"] as const;
+
+  test("each is registered exactly once in the view menu", () => {
+    for (const id of [...splitPair, ...inSplit]) {
+      const matches = COMMANDS.filter((c) => c.id === id);
+      expect(matches).toHaveLength(1);
+      expect(matches[0]?.menu).toBe("view");
+    }
+  });
+
+  test("the split/unsplit accelerators are a single backslash and its shifted form", () => {
+    expect(COMMANDS.find((c) => c.id === "view.split")?.accelerator).toBe("CmdOrCtrl+\\");
+    expect(COMMANDS.find((c) => c.id === "view.unsplit")?.accelerator).toBe("CmdOrCtrl+Shift+\\");
+    expect(COMMANDS.find((c) => c.id === "view.splitChoose")?.accelerator).toBeNull();
+  });
+
+  test("view.split and view.splitChoose need a single layout with at least two open tabs", () => {
+    for (const id of splitPair) {
+      // Enabled only when single AND openTabCount >= 2.
+      expect(isCommandEnabled(id, context({ layoutMode: "single", openTabCount: 2 }))).toBe(true);
+      // The 1-vs-2 boundary: a single open tab has nothing to split against.
+      expect(isCommandEnabled(id, context({ layoutMode: "single", openTabCount: 1 }))).toBe(false);
+      // Already split: cannot split again.
+      expect(isCommandEnabled(id, context({ layoutMode: "split", openTabCount: 2 }))).toBe(false);
+      expect(isCommandEnabled(id, context({ layoutMode: "split", openTabCount: 5 }))).toBe(false);
+    }
+  });
+
+  test("view.unsplit, view.focusOtherPane, view.swapPanes need a split layout", () => {
+    for (const id of inSplit) {
+      expect(isCommandEnabled(id, context({ layoutMode: "split", openTabCount: 2 }))).toBe(true);
+      expect(isCommandEnabled(id, context({ layoutMode: "single", openTabCount: 2 }))).toBe(false);
+      expect(isCommandEnabled(id, context({ layoutMode: "single", openTabCount: 1 }))).toBe(false);
+    }
   });
 });
 
