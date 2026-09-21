@@ -7,6 +7,8 @@ import { join } from "node:path";
 import { createServer } from "node:http";
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
+// PRD 9.1 — shared view-URL poll helper (VIEW_POLL_TIMEOUT_MS-bounded).
+import { waitForViewUrl } from "./helpers/view";
 
 // Absolute path to the built Electron main entry, resolved from this test file
 // (e2e is ESM, so no __dirname). Layout mirrors blocking.spec.ts / history.spec.ts:
@@ -767,20 +769,8 @@ async function freshHistory(app: ElectronApplication, sidebar: Page): Promise<st
   await navigate(sidebar, id, "about:blank");
   // Wait until the tab's WebContentsView has COMMITTED about:blank before clearing
   // (the app renderers are file://, so only the seeded tab is ever about:blank).
-  await expect
-    .poll(() => {
-      for (const w of app.windows()) {
-        try {
-          if (w.url() === "about:blank") {
-            return true;
-          }
-        } catch {
-          // A navigating WebContentsView can momentarily lose its context.
-        }
-      }
-      return false;
-    })
-    .toBe(true);
+  // waitForViewUrl polls the main process, bounded by VIEW_POLL_TIMEOUT_MS.
+  await waitForViewUrl(app, "about:blank");
   await sidebar.evaluate(() => {
     const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
     return zeo.history.clear();

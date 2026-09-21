@@ -23,12 +23,16 @@ import {
   writeBlockingEnabled,
   readSearchEngine,
   writeSearchEngine,
+  readQuickBrowseExternal,
+  writeQuickBrowseExternal,
   readAllowlist,
   insertAllowlistHost,
   deleteAllowlistHost,
   readSiteZoom,
   upsertSiteZoom,
   deleteSiteZoom,
+  readWindowLayout,
+  writeWindowLayout,
   closeDb,
   recordVisit,
   updateVisitTitle,
@@ -38,7 +42,16 @@ import {
   clearHistory,
   historyStats,
   pruneHistory,
+  insertDownload,
+  updateDownload,
+  deleteDownload,
+  clearFinishedDownloadRows,
+  listDownloads,
+  markInterruptedDownloadsOnLaunch,
+  scheduleSave,
+  flush,
 } from "./db.js";
+import type { Download } from "@zeo/core";
 
 /** The pre-migration (schema v1) DDL: the four tables WITHOUT `meta.enabled`. */
 const V1_DDL = `
@@ -116,10 +129,32 @@ const V5_DDL =
   V4_DDL +
   "ALTER TABLE meta ADD COLUMN searchEngine TEXT NOT NULL DEFAULT 'duckduckgo';";
 
-/** The current (schema v6) DDL: v5 plus the site_zoom table. */
+/** The schema v6 DDL: v5 plus the site_zoom table. A historical fixture
+ *  predating BOTH the downloads table and the meta layout columns. */
 const V6_DDL =
   V5_DDL +
   "CREATE TABLE site_zoom (host TEXT PRIMARY KEY, factor REAL NOT NULL, updatedAt INTEGER NOT NULL);";
+
+/** The schema v7 DDL: v6 plus the downloads table. A historical fixture
+ *  predating the meta layout columns and the meta.quickBrowseExternal column. */
+const V7_DDL =
+  V6_DDL +
+  "CREATE TABLE downloads (id TEXT PRIMARY KEY, url TEXT NOT NULL, filename TEXT NOT NULL, path TEXT NOT NULL, totalBytes INTEGER NOT NULL, receivedBytes INTEGER NOT NULL, state TEXT NOT NULL, startedAt INTEGER NOT NULL, completedAt INTEGER, spaceId TEXT);";
+
+/** The schema v8 DDL: v7 plus the five meta layout columns. A historical fixture
+ *  predating the meta.quickBrowseExternal column. */
+const V8_DDL =
+  V7_DDL +
+  "ALTER TABLE meta ADD COLUMN layoutMode TEXT NOT NULL DEFAULT 'single';" +
+  "ALTER TABLE meta ADD COLUMN layoutLeftTabId TEXT;" +
+  "ALTER TABLE meta ADD COLUMN layoutRightTabId TEXT;" +
+  "ALTER TABLE meta ADD COLUMN layoutRatio REAL NOT NULL DEFAULT 0.5;" +
+  "ALTER TABLE meta ADD COLUMN layoutFocused TEXT NOT NULL DEFAULT 'left';";
+
+/** The current (schema v9) DDL: v8 plus the meta.quickBrowseExternal column. */
+const V9_DDL =
+  V8_DDL +
+  "ALTER TABLE meta ADD COLUMN quickBrowseExternal INTEGER NOT NULL DEFAULT 1;";
 
 /** True when the `history_visits` table exists in the database. */
 function hasHistoryTable(db: Database.Database): boolean {
@@ -138,6 +173,30 @@ function hasSiteZoomTable(db: Database.Database): boolean {
     db
       .prepare(
         "SELECT name FROM sqlite_master WHERE type='table' AND name='site_zoom'",
+      )
+      .get() !== undefined
+  );
+}
+
+/** True when the `meta` table has all five window-layout columns. */
+function hasLayoutColumns(db: Database.Database): boolean {
+  const cols = db.prepare("PRAGMA table_info(meta)").all() as { name: string }[];
+  const names = new Set(cols.map((c) => c.name));
+  return (
+    names.has("layoutMode") &&
+    names.has("layoutLeftTabId") &&
+    names.has("layoutRightTabId") &&
+    names.has("layoutRatio") &&
+    names.has("layoutFocused")
+  );
+}
+
+/** True when the `downloads` table exists in the database. */
+function hasDownloadsTable(db: Database.Database): boolean {
+  return (
+    db
+      .prepare(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='downloads'",
       )
       .get() !== undefined
   );
@@ -170,6 +229,12 @@ function hasSearchEngineColumn(db: Database.Database): boolean {
   return cols.some((c) => c.name === "searchEngine");
 }
 
+/** True when the `meta` table has a `quickBrowseExternal` column. */
+function hasQuickBrowseExternalColumn(db: Database.Database): boolean {
+  const cols = db.prepare("PRAGMA table_info(meta)").all() as { name: string }[];
+  return cols.some((c) => c.name === "quickBrowseExternal");
+}
+
 /** True when the `blocking_allowlist` table exists. */
 function hasAllowlistTable(db: Database.Database): boolean {
   return (
@@ -196,7 +261,7 @@ afterEach(() => {
 });
 
 describe("migrate", () => {
-  test("upgrades a v1 database to the current version, adding enabled, the allowlist, history, the search engine, and site_zoom and preserving rows", () => {
+  test("upgrades a v1 database to the current version, adding enabled, the allowlist, history, the search engine, site_zoom, the downloads table, and the quick-browse toggle and preserving rows", () => {
     const path = join(tempDir, "v1.db");
     const db = new Database(path);
     db.exec(V1_DDL);
@@ -209,20 +274,22 @@ describe("migrate", () => {
     expect(hasHistoryTable(db)).toBe(false);
     expect(hasSiteZoomTable(db)).toBe(false);
     expect(hasSearchEngineColumn(db)).toBe(false);
+    expect(hasDownloadsTable(db)).toBe(false);
 
     migrate(db);
 
     const meta = db
       .prepare(
-        "SELECT schemaVersion, activeSpaceId, enabled, searchEngine FROM meta WHERE id=0",
+        "SELECT schemaVersion, activeSpaceId, enabled, searchEngine, quickBrowseExternal FROM meta WHERE id=0",
       )
       .get() as {
       schemaVersion: number;
       activeSpaceId: string;
       enabled: number;
       searchEngine: string;
+      quickBrowseExternal: number;
     };
-    expect(meta.schemaVersion).toBe(6);
+    expect(meta.schemaVersion).toBe(9);
     expect(hasEnabledColumn(db)).toBe(true);
     expect(hasAllowlistTable(db)).toBe(true);
     expect(meta.enabled).toBe(1);
@@ -230,6 +297,10 @@ describe("migrate", () => {
     expect(hasSearchEngineColumn(db)).toBe(true);
     expect(meta.searchEngine).toBe("duckduckgo");
     expect(hasSiteZoomTable(db)).toBe(true);
+    expect(hasLayoutColumns(db)).toBe(true);
+    expect(hasDownloadsTable(db)).toBe(true);
+    expect(hasQuickBrowseExternalColumn(db)).toBe(true);
+    expect(meta.quickBrowseExternal).toBe(1);
     // Pre-existing rows preserved.
     expect(meta.activeSpaceId).toBe("space-1");
     expect(db.prepare("SELECT id FROM profiles").get()).toEqual({ id: "p1" });
@@ -238,7 +309,7 @@ describe("migrate", () => {
     db.close();
   });
 
-  test("upgrades a v2 database to the current version, adding the allowlist, history, the search engine, and site_zoom and preserving rows", () => {
+  test("upgrades a v2 database to the current version, adding the allowlist, history, the search engine, site_zoom, the downloads table, and the quick-browse toggle and preserving rows", () => {
     const path = join(tempDir, "v2.db");
     const db = new Database(path);
     db.exec(V2_DDL);
@@ -251,17 +322,29 @@ describe("migrate", () => {
     expect(hasAllowlistTable(db)).toBe(false);
     expect(hasHistoryTable(db)).toBe(false);
     expect(hasSiteZoomTable(db)).toBe(false);
+    expect(hasDownloadsTable(db)).toBe(false);
 
     migrate(db);
 
     const meta = db
-      .prepare("SELECT schemaVersion, activeSpaceId, enabled FROM meta WHERE id=0")
-      .get() as { schemaVersion: number; activeSpaceId: string; enabled: number };
-    expect(meta.schemaVersion).toBe(6);
+      .prepare(
+        "SELECT schemaVersion, activeSpaceId, enabled, quickBrowseExternal FROM meta WHERE id=0",
+      )
+      .get() as {
+      schemaVersion: number;
+      activeSpaceId: string;
+      enabled: number;
+      quickBrowseExternal: number;
+    };
+    expect(meta.schemaVersion).toBe(9);
     expect(hasAllowlistTable(db)).toBe(true);
     expect(hasHistoryTable(db)).toBe(true);
     expect(hasSearchEngineColumn(db)).toBe(true);
     expect(hasSiteZoomTable(db)).toBe(true);
+    expect(hasLayoutColumns(db)).toBe(true);
+    expect(hasDownloadsTable(db)).toBe(true);
+    expect(hasQuickBrowseExternalColumn(db)).toBe(true);
+    expect(meta.quickBrowseExternal).toBe(1);
     expect(
       db
         .prepare(
@@ -278,7 +361,7 @@ describe("migrate", () => {
     db.close();
   });
 
-  test("upgrades a v3 database to the current version, adding the history tables, the search engine, and site_zoom and preserving the allowlist and rows", () => {
+  test("upgrades a v3 database to the current version, adding the history tables, the search engine, site_zoom, the downloads table, and the quick-browse toggle and preserving the allowlist and rows", () => {
     const path = join(tempDir, "v3-to-current.db");
     const db = new Database(path);
     db.exec(V3_DDL);
@@ -293,16 +376,28 @@ describe("migrate", () => {
 
     expect(hasHistoryTable(db)).toBe(false);
     expect(hasSiteZoomTable(db)).toBe(false);
+    expect(hasDownloadsTable(db)).toBe(false);
 
     migrate(db);
 
     const meta = db
-      .prepare("SELECT schemaVersion, activeSpaceId, enabled FROM meta WHERE id=0")
-      .get() as { schemaVersion: number; activeSpaceId: string; enabled: number };
-    expect(meta.schemaVersion).toBe(6);
+      .prepare(
+        "SELECT schemaVersion, activeSpaceId, enabled, quickBrowseExternal FROM meta WHERE id=0",
+      )
+      .get() as {
+      schemaVersion: number;
+      activeSpaceId: string;
+      enabled: number;
+      quickBrowseExternal: number;
+    };
+    expect(meta.schemaVersion).toBe(9);
     expect(hasHistoryTable(db)).toBe(true);
     expect(hasSearchEngineColumn(db)).toBe(true);
     expect(hasSiteZoomTable(db)).toBe(true);
+    expect(hasLayoutColumns(db)).toBe(true);
+    expect(hasDownloadsTable(db)).toBe(true);
+    expect(hasQuickBrowseExternalColumn(db)).toBe(true);
+    expect(meta.quickBrowseExternal).toBe(1);
     // Pre-existing allowlist, rows, and the enabled flag preserved.
     expect(hasAllowlistTable(db)).toBe(true);
     expect(db.prepare("SELECT host FROM blocking_allowlist").get()).toEqual({
@@ -314,7 +409,7 @@ describe("migrate", () => {
     db.close();
   });
 
-  test("upgrades a v4 database to the current version, adding the searchEngine column and site_zoom table and preserving rows", () => {
+  test("upgrades a v4 database to the current version, adding the searchEngine column, site_zoom table, the downloads table, and the quick-browse toggle and preserving rows", () => {
     const path = join(tempDir, "v4-to-current.db");
     const db = new Database(path);
     db.exec(V4_DDL);
@@ -326,24 +421,31 @@ describe("migrate", () => {
 
     expect(hasSearchEngineColumn(db)).toBe(false);
     expect(hasSiteZoomTable(db)).toBe(false);
+    expect(hasDownloadsTable(db)).toBe(false);
 
     migrate(db);
 
     const meta = db
       .prepare(
-        "SELECT schemaVersion, activeSpaceId, enabled, searchEngine FROM meta WHERE id=0",
+        "SELECT schemaVersion, activeSpaceId, enabled, searchEngine, quickBrowseExternal FROM meta WHERE id=0",
       )
       .get() as {
       schemaVersion: number;
       activeSpaceId: string;
       enabled: number;
       searchEngine: string;
+      quickBrowseExternal: number;
     };
-    expect(meta.schemaVersion).toBe(6);
+    expect(meta.schemaVersion).toBe(9);
     expect(hasSearchEngineColumn(db)).toBe(true);
     // The new column defaults to duckduckgo on the existing row.
     expect(meta.searchEngine).toBe("duckduckgo");
     expect(hasSiteZoomTable(db)).toBe(true);
+    expect(hasLayoutColumns(db)).toBe(true);
+    expect(hasDownloadsTable(db)).toBe(true);
+    expect(hasQuickBrowseExternalColumn(db)).toBe(true);
+    // The quick-browse toggle defaults to 1 (ON) on the existing row.
+    expect(meta.quickBrowseExternal).toBe(1);
     // Pre-existing rows and the enabled flag preserved.
     expect(meta.activeSpaceId).toBe("space-1");
     expect(meta.enabled).toBe(0);
@@ -353,8 +455,8 @@ describe("migrate", () => {
     db.close();
   });
 
-  test("upgrades a v5 database to v6, adding an empty site_zoom table and preserving the search engine and other state", () => {
-    const path = join(tempDir, "v5-to-v6.db");
+  test("upgrades a v5 database to the current version, adding an empty site_zoom table, the downloads table, the layout columns, and the quick-browse toggle and preserving the search engine and other state", () => {
+    const path = join(tempDir, "v5-to-current.db");
     const db = new Database(path);
     db.exec(V5_DDL);
     // Seed enabled=0 and a non-default searchEngine so a spurious re-create/migrate
@@ -364,27 +466,39 @@ describe("migrate", () => {
     ).run();
 
     expect(hasSiteZoomTable(db)).toBe(false);
+    expect(hasDownloadsTable(db)).toBe(false);
     expect(hasSearchEngineColumn(db)).toBe(true);
+    expect(hasQuickBrowseExternalColumn(db)).toBe(false);
 
     migrate(db);
 
     const meta = db
       .prepare(
-        "SELECT schemaVersion, activeSpaceId, enabled, searchEngine FROM meta WHERE id=0",
+        "SELECT schemaVersion, activeSpaceId, enabled, searchEngine, quickBrowseExternal FROM meta WHERE id=0",
       )
       .get() as {
       schemaVersion: number;
       activeSpaceId: string;
       enabled: number;
       searchEngine: string;
+      quickBrowseExternal: number;
     };
-    expect(meta.schemaVersion).toBe(6);
+    expect(meta.schemaVersion).toBe(9);
     expect(hasSiteZoomTable(db)).toBe(true);
-    // The freshly-created table starts with no rows.
-    const count = db
+    expect(hasLayoutColumns(db)).toBe(true);
+    expect(hasDownloadsTable(db)).toBe(true);
+    // The freshly-created tables start with no rows.
+    const zoomCount = db
       .prepare("SELECT COUNT(*) AS n FROM site_zoom")
       .get() as { n: number };
-    expect(count.n).toBe(0);
+    expect(zoomCount.n).toBe(0);
+    const downloadCount = db
+      .prepare("SELECT COUNT(*) AS n FROM downloads")
+      .get() as { n: number };
+    expect(downloadCount.n).toBe(0);
+    // The quick-browse toggle column is added and defaults to 1 (ON).
+    expect(hasQuickBrowseExternalColumn(db)).toBe(true);
+    expect(meta.quickBrowseExternal).toBe(1);
     // The search engine is preserved (not reset) and other seeded state survives.
     expect(meta.searchEngine).toBe("google");
     expect(meta.activeSpaceId).toBe("space-9");
@@ -392,16 +506,219 @@ describe("migrate", () => {
     db.close();
   });
 
-  test("creates a fresh v6 schema with enabled=1, the allowlist, history, and site_zoom tables, and the search engine on an empty database", () => {
+  test("upgrades a v6 database to the current version (v9), adding the downloads table, the layout columns, and the quick-browse toggle and preserving the site_zoom row and other state", () => {
+    const path = join(tempDir, "v6-to-current.db");
+    const db = new Database(path);
+    db.exec(V6_DDL);
+    // Seed enabled=0, a non-default searchEngine, seeded tab rows, and a site_zoom
+    // row so a spurious re-create (which would wipe them) is detectable.
+    db.prepare(
+      "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled,searchEngine) VALUES (0, 6, 'space-1', 0, 'google')",
+    ).run();
+    seedRows(db, "space-1");
+    db.prepare(
+      "INSERT INTO site_zoom(host,factor,updatedAt) VALUES ('example.com', 1.5, 42)",
+    ).run();
+
+    expect(hasDownloadsTable(db)).toBe(false);
+    expect(hasQuickBrowseExternalColumn(db)).toBe(false);
+    expect(hasLayoutColumns(db)).toBe(false);
+
+    migrate(db);
+
+    const meta = db
+      .prepare(
+        "SELECT schemaVersion, activeSpaceId, enabled, searchEngine, quickBrowseExternal, layoutMode, layoutLeftTabId, layoutRightTabId, layoutRatio, layoutFocused FROM meta WHERE id=0",
+      )
+      .get() as {
+      schemaVersion: number;
+      activeSpaceId: string;
+      enabled: number;
+      searchEngine: string;
+      quickBrowseExternal: number;
+      layoutMode: string;
+      layoutLeftTabId: string | null;
+      layoutRightTabId: string | null;
+      layoutRatio: number;
+      layoutFocused: string;
+    };
+    expect(meta.schemaVersion).toBe(9);
+    // The downloads table is present and empty.
+    expect(hasDownloadsTable(db)).toBe(true);
+    const downloadCount = db
+      .prepare("SELECT COUNT(*) AS n FROM downloads")
+      .get() as { n: number };
+    expect(downloadCount.n).toBe(0);
+    // The quick-browse toggle column is added and defaults to 1 (ON).
+    expect(hasQuickBrowseExternalColumn(db)).toBe(true);
+    expect(meta.quickBrowseExternal).toBe(1);
+    // The five layout columns are present with their defaults on the existing row.
+    expect(hasLayoutColumns(db)).toBe(true);
+    expect(meta.layoutMode).toBe("single");
+    expect(meta.layoutLeftTabId).toBe(null);
+    expect(meta.layoutRightTabId).toBe(null);
+    expect(meta.layoutRatio).toBe(0.5);
+    expect(meta.layoutFocused).toBe("left");
+    // Pre-existing state preserved (no re-create wiped it).
+    expect(meta.activeSpaceId).toBe("space-1");
+    expect(meta.enabled).toBe(0);
+    expect(meta.searchEngine).toBe("google");
+    expect(db.prepare("SELECT id FROM tabs").get()).toEqual({ id: "t1" });
+    // Pre-existing site_zoom row survives the upgrade.
+    expect(
+      db.prepare("SELECT host, factor, updatedAt FROM site_zoom").get(),
+    ).toEqual({ host: "example.com", factor: 1.5, updatedAt: 42 });
+    db.close();
+  });
+
+  test("upgrades a v7 database to the current version (v9), adding the layout columns and the quick-browse toggle and preserving the site_zoom and downloads rows and other state", () => {
+    const path = join(tempDir, "v7-to-current.db");
+    const db = new Database(path);
+    db.exec(V7_DDL);
+    // Seed enabled=0 and a non-default searchEngine so a spurious re-create/migrate
+    // (which would reset them to their defaults) is detectable, plus a site_zoom row
+    // and a downloads row that must survive the column-add untouched.
+    db.prepare(
+      "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled,searchEngine) VALUES (0, 7, 'space-9', 0, 'google')",
+    ).run();
+    db.prepare(
+      "INSERT INTO site_zoom(host,factor,updatedAt) VALUES ('example.com', 1.5, 42)",
+    ).run();
+    db.prepare(
+      "INSERT INTO downloads(id,url,filename,path,totalBytes,receivedBytes,state,startedAt,completedAt,spaceId) " +
+        "VALUES ('d1','https://example.com/f.bin','f.bin','/dl/f.bin',100,100,'completed',1000,2000,'space-9')",
+    ).run();
+
+    expect(hasQuickBrowseExternalColumn(db)).toBe(false);
+    expect(hasLayoutColumns(db)).toBe(false);
+
+    migrate(db);
+
+    const meta = db
+      .prepare(
+        "SELECT schemaVersion, activeSpaceId, enabled, searchEngine, quickBrowseExternal, layoutMode, layoutLeftTabId, layoutRightTabId, layoutRatio, layoutFocused FROM meta WHERE id=0",
+      )
+      .get() as {
+      schemaVersion: number;
+      activeSpaceId: string;
+      enabled: number;
+      searchEngine: string;
+      quickBrowseExternal: number;
+      layoutMode: string;
+      layoutLeftTabId: string | null;
+      layoutRightTabId: string | null;
+      layoutRatio: number;
+      layoutFocused: string;
+    };
+    expect(meta.schemaVersion).toBe(9);
+    // The quick-browse toggle column is added and defaults to 1 (ON).
+    expect(hasQuickBrowseExternalColumn(db)).toBe(true);
+    expect(meta.quickBrowseExternal).toBe(1);
+    // The five layout columns are present with their defaults on the existing row.
+    expect(hasLayoutColumns(db)).toBe(true);
+    expect(meta.layoutMode).toBe("single");
+    expect(meta.layoutLeftTabId).toBe(null);
+    expect(meta.layoutRightTabId).toBe(null);
+    expect(meta.layoutRatio).toBe(0.5);
+    expect(meta.layoutFocused).toBe("left");
+    // Pre-existing state and the downloads row are preserved (no re-create wiped them).
+    expect(meta.activeSpaceId).toBe("space-9");
+    expect(meta.enabled).toBe(0);
+    expect(meta.searchEngine).toBe("google");
+    // The seeded downloads row survives the column-add unchanged.
+    expect(
+      db
+        .prepare("SELECT id, state, receivedBytes, completedAt FROM downloads")
+        .get(),
+    ).toEqual({
+      id: "d1",
+      state: "completed",
+      receivedBytes: 100,
+      completedAt: 2000,
+    });
+    // Pre-existing site_zoom row survives the upgrade.
+    expect(
+      db.prepare("SELECT host, factor, updatedAt FROM site_zoom").get(),
+    ).toEqual({ host: "example.com", factor: 1.5, updatedAt: 42 });
+    db.close();
+  });
+
+  test("upgrades a v8 database to the current version (v9), adding only the quick-browse toggle and preserving the non-default layout values and other state", () => {
+    const path = join(tempDir, "v8-to-current.db");
+    const db = new Database(path);
+    db.exec(V8_DDL);
+    // Seed schemaVersion=8 with NON-default layout values plus enabled=0 and a
+    // non-default searchEngine so a spurious re-run of step 8 (which would reset
+    // the layout columns to their DDL defaults) or a re-create is detectable. This
+    // is the real 0.0.21 -> 0.0.22 upgrade path: a v8 DB already has the layout
+    // columns, so migrate must run ONLY step 9 to add quickBrowseExternal.
+    db.prepare(
+      "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled,searchEngine,layoutMode,layoutLeftTabId,layoutRightTabId,layoutRatio,layoutFocused) " +
+        "VALUES (0, 8, 'space-9', 0, 'google', 'split', 'tL', 'tR', 0.7, 'right')",
+    ).run();
+
+    expect(hasLayoutColumns(db)).toBe(true);
+    expect(hasQuickBrowseExternalColumn(db)).toBe(false);
+
+    migrate(db);
+
+    const meta = db
+      .prepare(
+        "SELECT schemaVersion, activeSpaceId, enabled, searchEngine, quickBrowseExternal, layoutMode, layoutLeftTabId, layoutRightTabId, layoutRatio, layoutFocused FROM meta WHERE id=0",
+      )
+      .get() as {
+      schemaVersion: number;
+      activeSpaceId: string;
+      enabled: number;
+      searchEngine: string;
+      quickBrowseExternal: number;
+      layoutMode: string;
+      layoutLeftTabId: string | null;
+      layoutRightTabId: string | null;
+      layoutRatio: number;
+      layoutFocused: string;
+    };
+    expect(meta.schemaVersion).toBe(9);
+    // Step 9 adds the quick-browse toggle column, defaulting to 1 (ON).
+    expect(hasQuickBrowseExternalColumn(db)).toBe(true);
+    expect(meta.quickBrowseExternal).toBe(1);
+    // Step 8 is NOT re-run: the existing layout columns keep their non-default
+    // seeded values.
+    expect(hasLayoutColumns(db)).toBe(true);
+    expect(meta.layoutMode).toBe("split");
+    expect(meta.layoutLeftTabId).toBe("tL");
+    expect(meta.layoutRightTabId).toBe("tR");
+    expect(meta.layoutRatio).toBe(0.7);
+    expect(meta.layoutFocused).toBe("right");
+    // Pre-existing state preserved (no re-create wiped it).
+    expect(meta.activeSpaceId).toBe("space-9");
+    expect(meta.enabled).toBe(0);
+    expect(meta.searchEngine).toBe("google");
+    db.close();
+  });
+
+  test("creates a fresh v9 schema with enabled=1, the allowlist, history, site_zoom, and downloads tables, the search engine, the layout columns, and the quick-browse toggle on an empty database", () => {
     const path = join(tempDir, "fresh.db");
     const db = new Database(path);
 
     migrate(db);
 
     const meta = db
-      .prepare("SELECT schemaVersion, enabled, searchEngine FROM meta WHERE id=0")
-      .get() as { schemaVersion: number; enabled: number; searchEngine: string };
-    expect(meta.schemaVersion).toBe(6);
+      .prepare(
+        "SELECT schemaVersion, enabled, searchEngine, quickBrowseExternal, layoutMode, layoutLeftTabId, layoutRightTabId, layoutRatio, layoutFocused FROM meta WHERE id=0",
+      )
+      .get() as {
+      schemaVersion: number;
+      enabled: number;
+      searchEngine: string;
+      quickBrowseExternal: number;
+      layoutMode: string;
+      layoutLeftTabId: string | null;
+      layoutRightTabId: string | null;
+      layoutRatio: number;
+      layoutFocused: string;
+    };
+    expect(meta.schemaVersion).toBe(9);
     expect(hasEnabledColumn(db)).toBe(true);
     expect(hasAllowlistTable(db)).toBe(true);
     expect(meta.enabled).toBe(1);
@@ -409,55 +726,92 @@ describe("migrate", () => {
     expect(hasSearchEngineColumn(db)).toBe(true);
     expect(meta.searchEngine).toBe("duckduckgo");
     expect(hasSiteZoomTable(db)).toBe(true);
+    // The layout columns exist and carry their DDL defaults on the seeded row.
+    expect(hasLayoutColumns(db)).toBe(true);
+    expect(meta.layoutMode).toBe("single");
+    expect(meta.layoutLeftTabId).toBe(null);
+    expect(meta.layoutRightTabId).toBe(null);
+    expect(meta.layoutRatio).toBe(0.5);
+    expect(meta.layoutFocused).toBe("left");
+    // The downloads table exists.
+    expect(hasDownloadsTable(db)).toBe(true);
+    expect(hasQuickBrowseExternalColumn(db)).toBe(true);
+    expect(meta.quickBrowseExternal).toBe(1);
     db.close();
   });
 
-  test("is a no-op on a database already at the current version (v6)", () => {
-    const path = join(tempDir, "v6.db");
+  test("is a no-op on a database already at the current version (v9) with non-default layout values and quickBrowseExternal, leaving the site_zoom and downloads rows untouched", () => {
+    const path = join(tempDir, "v9.db");
     const db = new Database(path);
-    db.exec(V6_DDL);
-    // Seed enabled=0 and a non-default searchEngine so a spurious re-create/migrate
-    // (which would reset them to their defaults) is detectable, and a site_zoom row
-    // so a re-create would be observable.
+    db.exec(V9_DDL);
+    // Seed enabled=0, a non-default searchEngine, NON-default layout values, and
+    // quickBrowseExternal=0 so a spurious re-create/migrate (which would reset them
+    // to their defaults) is detectable, plus site_zoom and downloads rows so a
+    // re-create would be observable.
     db.prepare(
-      "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled,searchEngine) VALUES (0, 6, 'space-9', 0, 'google')",
+      "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled,searchEngine,layoutMode,layoutLeftTabId,layoutRightTabId,layoutRatio,layoutFocused,quickBrowseExternal) " +
+        "VALUES (0, 9, 'space-9', 0, 'google', 'split', 'tL', 'tR', 0.35, 'right', 0)",
     ).run();
     db.prepare(
       "INSERT INTO site_zoom(host,factor,updatedAt) VALUES ('example.com', 1.5, 42)",
+    ).run();
+    db.prepare(
+      "INSERT INTO downloads(id,url,filename,path,totalBytes,receivedBytes,state,startedAt,completedAt,spaceId) " +
+        "VALUES ('d1','https://example.com/f.bin','f.bin','/dl/f.bin',100,100,'completed',1000,2000,'space-9')",
     ).run();
 
     migrate(db);
 
     const meta = db
       .prepare(
-        "SELECT schemaVersion, activeSpaceId, enabled, searchEngine FROM meta WHERE id=0",
+        "SELECT schemaVersion, activeSpaceId, enabled, searchEngine, quickBrowseExternal, layoutMode, layoutLeftTabId, layoutRightTabId, layoutRatio, layoutFocused FROM meta WHERE id=0",
       )
       .get() as {
       schemaVersion: number;
       activeSpaceId: string;
       enabled: number;
       searchEngine: string;
+      quickBrowseExternal: number;
+      layoutMode: string;
+      layoutLeftTabId: string | null;
+      layoutRightTabId: string | null;
+      layoutRatio: number;
+      layoutFocused: string;
     };
-    expect(meta.schemaVersion).toBe(6);
+    expect(meta.schemaVersion).toBe(9);
     expect(meta.activeSpaceId).toBe("space-9");
     expect(meta.enabled).toBe(0);
     expect(meta.searchEngine).toBe("google");
+    // The seeded quick-browse toggle is left untouched (no re-create reset it to 1).
+    expect(meta.quickBrowseExternal).toBe(0);
+    // The non-default layout values are left untouched (no re-run of step 8).
+    expect(meta.layoutMode).toBe("split");
+    expect(meta.layoutLeftTabId).toBe("tL");
+    expect(meta.layoutRightTabId).toBe("tR");
+    expect(meta.layoutRatio).toBe(0.35);
+    expect(meta.layoutFocused).toBe("right");
     // The existing site_zoom row is left untouched (no re-create wiped it).
     expect(
       db.prepare("SELECT host, factor, updatedAt FROM site_zoom").get(),
     ).toEqual({ host: "example.com", factor: 1.5, updatedAt: 42 });
+    // The seeded downloads row is left untouched.
+    expect(
+      db
+        .prepare("SELECT id, state, receivedBytes, completedAt FROM downloads")
+        .get(),
+    ).toEqual({ id: "d1", state: "completed", receivedBytes: 100, completedAt: 2000 });
     db.close();
   });
 });
 
 describe("readAllowlist / insertAllowlistHost / deleteAllowlistHost", () => {
   test("round-trip: insert (ordered), INSERT OR IGNORE on a dup is a no-op, delete removes one", () => {
-    // Hand-build a valid current (v6) database at the path loadStore will open.
+    // Hand-build a valid current (v9) database at the path loadStore will open.
     const path = join(tempDir, "zeo.db");
     const seed = new Database(path);
-    seed.exec(V6_DDL);
+    seed.exec(V9_DDL);
     seed.prepare(
-      "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled) VALUES (0, 6, 'space-x', 1)",
+      "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled) VALUES (0, 9, 'space-x', 1)",
     ).run();
     seedRows(seed, "space-x");
     seed.close();
@@ -489,7 +843,7 @@ describe("readAllowlist / insertAllowlistHost / deleteAllowlistHost", () => {
 });
 
 describe("readSiteZoom / upsertSiteZoom / deleteSiteZoom", () => {
-  // Each test opens the module-level handle on a fresh, migrated (v6) database
+  // Each test opens the module-level handle on a fresh, migrated (v9) database
   // via loadStore(), so the helpers act on the same handle production uses.
   beforeEach(() => {
     loadStore();
@@ -535,14 +889,109 @@ describe("readSiteZoom / upsertSiteZoom / deleteSiteZoom", () => {
   });
 });
 
+describe("readWindowLayout / writeWindowLayout", () => {
+  // Each test opens the module-level handle on a fresh, migrated (v9) database
+  // via loadStore(), so the helpers act on the same handle production uses.
+  beforeEach(() => {
+    loadStore();
+  });
+
+  test("a fresh database reads back the single layout", () => {
+    expect(readWindowLayout()).toEqual({ mode: "single" });
+  });
+
+  test("round-trips a split layout (ratio preserved when in range)", () => {
+    writeWindowLayout({
+      mode: "split",
+      left: "tL",
+      right: "tR",
+      ratio: 0.35,
+      focused: "right",
+    });
+    expect(readWindowLayout()).toEqual({
+      mode: "split",
+      left: "tL",
+      right: "tR",
+      ratio: 0.35,
+      focused: "right",
+    });
+  });
+
+  test("clamps an out-of-range stored ratio on read", () => {
+    writeWindowLayout({
+      mode: "split",
+      left: "tL",
+      right: "tR",
+      ratio: 0.35,
+      focused: "left",
+    });
+    // Force an out-of-range ratio via a separate connection; readWindowLayout
+    // returns it clamped to the [0.2, 0.8] band.
+    const raw = new Database(join(tempDir, "zeo.db"));
+    raw.prepare("UPDATE meta SET layoutRatio=? WHERE id=0").run(0.05);
+    raw.close();
+    expect(readWindowLayout()).toEqual({
+      mode: "split",
+      left: "tL",
+      right: "tR",
+      ratio: 0.2,
+      focused: "left",
+    });
+  });
+
+  test("writing single after a split reads back single", () => {
+    writeWindowLayout({
+      mode: "split",
+      left: "tL",
+      right: "tR",
+      ratio: 0.5,
+      focused: "left",
+    });
+    writeWindowLayout({ mode: "single" });
+    expect(readWindowLayout()).toEqual({ mode: "single" });
+  });
+
+  test("a stored split with a NULL pane tab id reads back single", () => {
+    writeWindowLayout({
+      mode: "split",
+      left: "tL",
+      right: "tR",
+      ratio: 0.5,
+      focused: "left",
+    });
+    // A split row whose right pane id was cleared (as a legacy/hand-modified row
+    // could carry) reads back as single rather than a broken split.
+    const raw = new Database(join(tempDir, "zeo.db"));
+    raw.prepare("UPDATE meta SET layoutRightTabId=NULL WHERE id=0").run();
+    raw.close();
+    expect(readWindowLayout()).toEqual({ mode: "single" });
+  });
+
+  test("a stored split with a NULL left pane tab id reads back single", () => {
+    writeWindowLayout({
+      mode: "split",
+      left: "tL",
+      right: "tR",
+      ratio: 0.5,
+      focused: "left",
+    });
+    // Symmetric to the right-pane case: clearing the LEFT pane id also reads
+    // back as single, exercising that pane of the both-ids-present guard.
+    const raw = new Database(join(tempDir, "zeo.db"));
+    raw.prepare("UPDATE meta SET layoutLeftTabId=NULL WHERE id=0").run();
+    raw.close();
+    expect(readWindowLayout()).toEqual({ mode: "single" });
+  });
+});
+
 describe("readBlockingEnabled / writeBlockingEnabled", () => {
   test("writeBlockingEnabled(false) round-trips and leaves schemaVersion/activeSpaceId intact", () => {
-    // Hand-build a valid current (v6) database at the path loadStore will open.
+    // Hand-build a valid current (v9) database at the path loadStore will open.
     const path = join(tempDir, "zeo.db");
     const seed = new Database(path);
-    seed.exec(V6_DDL);
+    seed.exec(V9_DDL);
     seed.prepare(
-      "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled) VALUES (0, 6, 'space-x', 1)",
+      "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled) VALUES (0, 9, 'space-x', 1)",
     ).run();
     seedRows(seed, "space-x");
     seed.close();
@@ -559,7 +1008,7 @@ describe("readBlockingEnabled / writeBlockingEnabled", () => {
     const meta = inspect
       .prepare("SELECT schemaVersion, activeSpaceId, enabled FROM meta WHERE id=0")
       .get() as { schemaVersion: number; activeSpaceId: string; enabled: number };
-    expect(meta.schemaVersion).toBe(6);
+    expect(meta.schemaVersion).toBe(9);
     expect(meta.activeSpaceId).toBe("space-x");
     expect(meta.enabled).toBe(0);
     inspect.close();
@@ -567,14 +1016,14 @@ describe("readBlockingEnabled / writeBlockingEnabled", () => {
 });
 
 describe("readSearchEngine / writeSearchEngine", () => {
-  /** Hand-builds a valid current (v6) database at the loadStore path, opens the
+  /** Hand-builds a valid current (v9) database at the loadStore path, opens the
    *  module-level handle the accessors use, and returns the db file path. */
   function seedAndLoad(): string {
     const path = join(tempDir, "zeo.db");
     const seed = new Database(path);
-    seed.exec(V6_DDL);
+    seed.exec(V9_DDL);
     seed.prepare(
-      "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled) VALUES (0, 6, 'space-x', 1)",
+      "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled) VALUES (0, 9, 'space-x', 1)",
     ).run();
     seedRows(seed, "space-x");
     seed.close();
@@ -633,6 +1082,87 @@ describe("readSearchEngine / writeSearchEngine", () => {
     raw.close();
 
     expect(() => writeSearchEngine("google")).toThrow();
+
+    // No meta row was resurrected: the zero-row UPDATE persisted nothing.
+    const inspect = new Database(path, { readonly: true });
+    const count = inspect
+      .prepare("SELECT COUNT(*) AS n FROM meta")
+      .get() as { n: number };
+    expect(count.n).toBe(0);
+    inspect.close();
+  });
+});
+
+describe("readQuickBrowseExternal / writeQuickBrowseExternal", () => {
+  /** Hand-builds a valid current (v9) database at the loadStore path, opens the
+   *  module-level handle the accessors use, and returns the db file path. */
+  function seedAndLoad(): string {
+    const path = join(tempDir, "zeo.db");
+    const seed = new Database(path);
+    seed.exec(V9_DDL);
+    seed.prepare(
+      "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled) VALUES (0, 9, 'space-x', 1)",
+    ).run();
+    seedRows(seed, "space-x");
+    seed.close();
+    loadStore();
+    return path;
+  }
+
+  test("round-trips the flag true → false → true", () => {
+    seedAndLoad();
+    // The freshly-added column defaults to 1 (ON), read as true.
+    expect(readQuickBrowseExternal()).toBe(true);
+
+    writeQuickBrowseExternal(false);
+    expect(readQuickBrowseExternal()).toBe(false);
+
+    writeQuickBrowseExternal(true);
+    expect(readQuickBrowseExternal()).toBe(true);
+  });
+
+  test("defaults to true when the column value is the default", () => {
+    seedAndLoad();
+    // No write has occurred; the DEFAULT 1 column maps to true.
+    expect(readQuickBrowseExternal()).toBe(true);
+  });
+
+  test("defaults to true when the stored value is NULL", () => {
+    // A meta row whose quickBrowseExternal is genuinely NULL (a nullable column,
+    // as a legacy/hand-modified row could carry); readQuickBrowseExternal must
+    // still default to true. The migration column is NOT NULL, so build a fixture
+    // whose column allows NULL and seed the row at the current version so migrate
+    // is a no-op that leaves the NULL in place.
+    const path = join(tempDir, "zeo.db");
+    const seed = new Database(path);
+    seed.exec(V7_DDL);
+    seed.exec("ALTER TABLE meta ADD COLUMN quickBrowseExternal INTEGER;");
+    seed.prepare(
+      "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled,quickBrowseExternal) VALUES (0, 9, 'space-x', 1, NULL)",
+    ).run();
+    seedRows(seed, "space-x");
+    seed.close();
+    loadStore();
+    expect(readQuickBrowseExternal()).toBe(true);
+  });
+
+  test("defaults to true when the meta row is absent", () => {
+    const path = seedAndLoad();
+    const raw = new Database(path);
+    raw.prepare("DELETE FROM meta WHERE id=0").run();
+    raw.close();
+    expect(readQuickBrowseExternal()).toBe(true);
+  });
+
+  test("writeQuickBrowseExternal throws (and changes nothing) when the meta row is absent", () => {
+    const path = seedAndLoad();
+    // Remove the id=0 row via a separate connection so the module handle's UPDATE
+    // affects zero rows.
+    const raw = new Database(path);
+    raw.prepare("DELETE FROM meta WHERE id=0").run();
+    raw.close();
+
+    expect(() => writeQuickBrowseExternal(false)).toThrow();
 
     // No meta row was resurrected: the zero-row UPDATE persisted nothing.
     const inspect = new Database(path, { readonly: true });
@@ -891,5 +1421,148 @@ describe("history helpers", () => {
       clearHistory();
       expect(historyStats()).toEqual({ entries: 0, visits: 0 });
     });
+  });
+});
+
+describe("downloads helpers", () => {
+  /** Builds a {@link Download} with defaults, overridable per field. */
+  function makeDownload(overrides: Partial<Download> = {}): Download {
+    return {
+      id: "d1",
+      url: "https://example.com/file.bin",
+      filename: "file.bin",
+      path: "/downloads/file.bin",
+      totalBytes: 1000,
+      receivedBytes: 0,
+      state: "progressing",
+      startedAt: 1000,
+      completedAt: null,
+      spaceId: null,
+      ...overrides,
+    };
+  }
+
+  describe("insert / update / delete / list / prune / interrupted sweep", () => {
+    // Each test opens the module-level handle on a fresh, migrated (v9) database
+    // via loadStore(); the downloads table exists after the migration.
+    beforeEach(() => {
+      loadStore();
+    });
+
+    test("insert, update, and delete round-trip a download row", () => {
+      const d = makeDownload({ id: "d1" });
+      insertDownload(d);
+      expect(listDownloads()).toEqual([d]);
+
+      const updated: Download = {
+        ...d,
+        state: "completed",
+        receivedBytes: 1000,
+        completedAt: 5000,
+      };
+      updateDownload(updated);
+      expect(listDownloads()).toEqual([updated]);
+
+      // updateDownload on an absent id affects zero rows: a silent no-op.
+      updateDownload(makeDownload({ id: "missing", state: "completed" }));
+      expect(listDownloads()).toEqual([updated]);
+
+      deleteDownload("d1");
+      expect(listDownloads()).toEqual([]);
+      // deleting an absent id is a no-op.
+      expect(() => deleteDownload("missing")).not.toThrow();
+    });
+
+    test("list returns rows newest-first by startedAt DESC then id DESC", () => {
+      insertDownload(makeDownload({ id: "a", startedAt: 1000 }));
+      insertDownload(makeDownload({ id: "b", startedAt: 2000 }));
+      // Equal startedAt as "b"; the higher id ("c") sorts first.
+      insertDownload(makeDownload({ id: "c", startedAt: 2000 }));
+      expect(listDownloads().map((d) => d.id)).toEqual(["c", "b", "a"]);
+    });
+
+    test("inserting a 101st row prunes the oldest so exactly 100 remain", () => {
+      for (let i = 1; i <= 101; i++) {
+        insertDownload(
+          makeDownload({ id: `d${String(i).padStart(3, "0")}`, startedAt: i }),
+        );
+      }
+      const rows = listDownloads();
+      expect(rows.length).toBe(100);
+      // The oldest (startedAt 1) was pruned; the smallest remaining startedAt is 2.
+      expect(rows.some((d) => d.startedAt === 1)).toBe(false);
+      expect(Math.min(...rows.map((d) => d.startedAt))).toBe(2);
+    });
+
+    test("clearFinishedDownloadRows deletes every finished row and keeps active ones", () => {
+      insertDownload(makeDownload({ id: "prog", state: "progressing", startedAt: 5000 }));
+      insertDownload(makeDownload({ id: "paused", state: "paused", startedAt: 4000 }));
+      insertDownload(makeDownload({ id: "done", state: "completed", startedAt: 3000, completedAt: 3500 }));
+      insertDownload(makeDownload({ id: "cancelled", state: "cancelled", startedAt: 2000, completedAt: 2500 }));
+      insertDownload(makeDownload({ id: "interrupted", state: "interrupted", startedAt: 1000, completedAt: 1500 }));
+
+      clearFinishedDownloadRows();
+
+      // Only the two active rows survive, newest-first.
+      expect(listDownloads().map((d) => d.id)).toEqual(["prog", "paused"]);
+    });
+
+    test("markInterruptedDownloadsOnLaunch rewrites progressing and paused rows to interrupted with completedAt, leaving finished rows untouched", () => {
+      insertDownload(
+        makeDownload({ id: "prog", state: "progressing", startedAt: 3000, receivedBytes: 50 }),
+      );
+      insertDownload(
+        makeDownload({ id: "paused", state: "paused", startedAt: 2000, receivedBytes: 20 }),
+      );
+      insertDownload(
+        makeDownload({ id: "done", state: "completed", startedAt: 1000, completedAt: 1500, receivedBytes: 1000 }),
+      );
+
+      markInterruptedDownloadsOnLaunch(9999);
+
+      const byId = new Map(listDownloads().map((d) => [d.id, d]));
+      expect(byId.get("prog")!.state).toBe("interrupted");
+      expect(byId.get("prog")!.completedAt).toBe(9999);
+      expect(byId.get("paused")!.state).toBe("interrupted");
+      expect(byId.get("paused")!.completedAt).toBe(9999);
+      // The already-finished row is untouched.
+      expect(byId.get("done")!.state).toBe("completed");
+      expect(byId.get("done")!.completedAt).toBe(1500);
+    });
+  });
+
+  test("a full-state flush does not delete or alter download rows (writeState isolation)", () => {
+    // Hand-build a seeded current (v9) database so loadStore returns a real store.
+    const path = join(tempDir, "zeo.db");
+    const seed = new Database(path);
+    seed.exec(V9_DDL);
+    seed.prepare(
+      "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled) VALUES (0, 9, 'space-x', 1)",
+    ).run();
+    seedRows(seed, "space-x");
+    seed.close();
+
+    const store = loadStore();
+    expect(store).not.toBeNull();
+
+    const d1 = makeDownload({
+      id: "d1",
+      state: "completed",
+      startedAt: 2000,
+      completedAt: 2500,
+      receivedBytes: 1000,
+    });
+    const d2 = makeDownload({ id: "d2", state: "progressing", startedAt: 1000, receivedBytes: 10 });
+    insertDownload(d1);
+    insertDownload(d2);
+
+    // Mutate the store (add a tab) and drive a full-state save + synchronous flush.
+    store!.create({ url: "https://added.example", title: "Added" });
+    scheduleSave(store!);
+    flush(store!);
+
+    // writeState covers profiles/spaces/tabs/meta only; download rows are intact
+    // and unchanged (newest first by startedAt: d1 then d2).
+    expect(listDownloads()).toEqual([d1, d2]);
   });
 });

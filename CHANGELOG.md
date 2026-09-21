@@ -9,6 +9,92 @@ milestone, a minor bump only for very large breakthroughs.
 
 ## [Unreleased]
 
+### Fixed
+
+- Split view: a split that collapses back to a single view during a session
+  (closing, removing or archiving a paned tab, activating a non-paned tab,
+  creating a tab, or switching spaces) is now persisted immediately, so quitting
+  no longer leaves stale split metadata in the database.
+
+- macOS: with all windows closed, tab and other menu accelerators (e.g. New Tab)
+  now recreate a window first instead of silently mutating hidden tab state or
+  opening a non-visible command bar; a command bar left open when the last window
+  closed no longer reappears as a phantom overlay on the next window.
+
+- Main process: the fresh-launch tab seed now fires only for a truly empty store
+  (no open **or** archived tabs), making the "don't seed a default tab over an
+  archived-only session" invariant explicit at the seed guard. The reported
+  scenario was already prevented upstream by the persisted-database check, so
+  this is a defensive hardening with no change to reachable behavior.
+
+## [0.0.22] - 2026-09-21
+
+### Added
+
+- Quick-browse window: a lightweight window for a link opened from another app
+  via the macOS default-browser handoff (`open-url`). At most one is open at a
+  time — a second link replaces the url in place rather than stacking windows.
+  The page renders in a throwaway, in-memory session isolated from every profile
+  and never persisted, so nothing it loads survives the window. `Return` (or the
+  Promote button) adopts the link into the current space as a normal tab,
+  "Promote to space…" adopts it into a chosen space through the command bar,
+  `Cmd+Shift+Return` opens it in a background tab, and `Escape` dismisses it and
+  throws the link away. A General-settings toggle ("Open external links in
+  quick-browse", on by default) routes external links to a normal new tab
+  instead when turned off, and a "Set zeo as default browser" button in the same
+  section registers zeo for `http`/`https`. The persisted toggle bumps the
+  database to schema version 9.
+
+### Fixed
+
+- Pinned tabs are no longer destroyed by `Cmd+W`. Closing a pinned tab is now a
+  no-op — the Close Tab command, the tab context-menu's Close item, and the
+  sidebar row's close button are all disabled or hidden while a tab is pinned,
+  matching the existing rule that pinned tabs are exempt from archiving and the
+  idle auto-sweep. Unpin a tab first to close it.
+
+- Sidebar: the pinned tabs section now stays fixed (sticky) at the top of the
+  scroll area instead of scrolling out of view with a long unpinned list.
+
+## [0.0.21] - 2026-09-21
+
+### Added
+
+- Split view: press `Cmd+\` to show two tabs of the active space side by side,
+  separated by a draggable divider (ratio clamped to 20–80%). `Cmd+Alt+Right`
+  moves keyboard focus between panes, `Cmd+Alt+S` swaps them, and `Cmd+Shift+\`
+  (or closing a paned tab) returns to a single view. "Split View with Tab…" opens
+  the command bar to pick which tab fills the second pane. The split (panes and
+  divider ratio) is persisted and restored across relaunch.
+
+- Tab ordering: "Move Tab to Top" and "Move Tab to Bottom" reorder the active
+  tab to the first or last position of its own group (pinned or unpinned). They
+  are available from the command bar (`Cmd+K`) and the Tabs menu, and as "Move
+  to Top" / "Move to Bottom" in the tab context menu, where each is enabled only
+  when the tab can actually move that way (both are disabled for a lone tab, and
+  the boundary one is disabled when the tab is already at that edge). Pinning a
+  tab (`Cmd+Shift+P`, or "Pin" in the context menu — now also found by searching
+  "essentials" in the command bar) moves it into the pinned Essentials section
+  at the top of the sidebar.
+
+## [0.0.20] - 2026-09-14
+
+### Added
+
+- Downloads: files a page initiates are saved to the downloads folder with no
+  save dialog, tracked with live progress and persisted across launches (SQLite
+  schema version 7). A download's URL is stripped of embedded credentials before
+  it is stored or shown, and a suggested filename is sanitized to a safe basename
+  and de-duplicated (`name (1).ext`) so it always stays inside the downloads
+  directory. `Cmd+Shift+J` (or the sidebar footer indicator, or "Show Downloads"
+  in the command bar) opens the command bar filtered to downloads, where Enter
+  opens a completed file, `Cmd+Enter` reveals it in Finder, and `Cmd+Backspace`
+  removes it from the list without deleting the file on disk; "Open Downloads
+  Folder" and "Clear Finished Downloads" round out the commands. The sidebar
+  footer shows the active download count and aggregate progress. A download
+  interrupted by a crash, quit, or a deleted profile shows as interrupted rather
+  than in progress.
+
 ## [0.0.19] - 2026-09-07
 
 ### Added
