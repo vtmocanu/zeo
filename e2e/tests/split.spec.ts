@@ -390,16 +390,28 @@ test.describe("PRD 7.1 split view", () => {
     try {
       const [active, chosen] = await seedTabs(sidebar, ["ZEOSPLIT_A", "ZEOSPLIT_B"]);
 
-      await runCommand(sidebar, "view.splitChoose");
-
-      // The bar opens in "split" mode.
+      // view.splitChoose opens the command bar in "split" mode to pick the second
+      // pane. Right after the burst of tab create/activate/close, a not-yet-settled
+      // view focus can blur-close the just-opened overlay (the overlay blur-close
+      // race noted in repo memory), so re-issue the command until the bar stays open
+      // in split mode. It then shows exactly one suggestion — the one other open tab
+      // — as a data-kind="tab" row. Read from main's command-bar state (the overlay
+      // DOM would race the renderer's render).
+      await expect
+        .poll(async () => {
+          let s = await commandBarState(sidebar);
+          if (!s.open || s.mode !== "split") {
+            await runCommand(sidebar, "view.splitChoose");
+            s = await commandBarState(sidebar);
+          }
+          return s.open && s.mode === "split"
+            ? s.suggestions.filter((row) => row.kind === "tab").length
+            : -1;
+        })
+        .toBe(1);
       const bar = await commandBarState(sidebar);
+      expect(bar.open).toBe(true);
       expect(bar.mode).toBe("split");
-
-      // Exactly one command-bar suggestion, the one other open tab, rendered as a
-      // data-kind="tab" row. Read from main's command-bar state (deterministic)
-      // rather than polling the overlay DOM, which races the renderer's render.
-      expect(bar.suggestions.filter((s) => s.kind === "tab")).toHaveLength(1);
 
       // Accept the row for the chosen tab (over the bridge, avoiding the overlay
       // blur-close race noted in repo memory).
