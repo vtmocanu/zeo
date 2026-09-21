@@ -2158,7 +2158,7 @@ function showTabContextMenu(id: string, x: number, y: number): TabContextMenuRes
     {
       id: "close",
       label: "Close",
-      enabled: true,
+      enabled: !tab.pinned,
       click: () => closeTab(id),
     },
     {

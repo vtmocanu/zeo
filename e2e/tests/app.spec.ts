@@ -88,6 +88,7 @@ interface ZeoBridge {
     create(url?: string): Promise<BridgeTab>;
     close(id: string): Promise<void>;
     pin(id: string): Promise<void>;
+    unpin(id: string): Promise<void>;
     archive(id: string): Promise<void>;
     restore(id: string): Promise<void>;
     remove(id: string): Promise<void>;
@@ -959,6 +960,58 @@ test.describe("zeo desktop app", () => {
     expect(pinnedById.get("unpin")).toMatchObject({ id: "unpin", label: "Unpin" });
     expect(pinnedById.has("pin")).toBe(false);
     expect(pinnedById.get("archive")?.enabled).toBe(false);
+    expect(pinnedById.get("close")?.enabled).toBe(false);
+  });
+
+  // Issue #33 — a pinned tab is protected from closing on BOTH bridge paths: the
+  // IPC `tabs.close` no-ops in the store (resolves, tab stays), and the
+  // `tab.close` command is disabled while the active tab is pinned (run REJECTS).
+  test("close is a no-op on a pinned tab and the tab.close command rejects while pinned", async () => {
+    // A dedicated tab, pinned. tabs.create activates the new tab, so the pinned
+    // tab is also the active tab. A data: URL keeps this offline-deterministic.
+    const pinnedId = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      const created = await zeo.tabs.create("data:text/html,pinned-close-guard");
+      await zeo.tabs.pin(created.id);
+      return created.id;
+    });
+
+    // IPC close path: store no-op on a pinned tab — resolves, but the tab stays.
+    await sidebar.evaluate(async (id) => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.tabs.close(id);
+    }, pinnedId);
+    const afterIpcClose = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      return zeo.tabs.list();
+    });
+    expect(afterIpcClose.tabs.some((t) => t.id === pinnedId && t.pinned)).toBe(true);
+
+    // Command path: tab.close is disabled while the active tab is pinned, so run() REJECTS.
+    const rejected = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      try {
+        await zeo.commands.run("tab.close");
+        return false;
+      } catch {
+        return true;
+      }
+    });
+    expect(rejected).toBe(true);
+
+    // The pinned tab survived both attempts.
+    const afterCmd = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      return zeo.tabs.list();
+    });
+    expect(afterCmd.tabs.some((t) => t.id === pinnedId)).toBe(true);
+
+    // Cleanup: unpin then close so tab counts stay predictable for any sibling test.
+    await sidebar.evaluate(async (id) => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.tabs.unpin(id);
+      await zeo.tabs.close(id);
+    }, pinnedId);
   });
 
   test("pointer drag reorders pinned rows and moves tabs across the pin boundary", async () => {

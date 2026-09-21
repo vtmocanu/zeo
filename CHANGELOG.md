@@ -9,6 +9,14 @@ milestone, a minor bump only for very large breakthroughs.
 
 ## [Unreleased]
 
+### Fixed
+
+- Pinned tabs are no longer destroyed by `Cmd+W`. Closing a pinned tab is now a
+  no-op — the Close Tab command, the tab context-menu's Close item, and the
+  sidebar row's close button are all disabled or hidden while a tab is pinned,
+  matching the existing rule that pinned tabs are exempt from archiving and the
+  idle auto-sweep. Unpin a tab first to close it.
+
 ## [0.0.19] - 2026-09-07
 
 ### Added

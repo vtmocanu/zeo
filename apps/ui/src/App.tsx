@@ -385,17 +385,19 @@ function TabRow({
           {formatZoomPercent(zoomFactor)}
         </button>
       ) : null}
-      <button
-        type="button"
-        className="tab-item__close"
-        aria-label={`Close ${tab.title}`}
-        onClick={(event) => {
-          event.stopPropagation();
-          void window.zeo?.tabs.close(tab.id).catch(() => {});
-        }}
-      >
-        ×
-      </button>
+      {!pinned && (
+        <button
+          type="button"
+          className="tab-item__close"
+          aria-label={`Close ${tab.title}`}
+          onClick={(event) => {
+            event.stopPropagation();
+            void window.zeo?.tabs.close(tab.id).catch(() => {});
+          }}
+        >
+          ×
+        </button>
+      )}
     </li>
   );
 }
