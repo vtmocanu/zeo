@@ -159,6 +159,11 @@ function archivedSuggestion(t: SuggestCatalog["archived"][number]): Suggestion {
   return { kind: "archived-tab", tabId: t.tabId, spaceId: t.spaceId, title: t.title, url: t.url, spaceName: t.spaceName };
 }
 
+/** Projects a catalog space entry to a `space` {@link Suggestion}. */
+function spaceSuggestion(s: SuggestCatalog["spaces"][number]): Suggestion {
+  return { kind: "space", spaceId: s.id, name: s.name };
+}
+
 /** Whether every `term` is a substring of `haystack` (case handled by caller). */
 function matchesAll(haystack: string, terms: string[]): boolean {
   return terms.every((term) => haystack.includes(term));
@@ -218,8 +223,11 @@ function historyScore(entry: HistoryEntry, terms: string[]): number {
  * then catalog order, and capped at eight before row 0 is prepended. A history
  * candidate is skipped when an open tab shares its {@link historyKey} (the tab
  * row wins). `commands` mode ignores history entirely; `history` mode returns
- * only history rows and `downloads` mode returns only download rows (each with
- * no row 0 and no other kinds). Pure — reads only its arguments.
+ * only history rows; `promote` mode returns only `space` rows; `split` mode
+ * returns only the active space's other open tabs (no row 0), MRU-first on an
+ * empty query and term-filtered otherwise; and `downloads` mode returns only
+ * download rows (each with no row 0 and no other kinds). Pure — reads only its
+ * arguments.
  */
 export function suggest(query: string, catalog: SuggestCatalog, options: SuggestOptions): Suggestion[] {
   if (options.mode === "commands") {
@@ -269,6 +277,58 @@ export function suggest(query: string, catalog: SuggestCatalog, options: Suggest
     }
     ranked.sort((a, b) => a.score - b.score || a.order - b.order);
     return ranked.slice(0, MAX_MATCHES).map((c) => c.suggestion);
+  }
+
+  if (options.mode === "promote") {
+    // Promote mode is space-only: the quick-browse link is being routed to a
+    // target space, so only `catalog.spaces` are consulted — there is never a
+    // row-0 text action and no tab/command/history/archived rows. An
+    // empty/whitespace query lists every space in catalog order; a non-empty
+    // query keeps the spaces whose lowercased name contains every term, ranked
+    // by the same termTier rules the mixed space block uses (score then catalog
+    // order) and capped at MAX_MATCHES. `catalog.commands` is never consulted.
+    if (query.trim() === "") {
+      return catalog.spaces.map(spaceSuggestion);
+    }
+
+    const terms = query.trim().toLowerCase().split(/\s+/);
+    const ranked: { suggestion: Suggestion; score: number; order: number }[] = [];
+    let order = 0;
+    for (const space of catalog.spaces) {
+      const nameLower = space.name.toLowerCase();
+      if (matchesAll(nameLower, terms)) {
+        const score = Math.max(...terms.map((term) => termTier(term, nameLower, null)));
+        ranked.push({ suggestion: spaceSuggestion(space), score, order: order++ });
+      }
+    }
+    ranked.sort((a, b) => a.score - b.score || a.order - b.order);
+    return ranked.slice(0, MAX_MATCHES).map((c) => c.suggestion);
+  }
+
+  if (options.mode === "split") {
+    // Split mode offers the ACTIVE SPACE's other open tabs to fill the second
+    // pane: no row-0 text action and no spaces, commands, history, or archived
+    // tabs. The active tab (`options.activeTabId`) and tabs from other spaces are
+    // excluded. An empty/whitespace query lists the remaining tabs MRU-first
+    // (`lastActiveAt` descending); a non-empty query keeps those whose title or
+    // scheme-stripped url contains every whitespace-separated term, in that same
+    // MRU order, capped at MAX_MATCHES.
+    const activeSpaceId = catalog.spaces.find((s) => s.active)?.id ?? null;
+    const trimmed = query.trim();
+    const terms = trimmed === "" ? [] : trimmed.toLowerCase().split(/\s+/);
+    return catalog.tabs
+      .filter((t) => t.tabId !== options.activeTabId && t.spaceId === activeSpaceId)
+      .filter((t) => {
+        if (terms.length === 0) {
+          return true;
+        }
+        const haystack = `${t.title} ${schemeStripped(t.url)}`.toLowerCase();
+        return matchesAll(haystack, terms);
+      })
+      .slice()
+      .sort((a, b) => b.lastActiveAt - a.lastActiveAt)
+      .slice(0, MAX_MATCHES)
+      .map(tabSuggestion);
   }
 
   if (options.mode === "downloads") {

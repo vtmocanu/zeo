@@ -1,4 +1,4 @@
-import { app, BrowserWindow, WebContentsView, clipboard, ipcMain, Menu, session, shell } from "electron";
+import { app, BrowserWindow, WebContentsView, clipboard, ipcMain, Menu, screen, session, shell } from "electron";
 import type { MenuItemConstructorOptions } from "electron";
 import { basename, dirname, join } from "node:path";
 import { existsSync, readFileSync } from "node:fs";
@@ -9,6 +9,19 @@ import {
   IPC,
   titleForUrl,
   SIDEBAR_WIDTH,
+  DIVIDER_WIDTH,
+  splitPaneBounds,
+  SINGLE_LAYOUT,
+  DEFAULT_SPLIT_RATIO,
+  clampRatio,
+  enterSplit,
+  unsplit,
+  swapPanes,
+  setRatio,
+  focusOtherPane,
+  reconcileLayout,
+  focusedPaneTab,
+  paneOf,
   buildSpaceContextMenu,
   defaultSpaceName,
   commandBarBounds,
@@ -51,6 +64,15 @@ import {
   clearFindResults,
   closeFind,
   findBarBounds,
+  openQuickBrowse,
+  replaceQuickBrowseUrl,
+  setQuickBrowseUrl,
+  setQuickBrowseTitle,
+  promoteQuickBrowse,
+  dismissQuickBrowse,
+  quickBrowsePageBounds,
+  QUICK_BROWSE_WIDTH,
+  QUICK_BROWSE_HEIGHT,
 } from "@zeo/core";
 import type {
   BlockingState,
@@ -59,12 +81,16 @@ import type {
   CommandContext,
   CommandDescriptor,
   CommandId,
+  DividerGeometry,
   Download,
   DownloadsState,
   FindState,
   HistoryEntry,
   HistoryVisit,
+  PaneSide,
   Profile,
+  QuickBrowse,
+  QuickBrowseState,
   SearchEngineId,
   Settings,
   SettingsSectionId,
@@ -76,6 +102,7 @@ import type {
   Tab,
   TabContextMenuResult,
   TabsState,
+  WindowLayout,
   ZoomState,
 } from "@zeo/core";
 import { createBlocker, createBlockerFromFilters } from "@zeo/adblock";
@@ -88,6 +115,8 @@ import {
   writeBlockingEnabled,
   readSearchEngine,
   writeSearchEngine,
+  readQuickBrowseExternal,
+  writeQuickBrowseExternal,
   readAllowlist,
   insertAllowlistHost,
   deleteAllowlistHost,
@@ -102,6 +131,8 @@ import {
   readSiteZoom,
   upsertSiteZoom,
   deleteSiteZoom,
+  readWindowLayout,
+  writeWindowLayout,
   insertDownload,
   updateDownload,
   deleteDownload,
@@ -176,6 +207,30 @@ let win: BrowserWindow | null = null;
  * new tab view, hidden except while the bar is open, and nulled on window close.
  */
 let overlay: WebContentsView | null = null;
+/**
+ * The active space's window {@link WindowLayout} (single pane or a two-pane
+ * split). Main is the single source of truth for it: it is attached to every
+ * broadcast snapshot as `TabsState.layout`, reconciled against the live tabs, and
+ * NEVER forked to a renderer. Seeded single here and restored from
+ * {@link readWindowLayout} on window (re)create.
+ */
+let layout: WindowLayout = SINGLE_LAYOUT;
+/**
+ * The draggable divider gutter view drawn between the two split panes. A single
+ * {@link WebContentsView} layered above the tab views (below the settings view
+ * and the command-bar overlay), showing the renderer bundle loaded with
+ * `?view=divider`. Created lazily on first entry into a split, hidden in single
+ * mode, and nulled on window close, mirroring {@link overlay}.
+ */
+let dividerView: WebContentsView | null = null;
+/**
+ * Pending debounced layout-save timer for a ratio drag, or `null` when none is
+ * scheduled. A discrete split op persists immediately; a ratio drag coalesces
+ * onto one write after it settles (see {@link scheduleLayoutSave}).
+ */
+let layoutSaveTimer: ReturnType<typeof setTimeout> | null = null;
+/** Debounce window for {@link scheduleLayoutSave}, in milliseconds. */
+const LAYOUT_SAVE_DEBOUNCE_MS = 300;
 /**
  * The command bar's current state, mirrored to the overlay renderer over
  * {@link IPC.commandBarChange}. Toggled by {@link openCommandBar} /
@@ -306,7 +361,7 @@ let settingsOpen = false;
  * {@link readSearchEngine}. Main is the sole holder of the current search-engine
  * choice, threaded into {@link resolveInput} and {@link suggest}.
  */
-let settings: Settings = { searchEngine: "duckduckgo" };
+let settings: Settings = { searchEngine: "duckduckgo", quickBrowseExternal: true };
 /**
  * The currently-targeted settings section main pushes to the settings view (the
  * PRD's `section`). The section-open commands set it via {@link openSettingsAt};
@@ -348,6 +403,39 @@ let blockingBroadcastTimer: ReturnType<typeof setTimeout> | null = null;
 
 /** Coalescing window for {@link scheduleBlockingBroadcast}, in milliseconds. */
 const BLOCKING_BROADCAST_MS = 250;
+
+// --- Quick-browse (PRD 7.2) singleton state -----------------------------------
+// The transient quick-browse window shows one external link in a frameless chrome
+// window (a renderer surface main pushes state to, like the settings view) over an
+// untrusted page view on an EPHEMERAL in-memory session (like a tab view). Exactly
+// one is open at a time; `quickBrowse` is the pure entry, `null` when closed.
+/** The pure singleton quick-browse entry, `null` when no window is open. */
+let quickBrowse: QuickBrowseState = null;
+/** Cached OS-default-browser flag; seeded at startup, re-read after browser.setDefault. */
+let isDefaultBrowser = false;
+/** The singleton frameless chrome window, or `null` when no quick-browse is open. */
+let quickBrowseWindow: BrowserWindow | null = null;
+/** The untrusted external page view hosted in {@link quickBrowseWindow}. */
+let quickBrowsePageView: WebContentsView | null = null;
+/** This lifecycle's ephemeral session (blocker attach + teardown clear), or `null`. */
+let quickBrowseSession: Electron.Session | null = null;
+/** Monotonic; each open gets a unique in-memory partition (`quick-browse-<n>`). */
+let quickBrowseSessionSeq = 0;
+/**
+ * `true` from the moment a PROGRAMMATIC load is issued (openQuickBrowseWindow /
+ * replaceQuickBrowseLink) until that load's top-level `did-navigate` commits.
+ * While it is `true`, same-document (`did-navigate-in-page`) events are dropped:
+ * they are stragglers from the superseded document, not the page the user is now
+ * on. Read in {@link onQuickBrowseNavigateInPage}; cleared in
+ * {@link onQuickBrowseNavigate} when the top-level commit lands.
+ */
+let quickBrowseLoadPending = false;
+/** Single-flight teardown guard: {@link BrowserWindow.close} re-fires `closed`. */
+let quickBrowseTearingDown = false;
+/** Gates open-url dispatch until {@link app.whenReady} has drained. */
+let appReady = false;
+/** open-url urls that arrived before {@link appReady}, drained in arrival order. */
+const pendingExternalLinks: string[] = [];
 
 /**
  * The downloads slice main owns and attaches to every broadcast snapshot. Seeded
@@ -456,6 +544,12 @@ function fullSnapshot(): TabsState {
     settingsSectionNonce,
     downloads,
     find,
+    // Cached module vars: fullSnapshot runs on every broadcast, so it must never
+    // call app.isDefaultProtocolClient here (isDefaultBrowser is re-read only at
+    // startup and after browser.setDefault).
+    quickBrowse,
+    isDefaultBrowser,
+    layout,
   };
 }
 
@@ -532,6 +626,11 @@ function scheduleBlockingBroadcast(): void {
     // hidden — a stale slice on the next open is harmless but avoidable).
     if (settingsView !== null) {
       settingsView.webContents.send(IPC.stateChange, snapshot);
+    }
+    // The quick-browse chrome renderer follows the snapshot too, so its url/title
+    // track every change (same pattern as the settings view).
+    if (quickBrowseWindow !== null && !quickBrowseWindow.webContents.isDestroyed()) {
+      quickBrowseWindow.webContents.send(IPC.stateChange, snapshot);
     }
   }, BLOCKING_BROADCAST_MS);
 }
@@ -771,7 +870,14 @@ async function setBlockingEnabled(enabled: boolean): Promise<void> {
     throw new Error("content blocking is unavailable: no filter engine is loaded");
   }
   writeBlockingEnabled(enabled);
+  // Cover the transient quick-browse window's ephemeral session too while one is
+  // open, alongside every profile session — the toggle must reach the untrusted
+  // quick-browse page view, not just persisted-profile tabs. It rides the same
+  // idempotent attach/detach loop and revert-on-error path below.
   const sessions = profileSessions();
+  if (quickBrowseSession !== null) {
+    sessions.push(quickBrowseSession);
+  }
   const done: Electron.Session[] = [];
   try {
     for (const s of sessions) {
@@ -820,7 +926,43 @@ async function setSearchEngine(id: SearchEngineId): Promise<void> {
     throw new TypeError(`unknown search engine: ${id}`);
   }
   writeSearchEngine(id);
-  settings = { searchEngine: id };
+  settings = { ...settings, searchEngine: id };
+  broadcast();
+}
+
+/**
+ * Sets whether external links open in the quick-browse window, mirroring
+ * {@link setSearchEngine}'s ordered contract exactly: (1) reject with a
+ * `TypeError` (changing nothing) when `enabled` is not a boolean; (2) resolve
+ * with no side effect when it already matches the current value; (3) persist with
+ * {@link writeQuickBrowseExternal} synchronously — a throw rejects and stops
+ * before the in-memory state changes and no broadcast occurs; (4) update the
+ * in-memory `settings` and broadcast. Reachable from the renderer over
+ * IPC.settingsSetQuickBrowseExternal with an untrusted payload; the IPC handler
+ * returns this promise, so a rejection surfaces to the renderer's invoke.
+ */
+async function setQuickBrowseExternal(enabled: boolean): Promise<void> {
+  if (typeof enabled !== "boolean") {
+    throw new TypeError("settings.setQuickBrowseExternal expects a boolean");
+  }
+  if (enabled === settings.quickBrowseExternal) {
+    return;
+  }
+  writeQuickBrowseExternal(enabled);
+  settings = { ...settings, quickBrowseExternal: enabled };
+  broadcast();
+}
+
+/**
+ * Registers zeo as the OS default handler for http(s) and refreshes the cached
+ * {@link isDefaultBrowser} flag, then broadcasts so the set-default affordance
+ * updates. Only ever invoked by the `browser.setDefault` command — never at
+ * startup or unprompted (PRD 7.2 §6).
+ */
+function setAsDefaultBrowser(): void {
+  app.setAsDefaultProtocolClient("http");
+  app.setAsDefaultProtocolClient("https");
+  isDefaultBrowser = app.isDefaultProtocolClient("http");
   broadcast();
 }
 
@@ -1055,6 +1197,368 @@ function closeSettings(): void {
 }
 
 /**
+ * The page view's `did-navigate` handler (the top-level document commit): mirrors
+ * the committed url into the pure {@link quickBrowse} entry (which the chrome
+ * renderer follows over the broadcast) and clears {@link quickBrowseLoadPending}.
+ * Early-returns after teardown, when the entry is gone, or when the page view is
+ * gone, so a straggler event after dismissal mutates no state. A top-level commit
+ * — whether the pending programmatic load committing (possibly after a redirect or
+ * url normalization) or a user-initiated top-level navigation — is always the real
+ * current page, so the live url is applied unconditionally.
+ *
+ * The required property (a promote/openInTab fired during an in-flight replace
+ * captures the replaced url, not the old one) holds because
+ * {@link replaceQuickBrowseUrl} updates the pure `quickBrowse.url` synchronously.
+ * {@link quickBrowseLoadPending} additionally prevents a same-document straggler
+ * from the old document (see {@link onQuickBrowseNavigateInPage}) from reverting
+ * the url before the new top-level load commits here.
+ */
+function onQuickBrowseNavigate(): void {
+  if (
+    quickBrowseTearingDown ||
+    quickBrowse === null ||
+    quickBrowsePageView === null ||
+    quickBrowsePageView.webContents.isDestroyed()
+  ) {
+    return;
+  }
+  const current = quickBrowsePageView.webContents.getURL(); // read live, never a captured value
+  if (current === "") {
+    return;
+  }
+  quickBrowse = setQuickBrowseUrl(quickBrowse, current);
+  quickBrowseLoadPending = false; // this top-level commit is the current page
+  broadcast();
+}
+
+/**
+ * The page view's `did-navigate-in-page` handler (a same-document navigation, e.g.
+ * a fragment or a history.pushState). While {@link quickBrowseLoadPending} is
+ * `true` a top-level programmatic load is in flight, so any same-document event is
+ * a straggler from the superseded document — drop it, or it would revert the live
+ * url to the old page before the new top-level load commits. Otherwise the page is
+ * free-navigating within its document and the live url is tracked. Shares the
+ * teardown/gone early-returns with {@link onQuickBrowseNavigate}.
+ */
+function onQuickBrowseNavigateInPage(): void {
+  if (
+    quickBrowseTearingDown ||
+    quickBrowse === null ||
+    quickBrowsePageView === null ||
+    quickBrowsePageView.webContents.isDestroyed()
+  ) {
+    return;
+  }
+  if (quickBrowseLoadPending) {
+    return; // straggler from the superseded document during a programmatic load
+  }
+  const current = quickBrowsePageView.webContents.getURL(); // read live, never a captured value
+  if (current === "") {
+    return;
+  }
+  quickBrowse = setQuickBrowseUrl(quickBrowse, current);
+  broadcast();
+}
+
+/**
+ * The page view's `page-title-updated` handler. {@link setQuickBrowseTitle} is a
+ * no-op on a url mismatch, so a title racing a navigation to a different url is
+ * dropped; the early-returns keep it robust after teardown.
+ */
+function onQuickBrowseTitle(_event: Electron.Event, title: string): void {
+  if (
+    quickBrowseTearingDown ||
+    quickBrowse === null ||
+    quickBrowsePageView === null ||
+    quickBrowsePageView.webContents.isDestroyed()
+  ) {
+    return;
+  }
+  quickBrowse = setQuickBrowseTitle(quickBrowse, quickBrowsePageView.webContents.getURL(), title);
+  broadcast();
+}
+
+/** Wires the quick-browse page view's url/title tracking (see {@link onQuickBrowseNavigate}). */
+function wireQuickBrowsePageEvents(view: WebContentsView): void {
+  view.webContents.on("did-navigate", onQuickBrowseNavigate);
+  view.webContents.on("did-navigate-in-page", onQuickBrowseNavigateInPage);
+  view.webContents.on("page-title-updated", onQuickBrowseTitle);
+}
+
+/**
+ * The window-local key handler wired onto BOTH the quick-browse chrome window and
+ * its page view (PRD 7.2 §5, the sanctioned exception to the menu-accelerator
+ * convention — scoped to these two webContents, never a global accelerator). Maps
+ * keyDown to the quick-browse commands and dispatches through {@link executeCommand};
+ * `preventDefault` keeps a handled key off the page. The commands are enabled only
+ * while the window is open, so the try/catch just defends executeCommand's
+ * disabled-command throw (e.g. a key delivered mid-teardown).
+ */
+function handleQuickBrowseKey(event: Electron.Event, input: Electron.Input): void {
+  if (input.type !== "keyDown") {
+    return;
+  }
+  const mod = input.meta || input.control; // Cmd (darwin) or Ctrl (win/linux)
+  let commandId: CommandId | null = null;
+  if (input.key === "Escape") {
+    commandId = "quickBrowse.dismiss";
+  } else if (input.key === "Enter") {
+    if (mod && input.shift) {
+      commandId = "quickBrowse.openInTab";
+    } else if (mod) {
+      commandId = "quickBrowse.promoteToSpace";
+    } else if (!input.shift) {
+      commandId = "quickBrowse.promote";
+    }
+  }
+  if (commandId === null) {
+    return;
+  }
+  event.preventDefault();
+  try {
+    executeCommand(commandId);
+  } catch (err) {
+    console.error("[quick-browse] key command failed:", err);
+  }
+}
+
+/**
+ * Opens the singleton quick-browse window for `url`: a frameless chrome window (a
+ * renderer surface main pushes state to, mirroring the settings view) hosting an
+ * untrusted page view (mirroring a tab view) on a fresh EPHEMERAL in-memory
+ * session. Called only when no quick-browse window is open; a second external
+ * link while one is open routes to {@link replaceQuickBrowseLink}.
+ */
+function openQuickBrowseWindow(url: string): void {
+  if (quickBrowseWindow !== null) {
+    return; // a window is already open; callers route to replaceQuickBrowseLink
+  }
+  // 1. Allocate this lifecycle's unique in-memory partition — NO `persist:` prefix,
+  //    so it shares nothing with a profile and is discarded on teardown.
+  const partition = "quick-browse-" + ++quickBrowseSessionSeq;
+  quickBrowseSession = session.fromPartition(partition);
+
+  // 2. Frameless chrome window centered on the primary display's work area.
+  const primary = screen.getPrimaryDisplay();
+  quickBrowseWindow = new BrowserWindow({
+    width: QUICK_BROWSE_WIDTH,
+    height: QUICK_BROWSE_HEIGHT,
+    x: Math.round(primary.workArea.x + (primary.workArea.width - QUICK_BROWSE_WIDTH) / 2),
+    y: Math.round(primary.workArea.y + (primary.workArea.height - QUICK_BROWSE_HEIGHT) / 2),
+    frame: false,
+    show: false,
+    webPreferences: {
+      preload: join(moduleDir, "../preload/index.cjs"),
+      contextIsolation: true,
+      sandbox: false,
+      nodeIntegration: false,
+    },
+  });
+
+  // 3. Load the shared renderer bundle with ?view=quick-browse for the chrome,
+  //    mirroring the settings/overlay dev/prod branch.
+  const rendererUrl = process.env.ELECTRON_RENDERER_URL;
+  if (rendererUrl !== undefined && rendererUrl !== "") {
+    quickBrowseWindow.webContents.loadURL(rendererUrl + "?view=quick-browse").catch(() => {
+      // Dev-server races are retried by the window's loadDev loop; the quick-browse
+      // chrome shares the same bundle, so a transient failure here is non-fatal.
+    });
+  } else {
+    void quickBrowseWindow.webContents.loadFile(join(moduleDir, "../renderer/index.html"), {
+      query: { view: "quick-browse" },
+    });
+  }
+
+  // 4. Untrusted page view on the ephemeral partition, SAME secure prefs as a tab
+  //    view: no preload, contextIsolation/sandbox at their secure defaults,
+  //    nodeIntegration off, subframe cosmetic preload allowed.
+  const pageView = new WebContentsView({
+    webPreferences: {
+      partition,
+      nodeIntegrationInSubFrames: true,
+    },
+  });
+  quickBrowsePageView = pageView;
+  quickBrowseWindow.contentView.addChildView(pageView);
+  const layoutPageView = (): void => {
+    if (quickBrowseWindow === null || pageView.webContents.isDestroyed()) {
+      return;
+    }
+    const [w, h] = quickBrowseWindow.getContentSize();
+    pageView.setBounds(quickBrowsePageBounds(w, h));
+  };
+  layoutPageView();
+  quickBrowseWindow.on("resize", layoutPageView);
+
+  // 5. Deny every window.open / target=_blank; the current page does NOT navigate.
+  pageView.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+
+  // 6. Filter the ephemeral session when blocking is enabled and the engine has
+  //    loaded (same condition as the profile-session attach).
+  if (blocking.enabled && blocker) {
+    try {
+      blocker.attach(quickBrowseSession);
+    } catch (err) {
+      teardownQuickBrowse();
+      throw err;
+    }
+  }
+
+  // 7. Seed the pure state.
+  quickBrowse = openQuickBrowse(url);
+  quickBrowseTearingDown = false;
+
+  // 8. Wire url/title tracking before navigating so no first commit is missed.
+  wireQuickBrowsePageEvents(pageView);
+
+  // 9. Programmatic navigation; flag the in-flight load so same-document stragglers
+  //    from the superseded (blank) document are dropped until the top-level commit.
+  quickBrowseLoadPending = true;
+  void pageView.webContents.loadURL(url);
+
+  // 10. Show + focus the window.
+  quickBrowseWindow.show();
+  quickBrowseWindow.focus();
+
+  // 11. Route an OS/user close through the single-flight teardown.
+  quickBrowseWindow.on("closed", () => {
+    teardownQuickBrowse();
+  });
+
+  // 12. Window-local keys on BOTH webContents (scoped exception, never global).
+  quickBrowseWindow.webContents.on("before-input-event", handleQuickBrowseKey);
+  pageView.webContents.on("before-input-event", handleQuickBrowseKey);
+
+  // 13. Broadcast so TabsState.quickBrowse populates and the quickBrowse.* commands
+  //     enable.
+  broadcast();
+}
+
+/**
+ * Handles a second external link while a quick-browse window is already open:
+ * replaces the pure entry's url (resetting the derived title), programmatically
+ * navigates the existing page view (flagging the in-flight load so same-document
+ * stragglers from the superseded document are dropped), and brings the window to
+ * the front. A no-op if the window vanished between the caller's check and here.
+ */
+function replaceQuickBrowseLink(url: string): void {
+  if (quickBrowse === null || quickBrowsePageView === null) {
+    return;
+  }
+  quickBrowse = replaceQuickBrowseUrl(quickBrowse, url);
+  quickBrowseLoadPending = true;
+  void quickBrowsePageView.webContents.loadURL(url);
+  quickBrowseWindow?.moveTop();
+  quickBrowseWindow?.focus();
+  broadcast();
+}
+
+/**
+ * Tears the quick-browse window down (single-flight, best-effort). Steps 1-2 close
+ * the page view and window synchronously; step 3 nulls the singleton state and
+ * broadcasts (so TabsState.quickBrowse clears and the quickBrowse.* commands
+ * disable) and returns focus to the main window; step 4 fire-and-forget clears the
+ * ephemeral session's storage + cache so teardown never blocks. The
+ * {@link quickBrowseTearingDown} guard absorbs the synchronous `closed` re-entry
+ * that {@link BrowserWindow.close} triggers, and the "already torn down" guard
+ * absorbs a later async `closed` (e.g. at app quit) after the state was nulled.
+ */
+function teardownQuickBrowse(): void {
+  if (quickBrowseTearingDown) {
+    return; // single-flight: BrowserWindow.close() below can re-fire 'closed'
+  }
+  if (
+    quickBrowseWindow === null &&
+    quickBrowsePageView === null &&
+    quickBrowseSession === null &&
+    quickBrowse === null
+  ) {
+    return; // already torn down (e.g. a late 'closed' after teardown completed)
+  }
+  quickBrowseTearingDown = true;
+  const closingWindow = quickBrowseWindow;
+  const closingView = quickBrowsePageView;
+  const closingSession = quickBrowseSession;
+
+  // 1. Remove + close the page view (guard isDestroyed), matching settings-view teardown.
+  if (closingView !== null) {
+    if (closingWindow !== null && !closingWindow.isDestroyed()) {
+      closingWindow.contentView.removeChildView(closingView);
+    }
+    if (!closingView.webContents.isDestroyed()) {
+      closingView.webContents.close();
+    }
+  }
+  // 2. Close the chrome window (app-quit can deliver 'closed' on an already-destroyed window).
+  if (closingWindow !== null && !closingWindow.isDestroyed()) {
+    closingWindow.close();
+  }
+
+  // 3. Reset the singleton state synchronously and broadcast.
+  quickBrowse = dismissQuickBrowse(quickBrowse);
+  quickBrowseWindow = null;
+  quickBrowsePageView = null;
+  quickBrowseSession = null;
+  quickBrowseLoadPending = false;
+  broadcast();
+
+  // Return focus to the main window (its active tab view when present, else the window).
+  if (win !== null && !win.isDestroyed()) {
+    const activeTabId = store.activeTabId;
+    if (activeTabId !== null && views.has(activeTabId)) {
+      views.get(activeTabId)?.view.webContents.focus();
+    } else {
+      win.webContents.focus();
+    }
+  }
+
+  // 4. Best-effort clear the ephemeral session storage + cache; fire-and-forget so
+  //    teardown never blocks, matching the deleted-profile cleanup.
+  if (closingSession !== null) {
+    closingSession
+      .clearStorageData()
+      .then(() => closingSession.clearCache())
+      .catch((err: unknown) => {
+        console.error("[quick-browse] failed to clear ephemeral session data:", err);
+      });
+  }
+
+  quickBrowseTearingDown = false;
+}
+
+/**
+ * Dispatches an external web link (PRD 7.2). A non-http(s) target is ignored (the
+ * handoff is web-only). Ensures a fallback main window exists first (darwin keeps
+ * the process alive with no window after window-all-closed). With
+ * `settings.quickBrowseExternal` on it opens (or, if a window is already open,
+ * replaces the link in) the quick-browse window; otherwise it opens the url as a
+ * normal new tab in the active space and activates it, bringing the main window
+ * forward.
+ */
+function handleExternalLink(url: string): void {
+  if (siteKeyForUrl(url) === null) {
+    console.warn("[quick-browse] ignoring non-http(s) external link:", JSON.stringify(url));
+    return;
+  }
+  if (win === null) {
+    createWindow(false);
+  }
+  if (settings.quickBrowseExternal) {
+    if (quickBrowseWindow === null) {
+      openQuickBrowseWindow(url);
+    } else {
+      replaceQuickBrowseLink(url);
+    }
+    return;
+  }
+  createTab(url);
+  if (win !== null && !win.isDestroyed()) {
+    win.show();
+    win.focus();
+  }
+}
+
+/**
  * Creates a hidden web view for a tab owned by `spaceId` and starts loading its
  * url. The view is tracked with its owning space so a space switch or delete can
  * find it. `urlOverride`, when given, is loaded instead of the tab's stored url
@@ -1248,16 +1752,11 @@ function createViewFor(tab: Tab, spaceId: string, urlOverride?: string): void {
       console.error(`tab ${tab.id} failed to load ${urlOverride ?? tab.url}:`, err);
     });
 
-  // Keep the z-order tab views < settings view < command-bar overlay: re-adding a
-  // child raises it to the top over the view just added. Re-raise the open
-  // settings view first, then the overlay. Null-guarded so the first createViewFor
-  // (which may run before either is created) is safe.
-  if (settingsOpen && settingsView !== null) {
-    win.contentView.addChildView(settingsView);
-  }
-  if (overlay !== null) {
-    win.contentView.addChildView(overlay);
-  }
+  // Keep the z-order tab views < divider view < settings view < command-bar
+  // overlay: re-adding a child raises it over the view just added. Re-raise the
+  // divider, then the open settings view, then the overlay. Null-guarded so the
+  // first createViewFor (which may run before any of them exist) is safe.
+  raiseOverlays();
 }
 
 /**
@@ -1337,7 +1836,10 @@ function createTab(url?: string): Tab {
   const u = url ?? DEFAULT_URL;
   const tab = store.create({ url: u, title: titleForUrl(u) });
   createViewFor(tab, store.activeSpaceId);
-  setActive(tab.id);
+  // store.create makes the new tab active; it is not a split pane, so a live split
+  // collapses to single (reconcile) and applyLayout shows the new view + hides the
+  // divider. In single mode this is the same show-active-hide-rest transition.
+  reconcileAndApply();
   broadcast();
   return tab;
 }
@@ -1414,8 +1916,11 @@ function commandContextOf(): CommandContext {
       activeTab: null,
       spaceCount,
       settingsOpen,
+      quickBrowseOpen: quickBrowseWindow !== null,
       hasFinishedDownload,
       find: { open: find.open, hasQuery: find.query.trim().length > 0 },
+      layoutMode: layout.mode,
+      openTabCount: store.list().length,
     };
   }
   const tab = store.list().find((t) => t.id === activeTabId);
@@ -1438,8 +1943,11 @@ function commandContextOf(): CommandContext {
     },
     spaceCount,
     settingsOpen,
+    quickBrowseOpen: quickBrowseWindow !== null,
     hasFinishedDownload,
     find: { open: find.open, hasQuery: find.query.trim().length > 0 },
+    layoutMode: layout.mode,
+    openTabCount: store.list().length,
   };
 }
 
@@ -1466,6 +1974,427 @@ function zoomActiveTab(direction: "in" | "out" | "reset"): Promise<void> {
   return Promise.resolve();
 }
 
+// --- Split view (PRD 7.1) -----------------------------------------------------
+
+/**
+ * Re-raises the fixed overlay views to the top of the z-order after a tab or
+ * divider view has been (re-)added, keeping the invariant tab views < divider
+ * view < settings view < command-bar overlay. Re-adding a child raises it over
+ * the views added before it, so re-adding the divider, then the settings view,
+ * then the overlay lands each above the previous. Null-guarded so an early call
+ * (before any of them exist) is safe. Shared by {@link createViewFor} and
+ * {@link applyLayout}.
+ */
+function raiseOverlays(): void {
+  if (win === null) {
+    return;
+  }
+  if (dividerView !== null && !dividerView.webContents.isDestroyed()) {
+    win.contentView.addChildView(dividerView);
+  }
+  if (settingsOpen && settingsView !== null) {
+    win.contentView.addChildView(settingsView);
+  }
+  if (overlay !== null) {
+    win.contentView.addChildView(overlay);
+  }
+}
+
+/**
+ * The usable page width a split `ratio` applies to: the content width minus the
+ * sidebar and the divider gutter. Zero when there is no window.
+ */
+function dividableWidth(): number {
+  if (win === null) {
+    return 0;
+  }
+  const [contentWidth] = win.getContentSize();
+  return contentWidth - SIDEBAR_WIDTH - DIVIDER_WIDTH;
+}
+
+/**
+ * Creates the divider gutter view lazily on first entry into a split, mirroring
+ * the command-bar overlay: same preload/webPreferences (default session), parented
+ * to the window, started hidden, loading the shared renderer bundle with a
+ * `?view=divider` marker (dev URL, or the prod `loadFile` query fallback). A no-op
+ * when the window is gone or the view already exists.
+ */
+function ensureDividerView(): void {
+  if (win === null || dividerView !== null) {
+    return;
+  }
+  dividerView = new WebContentsView({
+    webPreferences: {
+      preload: join(moduleDir, "../preload/index.cjs"),
+      contextIsolation: true,
+      sandbox: false,
+      nodeIntegration: false,
+    },
+  });
+  win.contentView.addChildView(dividerView);
+  dividerView.setVisible(false);
+  const rendererUrl = process.env.ELECTRON_RENDERER_URL;
+  if (rendererUrl !== undefined && rendererUrl !== "") {
+    dividerView.webContents.loadURL(rendererUrl + "?view=divider").catch(() => {
+      // Dev-server races are retried by the window's loadDev loop; the divider
+      // view shares the same bundle, so a transient failure here is non-fatal.
+    });
+  } else {
+    void dividerView.webContents.loadFile(join(moduleDir, "../renderer/index.html"), {
+      query: { view: "divider" },
+    });
+  }
+}
+
+/**
+ * Reconciles the on-screen views to the current {@link layout} and
+ * `store.activeTabId`. In single mode it hides the divider (if it exists) and runs
+ * the existing single-view logic via {@link ensureActiveView} (materialize + show
+ * the active view, hide the rest). In split mode it materializes each pane view if
+ * missing, bounds the two panes and the divider via {@link splitPaneBounds}, shows
+ * them, hides every other tracked view, re-raises the z-order, and focuses the
+ * focused pane's view. Every op is guarded so a pane view destroyed mid-reconcile
+ * is skipped, not fatal. Called everywhere the layout or the active view can
+ * change.
+ */
+function applyLayout(): void {
+  if (win === null) {
+    return;
+  }
+  if (layout.mode === "single") {
+    if (dividerView !== null && !dividerView.webContents.isDestroyed()) {
+      dividerView.setVisible(false);
+    }
+    ensureActiveView();
+    return;
+  }
+  // Split: materialize each pane's view if it has none yet (mirroring
+  // ensureActiveView's lazy create), then lay both panes + the divider out.
+  const paneIds: readonly [string, string] = [layout.left, layout.right];
+  for (const paneTabId of paneIds) {
+    if (!views.has(paneTabId)) {
+      const tab = store.list().find((t) => t.id === paneTabId);
+      if (tab !== undefined) {
+        createViewFor(tab, store.activeSpaceId);
+      }
+    }
+  }
+  const [contentWidth, contentHeight] = win.getContentSize();
+  const b = splitPaneBounds(contentWidth, contentHeight, layout.ratio);
+  for (const [tabId, tracked] of views) {
+    const view = tracked.view;
+    if (view.webContents.isDestroyed()) {
+      continue;
+    }
+    if (tabId === layout.left) {
+      view.setBounds(b.left);
+      view.setVisible(true);
+    } else if (tabId === layout.right) {
+      view.setBounds(b.right);
+      view.setVisible(true);
+    } else {
+      view.setVisible(false);
+    }
+  }
+  ensureDividerView();
+  // A freshly created divider sits on top of everything; re-raise the overlays so
+  // the divider is above the panes and the settings view / command bar above it.
+  raiseOverlays();
+  if (dividerView !== null && !dividerView.webContents.isDestroyed()) {
+    dividerView.setBounds(b.divider);
+    dividerView.setVisible(true);
+  }
+  const focusedTabId = focusedPaneTab(layout);
+  if (focusedTabId !== null) {
+    const focusedView = views.get(focusedTabId)?.view;
+    if (focusedView !== undefined && !focusedView.webContents.isDestroyed()) {
+      focusedView.webContents.focus();
+    }
+  }
+}
+
+/**
+ * Reconciles {@link layout} against the active space's live open tabs and active
+ * tab, then materializes the result with {@link applyLayout}. The single
+ * idempotent view-reconcile entry point: in single mode it behaves like
+ * {@link ensureActiveView}; in split mode it re-lays the panes + divider or
+ * collapses to single when the split can no longer be honored.
+ */
+function reconcileAndApply(): void {
+  layout = reconcileLayout(layout, store.list().map((t) => t.id), store.activeTabId);
+  applyLayout();
+}
+
+/**
+ * When `closedId` was a split pane, activates the SURVIVING pane's tab (if still
+ * open) so it becomes the single active view after the split collapses, rather
+ * than an arbitrary MRU tab the store may have re-pointed to. Reads {@link layout}
+ * (unchanged by the store mutation) so it must be called AFTER the store op but
+ * BEFORE reconciling. A no-op when `closedId` was not a pane.
+ */
+function preserveSurvivingPane(closedId: string): void {
+  const side = paneOf(layout, closedId);
+  if (side !== null && layout.mode === "split") {
+    const survivor = side === "left" ? layout.right : layout.left;
+    if (store.list().some((t) => t.id === survivor)) {
+      store.activate(survivor);
+    }
+  }
+}
+
+/**
+ * Persists the current {@link layout} immediately, swallowing (logging) a write
+ * failure so a persistence outage (e.g. running without a db this session) never
+ * breaks the in-memory split. Discrete split ops call this directly; ratio drags
+ * coalesce onto {@link scheduleLayoutSave}.
+ */
+function persistLayout(): void {
+  try {
+    writeWindowLayout(layout);
+  } catch (err) {
+    console.error("[split] failed to persist layout:", err);
+  }
+}
+
+/**
+ * Schedules a debounced persist of {@link layout} (~{@link LAYOUT_SAVE_DEBOUNCE_MS}),
+ * replacing any pending one, so a ratio drag collapses into a single write after
+ * it settles. Used only by {@link doSetRatio}.
+ */
+function scheduleLayoutSave(): void {
+  if (layoutSaveTimer !== null) {
+    clearTimeout(layoutSaveTimer);
+  }
+  layoutSaveTimer = setTimeout(() => {
+    layoutSaveTimer = null;
+    persistLayout();
+  }, LAYOUT_SAVE_DEBOUNCE_MS);
+}
+
+/**
+ * Flushes a pending debounced layout save SYNCHRONOUSLY, cancelling the timer
+ * first. Called at quit alongside {@link flush} so a divider drag that settled
+ * within {@link LAYOUT_SAVE_DEBOUNCE_MS} of Cmd+Q is still persisted — the layout
+ * lives outside the store snapshot, so the store flush does not cover it.
+ */
+function flushLayoutSave(): void {
+  if (layoutSaveTimer === null) {
+    return;
+  }
+  clearTimeout(layoutSaveTimer);
+  layoutSaveTimer = null;
+  persistLayout();
+}
+
+/**
+ * Sends the divider view its current geometry (the left-pane `ratio` and the
+ * usable `dividableWidth` the ratio applies to) over
+ * {@link IPC.splitViewDividerLayout}, so the gutter can translate a pixel drag
+ * back into a ratio. A no-op unless in split with a live divider view. Called
+ * after entering split, after {@link doSetRatio}, and on resize.
+ */
+function sendDividerGeometry(): void {
+  if (layout.mode !== "split") {
+    return;
+  }
+  if (dividerView === null || dividerView.webContents.isDestroyed()) {
+    return;
+  }
+  dividerView.webContents.send(IPC.splitViewDividerLayout, {
+    ratio: layout.ratio,
+    dividableWidth: dividableWidth(),
+  });
+}
+
+/**
+ * The {@link DividerGeometry} seed the renderer reads on demand: the live `ratio`
+ * and `dividableWidth` in split, or {@link DEFAULT_SPLIT_RATIO} + `dividableWidth`
+ * in single. Changes no state.
+ */
+function dividerGeometrySeed(): DividerGeometry {
+  return {
+    ratio: layout.mode === "split" ? layout.ratio : DEFAULT_SPLIT_RATIO,
+    dividableWidth: dividableWidth(),
+  };
+}
+
+/**
+ * The most-recently-active OTHER open tab of the active space: from `store.list()`
+ * (the active space's open tabs) excluding the active tab, the one with the
+ * greatest `lastActiveAt`, ties broken by ascending order in `store.list()`.
+ * `null` when there is no other open tab.
+ */
+function mostRecentOtherTabId(): string | null {
+  const activeId = store.activeTabId;
+  let best: Tab | null = null;
+  for (const t of store.list()) {
+    if (t.id === activeId) {
+      continue;
+    }
+    if (best === null || t.lastActiveAt > best.lastActiveAt) {
+      best = t;
+    }
+  }
+  return best?.id ?? null;
+}
+
+/**
+ * Enters a split of the active tab (left, focused) with the most recent other
+ * open tab (PRD §6). REJECTS (changing nothing) when there is no active tab, the
+ * layout is already split, or the active space has fewer than two open tabs. On
+ * success it updates + persists the layout, re-lays the views, sends the divider
+ * geometry, and broadcasts.
+ */
+function doSplit(): Promise<void> {
+  const activeId = store.activeTabId;
+  if (activeId === null) {
+    return Promise.reject(new Error("split: no active tab"));
+  }
+  if (layout.mode === "split") {
+    return Promise.reject(new Error("split: layout is already split"));
+  }
+  if (store.list().length < 2) {
+    return Promise.reject(new Error("split: need at least two open tabs"));
+  }
+  const otherId = mostRecentOtherTabId();
+  if (otherId === null) {
+    return Promise.reject(new Error("split: no other open tab to split against"));
+  }
+  layout = enterSplit(activeId, otherId);
+  persistLayout();
+  applyLayout();
+  sendDividerGeometry();
+  broadcast();
+  return Promise.resolve();
+}
+
+/**
+ * Enters a split of the active tab (left, focused) with the chosen `tabId` (PRD
+ * §6). REJECTS (changing nothing) when there is no active tab, the layout is
+ * already split, `tabId` is the active tab, or `tabId` is not an open tab of the
+ * active space. On success it updates + persists the layout, re-lays the views,
+ * sends the divider geometry, and broadcasts.
+ */
+function doSplitWith(tabId: string): Promise<void> {
+  const activeId = store.activeTabId;
+  if (activeId === null) {
+    return Promise.reject(new Error("splitWith: no active tab"));
+  }
+  if (layout.mode === "split") {
+    return Promise.reject(new Error("splitWith: layout is already split"));
+  }
+  if (tabId === activeId) {
+    return Promise.reject(new Error("splitWith: cannot split a tab with itself"));
+  }
+  if (!store.list().some((t) => t.id === tabId)) {
+    return Promise.reject(new Error("splitWith: not an open tab of the active space"));
+  }
+  layout = enterSplit(activeId, tabId);
+  persistLayout();
+  applyLayout();
+  sendDividerGeometry();
+  broadcast();
+  return Promise.resolve();
+}
+
+/**
+ * Collapses a split back to a single pane (PRD §6), keeping the focused pane's tab
+ * active. A no-op when already single. Persists, re-lays the views (hiding the
+ * divider), and broadcasts.
+ */
+function doUnsplit(): void {
+  if (layout.mode === "single") {
+    return;
+  }
+  const focusedTabId = focusedPaneTab(layout);
+  if (focusedTabId !== null) {
+    store.activate(focusedTabId);
+  }
+  layout = unsplit(layout);
+  persistLayout();
+  applyLayout();
+  broadcast();
+}
+
+/**
+ * Swaps the two panes (PRD §6): the same tab stays active and focused, so no
+ * store re-activation is needed. A no-op when single. Persists, re-lays the views,
+ * sends the divider geometry, and broadcasts.
+ */
+function doSwap(): void {
+  if (layout.mode === "single") {
+    return;
+  }
+  layout = swapPanes(layout);
+  persistLayout();
+  applyLayout();
+  sendDividerGeometry();
+  broadcast();
+}
+
+/**
+ * Focuses a specific pane (PRD §6). Throws a `TypeError` (rejecting before any
+ * change) when `pane` is not exactly `"left"` or `"right"` — a runtime guard on
+ * the untrusted IPC payload. A no-op when single or the pane is already focused.
+ * Otherwise it points focus + the active tab at that pane (keeping the §2
+ * invariant), reconciles to confirm, persists, re-lays, and broadcasts.
+ */
+function doFocusPane(pane: PaneSide): void {
+  if (pane !== "left" && pane !== "right") {
+    throw new TypeError("splitView.focusPane expects 'left' or 'right'");
+  }
+  if (layout.mode === "single" || layout.focused === pane) {
+    return;
+  }
+  const paneTabId = pane === "left" ? layout.left : layout.right;
+  layout = { ...layout, focused: pane };
+  store.activate(paneTabId);
+  layout = reconcileLayout(layout, store.list().map((t) => t.id), store.activeTabId);
+  persistLayout();
+  applyLayout();
+  broadcast();
+}
+
+/**
+ * Toggles focus to the other pane (PRD §6), pointing the active tab at the newly
+ * focused pane so `store.activeTabId` tracks focus (§2). The only caller of
+ * {@link focusOtherPane}. A no-op when single. Persists, re-lays, and broadcasts.
+ */
+function doFocusOther(): void {
+  if (layout.mode === "single") {
+    return;
+  }
+  layout = focusOtherPane(layout);
+  const focusedTabId = focusedPaneTab(layout);
+  if (focusedTabId !== null) {
+    store.activate(focusedTabId);
+  }
+  persistLayout();
+  applyLayout();
+  broadcast();
+}
+
+/**
+ * Sets the left-pane width fraction to `clampRatio(ratio)` (PRD §6). A no-op when
+ * single OR when the clamped ratio equals the current one (no broadcast). Else it
+ * updates the layout, re-bounds both panes + the divider, sends the divider
+ * geometry, broadcasts, and schedules a DEBOUNCED persist (a drag writes once
+ * after it settles).
+ */
+function doSetRatio(ratio: number): void {
+  if (layout.mode === "single") {
+    return;
+  }
+  if (clampRatio(ratio) === layout.ratio) {
+    return;
+  }
+  layout = setRatio(layout, ratio);
+  applyLayout();
+  sendDividerGeometry();
+  broadcast();
+  scheduleLayoutSave();
+}
+
 /**
  * The one handler per {@link CommandId}, called only by {@link executeCommand}
  * (which gates enablement first, so the `!`/no-op guards here never run on a
@@ -1490,7 +2419,10 @@ const commandHandlers: Record<CommandId, () => void> = {
   "space.new": () => {
     const space = store.createSpace(defaultSpaceName(store.spaces()));
     store.setActiveSpace(space.id);
-    setActive(store.activeTabId);
+    // Switching to the new space invalidates any split of the old space's tabs, so
+    // reconcile (→ single) and re-lay the new space's active view (hiding the
+    // divider).
+    reconcileAndApply();
     broadcast();
   },
   // From the macOS menu bar with no window, ensureWindow recreates one but this
@@ -1603,6 +2535,50 @@ const commandHandlers: Record<CommandId, () => void> = {
   "find.next": () => findNext(),
   "find.previous": () => findPrevious(),
   "find.close": () => closeFindSession(),
+  "quickBrowse.promote": () => {
+    // Keep the link: a new tab loading its url in the ACTIVE space, activated. The
+    // teardown returns focus to the main window on that new active tab.
+    const entry = promoteQuickBrowse(quickBrowse);
+    createTab(entry.url);
+    teardownQuickBrowse();
+  },
+  "quickBrowse.promoteToSpace": () => {
+    // Bring the main window forward so its command-bar overlay (which openCommandBar
+    // shows + focuses) is visible while the user picks a target space; the
+    // quick-browse window stays open until a space is accepted (see performSuggestion).
+    if (win !== null && !win.isDestroyed()) {
+      win.show();
+      win.focus();
+    }
+    openCommandBar("promote");
+  },
+  "quickBrowse.dismiss": () => teardownQuickBrowse(),
+  "quickBrowse.openInTab": () => {
+    // Background tab: keep the link on a new tab in the active space WITHOUT
+    // activating it or moving focus, leaving the quick-browse window open. store's
+    // create always makes the new tab active, so re-activate the previous active
+    // tab and keep the visible view pointed at it.
+    const entry = promoteQuickBrowse(quickBrowse);
+    const previousActive = store.activeTabId;
+    const tab = store.create({ url: entry.url, title: titleForUrl(entry.url) });
+    createViewFor(tab, store.activeSpaceId);
+    if (previousActive !== null && previousActive !== tab.id) {
+      store.activate(previousActive);
+    }
+    setActive(store.activeTabId);
+    broadcast();
+  },
+  "browser.setDefault": () => setAsDefaultBrowser(),
+  "view.split": () => {
+    // doSplit may reject (no active tab, already split, or < 2 open tabs);
+    // executeCommand gates enablement first, but swallow-log any residual
+    // rejection like the zoom handlers rather than crash the dispatch.
+    doSplit().catch((err) => console.error("[split] view.split failed:", err));
+  },
+  "view.splitChoose": () => openCommandBar("split"),
+  "view.unsplit": () => doUnsplit(),
+  "view.focusOtherPane": () => doFocusOther(),
+  "view.swapPanes": () => doSwap(),
 };
 
 /**
@@ -1943,8 +2919,11 @@ function findPrevious(): void {
  */
 function submitCommandBar(text: string, mode?: CommandBarMode): void {
   const requestedMode: CommandBarMode = mode ?? (commandBar.open ? commandBar.mode : "navigate");
-  if (requestedMode === "commands") {
-    throw new Error("submit is not valid in commands mode");
+  if (requestedMode === "commands" || requestedMode === "promote" || requestedMode === "split") {
+    // None of these modes has a free-text action: commands runs the highlighted
+    // command, promote picks a target space from the rows, and split fills the
+    // second pane from a chosen tab row. A raw submit is not valid.
+    throw new Error(`submit is not valid in ${requestedMode} mode`);
   }
   const target = resolveInput(text, settings.searchEngine);
   if (target === null) {
@@ -2011,12 +2990,22 @@ function moveSelectionCommandBar(delta: 1 | -1): void {
 function performSuggestion(s: Suggestion): void {
   switch (s.kind) {
     case "tab": {
+      // Split mode: the bar is picking the second pane. The split suggest branch
+      // only offers active-space tabs, so there is no space switch — fill the
+      // second pane against the chosen tab. doSplitWith may reject (e.g. already
+      // split, or the tab is the active one); swallow-log it like view.split.
+      if (commandBar.mode === "split") {
+        doSplitWith(s.tabId).catch((err) =>
+          console.error("[split] splitWith from bar failed:", err),
+        );
+        return;
+      }
       if (s.spaceId !== store.activeSpaceId) {
         store.setActiveSpace(s.spaceId);
       }
-      // activateTab does store.activate + view reconcile + setActive (the
-      // cross-space hide/show transition, since setActive hides every other
-      // space's views) + broadcast.
+      // activateTab does store.activate + view reconcile (the cross-space
+      // hide/show transition, and a split collapse when the tab is not a pane) +
+      // broadcast.
       activateTab(s.tabId);
       return;
     }
@@ -2038,8 +3027,29 @@ function performSuggestion(s: Suggestion): void {
       return;
     }
     case "space": {
+      if (commandBar.mode === "promote") {
+        // Promote the quick-browse link into the chosen space (PRD 7.2 §6).
+        // Failure paths (acceptCommandBar closes the bar after this returns):
+        //   - the window was dismissed while the picker was open (quickBrowse null)
+        //     → no-op, the bar just closes;
+        //   - the picked space no longer exists → no-op that leaves the quick-browse
+        //     window open (its url stays promotable).
+        if (quickBrowse === null) {
+          return;
+        }
+        if (!store.spaces().some((sp) => sp.id === s.spaceId)) {
+          return;
+        }
+        const entry = promoteQuickBrowse(quickBrowse);
+        store.setActiveSpace(s.spaceId);
+        createTab(entry.url); // create + activate in the now-active target space
+        teardownQuickBrowse();
+        return;
+      }
       store.setActiveSpace(s.spaceId);
-      ensureActiveView();
+      // A space switch invalidates any split of the outgoing space's tabs, so
+      // reconcile (→ single) and re-lay the incoming space's active view.
+      reconcileAndApply();
       broadcast();
       return;
     }
@@ -2105,9 +3115,16 @@ function acceptCommandBar(index?: number, revision?: number): void {
   }
   const idx = index ?? commandBar.selectedIndex;
   if (idx === -1) {
-    // Commands and downloads modes have no text action: a no-match query simply
-    // leaves the bar open rather than routing to submit (which rejects anyway).
-    if (commandBar.mode === "commands" || commandBar.mode === "downloads") {
+    // Commands, promote, split, and downloads modes have no text action: a
+    // no-match query simply leaves the bar open rather than routing to submit
+    // (which rejects in these modes) — split can only fill the second pane from
+    // an existing tab row.
+    if (
+      commandBar.mode === "commands" ||
+      commandBar.mode === "promote" ||
+      commandBar.mode === "split" ||
+      commandBar.mode === "downloads"
+    ) {
       return;
     }
     submitCommandBar(commandBar.query);
@@ -2147,6 +3164,19 @@ function acceptCommandBar(index?: number, revision?: number): void {
 
 /** Full close lifecycle: store removal, view teardown, re-activation, broadcast. */
 function closeTab(id: string): void {
+  // A pinned tab cannot be closed (issue #33). Mirror the store's pinned no-op
+  // HERE, before any view/state teardown: `store.close` alone leaves the record
+  // in place but does NOT undo the destroyView/ensureActiveView/dropBlockedTab
+  // work below, so a direct `tabs.close(pinnedId)` IPC would still tear down and
+  // reload a pinned tab's view and reset its blocked-count/history. Guarding the
+  // main-process close path here keeps a pinned tab's view fully intact. An
+  // unknown or archived id is NOT in `list()` (open, non-archived tabs only), so
+  // it falls through to `store.close` and throws exactly as before. Unpin first
+  // to close.
+  const target = store.list().find((t) => t.id === id);
+  if (target?.pinned) {
+    return;
+  }
   // A thrown Error (e.g. unknown id) propagates out to the caller.
   store.close(id);
   // Real tab removal: drop the blocked count and the origin marker for good.
@@ -2158,9 +3188,11 @@ function closeTab(id: string): void {
   lastVisitId.delete(id);
   hasRealTitle.delete(id);
   destroyView(id);
-  // MRU re-activation may land on a not-yet-materialized restored sibling tab,
-  // so ensure its view exists before showing it (lazy restore).
-  ensureActiveView();
+  // If the closed tab was a split pane, keep the surviving pane active before the
+  // split collapses; then reconcile (→ single) and re-lay the view. Lazy restore
+  // still applies: reconcileAndApply materializes the active view if missing.
+  preserveSurvivingPane(id);
+  reconcileAndApply();
   broadcast();
 }
 
@@ -2182,9 +3214,11 @@ function removeTab(id: string): void {
   lastVisitId.delete(id);
   hasRealTitle.delete(id);
   destroyView(id);
-  // MRU re-activation may land on a not-yet-materialized restored sibling tab,
-  // so ensure its view exists before showing it (lazy restore).
-  ensureActiveView();
+  // If the removed tab was a split pane, keep the surviving pane active before the
+  // split collapses; then reconcile (→ single) and re-lay the view (lazy restore
+  // materializes the active view if missing).
+  preserveSurvivingPane(id);
+  reconcileAndApply();
   broadcast();
 }
 
@@ -2235,9 +3269,11 @@ function unpinTab(id: string): void {
 
 function archiveTab(id: string): void {
   store.archive(id);
-  // Archiving the active tab re-points active to an MRU sibling that may be a
-  // not-yet-materialized restored tab, so ensure its view exists (lazy restore).
-  ensureActiveView();
+  // If the archived tab was a split pane, keep the surviving pane active before
+  // the split collapses; then reconcile (→ single, since an archived tab is no
+  // longer open) and re-lay the view (lazy restore materializes it if missing).
+  preserveSurvivingPane(id);
+  reconcileAndApply();
   broadcast();
 }
 
@@ -2286,9 +3322,10 @@ function deleteSpace(id: string): void {
   }
 
   if (wasActive) {
-    // The store activated a surviving space; materialize its active tab's view
-    // if the lazy restore never created one, then show it and hide the rest.
-    ensureActiveView();
+    // The store activated a surviving space; reconcile the layout (a split of the
+    // deleted space's tabs collapses to single) and materialize + show its active
+    // tab's view (hiding the divider), creating it if the lazy restore never did.
+    reconcileAndApply();
   }
   broadcast();
 }
@@ -2350,9 +3387,10 @@ function remapSpaceProfile(spaceId: string, profileId: string): void {
     }
   }
 
-  // Global active tab: hides an inactive space's recreated views, shows the
-  // active one.
-  setActive(store.activeTabId);
+  // Global active tab: hides an inactive space's recreated views and shows the
+  // active one — or, when the remapped space is active and split, re-lays both
+  // recreated pane views and the divider.
+  reconcileAndApply();
   broadcast();
 }
 
@@ -2385,8 +3423,13 @@ function setActive(id: string | null): void {
  * progress tick never triggers a full-state serialization (download rows persist
  * through their own throttled update helper); every other caller keeps the default
  * and save behavior is unchanged.
+ *
+ * Also keeps `layout` consistent with the live open tabs and active tab before
+ * every snapshot (idempotent guard), so a broadcast always carries a layout that
+ * matches the store even on a path that mutated the store without reconciling.
  */
 function broadcast({ persist = true }: { persist?: boolean } = {}): void {
+  layout = reconcileLayout(layout, store.list().map((t) => t.id), store.activeTabId);
   const snapshot = fullSnapshot();
   win?.webContents.send(IPC.stateChange, snapshot);
   // The settings view mirrors the same snapshot while it exists (even when
@@ -2398,6 +3441,11 @@ function broadcast({ persist = true }: { persist?: boolean } = {}): void {
   // counter from TabsState.find — so it needs the full snapshot too (the surface
   // selector still travels separately on commandBarChange).
   overlay?.webContents.send(IPC.stateChange, snapshot);
+  // The quick-browse chrome renderer mirrors the same snapshot while it exists, so
+  // its url/title follow every change (same pattern as the settings view).
+  if (quickBrowseWindow !== null && !quickBrowseWindow.webContents.isDestroyed()) {
+    quickBrowseWindow.webContents.send(IPC.stateChange, snapshot);
+  }
   if (persist) {
     scheduleSave(store);
   }
@@ -2448,7 +3496,10 @@ function activateTab(id: string): void {
       createViewFor(tab, tracked.spaceId);
     }
   }
-  setActive(id);
+  // Layout-aware reconcile: activating a pane tab re-focuses that pane; activating
+  // a non-pane tab collapses the split to single (reconcile drops the split when
+  // the active tab is neither pane), and applyLayout materializes the view.
+  reconcileAndApply();
   broadcast();
 }
 
@@ -2462,9 +3513,10 @@ function sweepIdle(): void {
   const archived = store.archiveIdleAll(IDLE_THRESHOLD_MS);
   if (archived.length > 0) {
     // Only the active space's active tab is ever visible; archived tabs in
-    // inactive spaces are already hidden, so re-pointing the active view covers
-    // the visible side of the sweep.
-    setActive(store.activeTabId);
+    // inactive spaces are already hidden, so re-laying the active view covers the
+    // visible side of the sweep. A sweep that archived a non-focused split pane
+    // collapses the split (reconcile) and hides the divider.
+    reconcileAndApply();
     broadcast();
   }
 }
@@ -2491,7 +3543,7 @@ function showTabContextMenu(id: string, x: number, y: number): TabContextMenuRes
     {
       id: "close",
       label: "Close",
-      enabled: true,
+      enabled: !tab.pinned,
       click: () => closeTab(id),
     },
     {
@@ -2714,6 +3766,13 @@ function createWindow(seed: boolean): void {
         overlay?.webContents.focus();
       }
     }
+    // In split, re-bound both panes + the divider to the new content size and push
+    // the fresh divider geometry (the single-mode active-view bound above is a
+    // harmless no-op, immediately overwritten by applyLayout).
+    if (layout.mode === "split") {
+      applyLayout();
+      sendDividerGeometry();
+    }
   });
 
   // Window lost OS focus → dismiss the command bar.
@@ -2761,6 +3820,13 @@ function createWindow(seed: boolean): void {
     }
     settingsView = null;
     settingsOpen = false;
+    // Drop the divider view with the window too; a later split recreates it
+    // lazily. The layout itself is re-derived from the persisted value on the
+    // next createWindow, so it is left as-is here.
+    if (dividerView !== null && !dividerView.webContents.isDestroyed()) {
+      dividerView.webContents.close();
+    }
+    dividerView = null;
     win = null;
     // Rebuild the menu so its enabled flags reflect the no-window/no-live-view
     // context: with views cleared, commandContextOf() yields canGoBack/canGoForward
@@ -2770,14 +3836,33 @@ function createWindow(seed: boolean): void {
     buildMenu();
   });
 
-  // Seed the first tab into the active (seeded "Personal") space only on a fresh
-  // launch with no open tab. A restored or re-activated launch keeps its state
-  // and does not seed. Views are created lazily: only the active tab's view is
-  // materialized now; every other tab gets its view on first activation.
-  if (seed && store.allOpenTabs().length === 0) {
+  // Seed the first tab into the active (seeded "Personal") space only on a truly
+  // empty store — no open AND no archived tabs. A restored or re-activated launch
+  // keeps its state and does not seed (the persisted-DB check drives `seed`, and
+  // `hasData()` already counts archived rows), so an archived-only session shows
+  // the empty-with-archive state rather than a fresh tab seeded over the archive.
+  // Views are created lazily: only the active tab's view is materialized now;
+  // every other tab gets its view on first activation.
+  if (
+    seed &&
+    store.allOpenTabs().length === 0 &&
+    store.allArchivedTabs().length === 0
+  ) {
     store.create({ url: DEFAULT_URL, title: titleForUrl(DEFAULT_URL) });
   }
-  ensureActiveView();
+  // Restore the persisted window layout, reconciled against the live open tabs and
+  // active tab (a fresh/seeded store, or a persisted split whose panes are gone,
+  // collapses to single — which is correct). applyLayout then materializes the
+  // pane views lazily and, in split, the divider gets its geometry pushed.
+  let persistedLayout: WindowLayout = SINGLE_LAYOUT;
+  try {
+    persistedLayout = readWindowLayout();
+  } catch (err) {
+    console.error("[split] failed to read persisted layout; defaulting to single:", err);
+  }
+  layout = reconcileLayout(persistedLayout, store.list().map((t) => t.id), store.activeTabId);
+  applyLayout();
+  sendDividerGeometry();
   broadcast();
 }
 
@@ -2825,7 +3910,10 @@ ipcMain.handle(IPC.tabsRestore, (_event, id: string): void => {
       createViewFor(tab, store.activeSpaceId);
     }
   }
-  setActive(store.activeTabId);
+  // Restoring does not change the active tab, so a live split is preserved; the
+  // restored (non-pane) view is materialized hidden. reconcileAndApply re-lays the
+  // current layout (single or split).
+  reconcileAndApply();
   broadcast();
 });
 
@@ -2975,6 +4063,30 @@ ipcMain.handle(IPC.settingsSetSearchEngine, (_event, id: SearchEngineId): Promis
   setSearchEngine(id),
 );
 
+ipcMain.handle(IPC.settingsSetQuickBrowseExternal, (_event, enabled: boolean): Promise<void> =>
+  setQuickBrowseExternal(enabled),
+);
+
+// --- Quick-browse -------------------------------------------------------------
+// state() reads back the current entry (null when closed). promote()/dismiss()
+// resolve gracefully as no-ops when no window is open — the underlying commands
+// are enabled only while the window exists, so the handlers guard on
+// quickBrowseWindow before dispatch rather than reject the renderer's invoke.
+ipcMain.handle(IPC.quickBrowseState, (): QuickBrowse | null => quickBrowse);
+
+ipcMain.handle(IPC.quickBrowsePromote, (): void => {
+  if (quickBrowseWindow === null) {
+    return;
+  }
+  executeCommand("quickBrowse.promote");
+});
+
+ipcMain.handle(IPC.quickBrowseDismiss, (): void => {
+  if (quickBrowseWindow !== null) {
+    teardownQuickBrowse();
+  }
+});
+
 // --- History ------------------------------------------------------------------
 // search/recent read the SQLite history tables on demand (history is never part
 // of TabsState and never broadcast); deleteUrl/clear mutate them. A read error is
@@ -3099,9 +4211,10 @@ ipcMain.handle(IPC.spacesRename, (_event, id: string, name: string): void => {
 
 ipcMain.handle(IPC.spacesActivate, (_event, id: string): void => {
   store.setActiveSpace(id);
-  // Hide the outgoing space's views and show the incoming space's active tab,
+  // A space switch invalidates any split of the outgoing space's tabs: reconcile
+  // (→ single, hiding the divider) and show the incoming space's active tab,
   // materializing that tab's view if the restored space never had one.
-  ensureActiveView();
+  reconcileAndApply();
   broadcast();
 });
 
@@ -3180,6 +4293,45 @@ ipcMain.handle(
 
 ipcMain.handle(IPC.spacesList, (): SpacesState => store.spacesSnapshot());
 
+// --- Split view (PRD 7.1) -----------------------------------------------------
+// split/splitWith run the internal ops and let a rejection (no active tab,
+// already split, bad tab, < 2 open tabs) propagate to the renderer's invoke;
+// unsplit/swap/focusOther/setRatio are always-valid no-op-or-apply void ops;
+// focusPane throws a TypeError on a bad pane payload (rejecting over the bridge);
+// dividerGeometry/state read the current geometry/layout back synchronously. The
+// layout rides the existing stateChange broadcast on TabsState.layout.
+ipcMain.handle(IPC.splitViewSplit, async (): Promise<void> => {
+  await doSplit();
+});
+
+ipcMain.handle(IPC.splitViewSplitWith, async (_event, tabId: string): Promise<void> => {
+  await doSplitWith(tabId);
+});
+
+ipcMain.handle(IPC.splitViewUnsplit, (): void => {
+  doUnsplit();
+});
+
+ipcMain.handle(IPC.splitViewSwap, (): void => {
+  doSwap();
+});
+
+ipcMain.handle(IPC.splitViewFocusPane, (_event, pane: PaneSide): void => {
+  doFocusPane(pane);
+});
+
+ipcMain.handle(IPC.splitViewFocusOther, (): void => {
+  doFocusOther();
+});
+
+ipcMain.handle(IPC.splitViewSetRatio, (_event, ratio: number): void => {
+  doSetRatio(ratio);
+});
+
+ipcMain.handle(IPC.splitViewDividerGeometry, (): DividerGeometry => dividerGeometrySeed());
+
+ipcMain.handle(IPC.splitViewState, (): WindowLayout => layout);
+
 /**
  * Builds and installs the application menu. Accelerators here are
  * application-level, so they fire whether focus is in the sidebar renderer or
@@ -3248,7 +4400,9 @@ function buildMenu(): void {
         const target = store.spaces()[i];
         if (target !== undefined) {
           store.setActiveSpace(target.id);
-          ensureActiveView();
+          // A space switch invalidates any split of the outgoing space's tabs, so
+          // reconcile (→ single) and re-lay the incoming space's active view.
+          reconcileAndApply();
           broadcast();
         }
       },
@@ -3279,6 +4433,18 @@ function buildMenu(): void {
 
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
+
+// External-link handoff (PRD 7.2). macOS delivers deep links via open-url; a link
+// that arrives before whenReady has drained is queued and dispatched by the
+// cold-launch drain below, in arrival order, through the same handoff path.
+app.on("open-url", (event, url) => {
+  event.preventDefault();
+  if (!appReady) {
+    pendingExternalLinks.push(url);
+    return;
+  }
+  handleExternalLink(url);
+});
 
 app.whenReady().then(async () => {
   // Restore from disk if a prior session was persisted; otherwise start empty and
@@ -3334,9 +4500,13 @@ app.whenReady().then(async () => {
     // Read the persisted enabled flag (needs the store's open db handle) and seed
     // the blocking slice before any window or tab view exists.
     const enabled = readBlockingEnabled();
-    // Seed the settings slice from the persisted search-engine choice; main is
-    // the sole holder threaded into resolveInput/suggest.
-    settings = { searchEngine: readSearchEngine() };
+    // Seed the settings slice from the persisted search-engine choice and the
+    // quick-browse-external toggle; main is the sole holder threaded into
+    // resolveInput/suggest.
+    settings = { searchEngine: readSearchEngine(), quickBrowseExternal: readQuickBrowseExternal() };
+    // Cache the OS-default-browser flag once at startup; it is re-read only after
+    // browser.setDefault, never in fullSnapshot (which runs on every broadcast).
+    isDefaultBrowser = app.isDefaultProtocolClient("http");
     // Load the persisted allowlist into the live set BEFORE the blocker is created,
     // so the bypass predicate (which reads the set) is correct from the first
     // request. Seed the broadcast slice from the same set, sorted for stable order.
@@ -3401,6 +4571,15 @@ app.whenReady().then(async () => {
             blocker = b;
             if (blocking.enabled) {
               attachBlockerToAllSessions(b);
+              // Cover the transient quick-browse window's ephemeral session too if
+              // one is open when the deferred engine arrives.
+              if (quickBrowseSession !== null) {
+                try {
+                  b.attach(quickBrowseSession);
+                } catch {
+                  teardownQuickBrowse();
+                }
+              }
             }
             wireOnBlocked(b);
             installBypass(b);
@@ -3493,6 +4672,21 @@ app.whenReady().then(async () => {
   }
   setInterval(sweepIdle, SWEEP_INTERVAL_MS);
 
+  // Cold-launch drain (PRD 7.2): the window and settings now exist, so dispatch any
+  // links that arrived before appReady, in arrival order, through the handoff path.
+  // The e2e hook injects a single link deterministically through the SAME queue,
+  // gated strictly on ZEO_E2E === "1".
+  if (process.env.ZEO_E2E === "1") {
+    const coldLaunchUrl = process.env.ZEO_QUICK_BROWSE_URL;
+    if (typeof coldLaunchUrl === "string" && coldLaunchUrl !== "") {
+      pendingExternalLinks.push(coldLaunchUrl);
+    }
+  }
+  appReady = true;
+  for (const queued of pendingExternalLinks.splice(0)) {
+    handleExternalLink(queued);
+  }
+
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       // A re-activate must never seed: the in-memory store already reflects the
@@ -3512,4 +4706,5 @@ app.on("window-all-closed", () => {
 // never broadcast (e.g. the window-focus lastActiveAt re-stamp) is still saved.
 app.on("before-quit", () => {
   flush(store);
+  flushLayoutSave();
 });
