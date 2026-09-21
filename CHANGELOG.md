@@ -62,6 +62,16 @@ milestone, a minor bump only for very large breakthroughs.
   the command bar to pick which tab fills the second pane. The split (panes and
   divider ratio) is persisted and restored across relaunch.
 
+- Tab ordering: "Move Tab to Top" and "Move Tab to Bottom" reorder the active
+  tab to the first or last position of its own group (pinned or unpinned). They
+  are available from the command bar (`Cmd+K`) and the Tabs menu, and as "Move
+  to Top" / "Move to Bottom" in the tab context menu, where each is enabled only
+  when the tab can actually move that way (both are disabled for a lone tab, and
+  the boundary one is disabled when the tab is already at that edge). Pinning a
+  tab (`Cmd+Shift+P`, or "Pin" in the context menu — now also found by searching
+  "essentials" in the command bar) moves it into the pinned Essentials section
+  at the top of the sidebar.
+
 ## [0.0.20] - 2026-09-14
 
 ### Added

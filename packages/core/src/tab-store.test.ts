@@ -381,6 +381,124 @@ describe("TabStore.reorder", () => {
   });
 });
 
+describe("TabStore.moveToTop / moveToBottom", () => {
+  test("moveToTop moves a tab to the front of its group", () => {
+    const store = makeStore();
+    store.create({ url: "https://a.test" }); // t1
+    store.create({ url: "https://b.test" }); // t2
+    store.create({ url: "https://c.test" }); // t3
+
+    store.moveToTop("t3");
+    expect(store.list().map((t) => t.id)).toEqual(["t3", "t1", "t2"]);
+  });
+
+  test("moveToBottom moves a tab to the back of its group", () => {
+    const store = makeStore();
+    store.create({ url: "https://a.test" }); // t1
+    store.create({ url: "https://b.test" }); // t2
+    store.create({ url: "https://c.test" }); // t3
+
+    store.moveToBottom("t1");
+    expect(store.list().map((t) => t.id)).toEqual(["t2", "t3", "t1"]);
+  });
+
+  test("moving an unpinned tab leaves the pinned group and archived tabs untouched", () => {
+    const store = makeStore();
+    store.create({ url: "https://a.test" }); // t1
+    store.create({ url: "https://b.test" }); // t2
+    store.create({ url: "https://c.test" }); // t3
+    store.create({ url: "https://d.test" }); // t4
+    store.create({ url: "https://e.test" }); // t5
+    store.pin("t1");
+    store.pin("t2"); // pinned [t1, t2], unpinned [t3, t4, t5]
+    store.archive("t4"); // archived [t4], unpinned open [t3, t5]
+
+    store.moveToBottom("t3"); // reorders the unpinned group only
+    expect(store.list().map((t) => t.id)).toEqual(["t1", "t2", "t5", "t3"]);
+    expect(store.list().filter((t) => t.pinned).map((t) => t.id)).toEqual([
+      "t1",
+      "t2",
+    ]);
+    expect(store.archived().map((t) => t.id)).toEqual(["t4"]);
+  });
+
+  test("moving a pinned tab leaves the unpinned group and archived tabs untouched", () => {
+    const store = makeStore();
+    store.create({ url: "https://a.test" }); // t1
+    store.create({ url: "https://b.test" }); // t2
+    store.create({ url: "https://c.test" }); // t3
+    store.create({ url: "https://d.test" }); // t4
+    store.create({ url: "https://e.test" }); // t5
+    store.pin("t1");
+    store.pin("t2");
+    store.pin("t3"); // pinned [t1, t2, t3], unpinned [t4, t5]
+    store.archive("t5"); // archived [t5], unpinned open [t4]
+
+    store.moveToTop("t3"); // reorders the pinned group only
+    expect(store.list().map((t) => t.id)).toEqual(["t3", "t1", "t2", "t4"]);
+    expect(store.archived().map((t) => t.id)).toEqual(["t5"]);
+  });
+
+  test("moveToTop on the first tab of its group is a no-op", () => {
+    const store = makeStore();
+    store.create({ url: "https://a.test" }); // t1
+    store.create({ url: "https://b.test" }); // t2
+    store.create({ url: "https://c.test" }); // t3
+
+    store.moveToTop("t1");
+    expect(store.list().map((t) => t.id)).toEqual(["t1", "t2", "t3"]);
+  });
+
+  test("moveToBottom on the last tab of its group is a no-op", () => {
+    const store = makeStore();
+    store.create({ url: "https://a.test" }); // t1
+    store.create({ url: "https://b.test" }); // t2
+    store.create({ url: "https://c.test" }); // t3
+
+    store.moveToBottom("t3");
+    expect(store.list().map((t) => t.id)).toEqual(["t1", "t2", "t3"]);
+  });
+
+  test("both are no-ops on the sole member of its group", () => {
+    const store = makeStore();
+    store.create({ url: "https://a.test" }); // t1
+    store.create({ url: "https://b.test" }); // t2
+    store.create({ url: "https://c.test" }); // t3
+    store.pin("t1"); // pinned [t1] (single member), unpinned [t2, t3]
+
+    store.moveToTop("t1");
+    expect(store.list().map((t) => t.id)).toEqual(["t1", "t2", "t3"]);
+    store.moveToBottom("t1");
+    expect(store.list().map((t) => t.id)).toEqual(["t1", "t2", "t3"]);
+  });
+
+  test("both are no-ops for a single-tab store", () => {
+    const store = makeStore();
+    store.create({ url: "https://a.test" }); // t1
+
+    store.moveToTop("t1");
+    expect(store.list().map((t) => t.id)).toEqual(["t1"]);
+    store.moveToBottom("t1");
+    expect(store.list().map((t) => t.id)).toEqual(["t1"]);
+  });
+
+  test("both throw on an unknown id", () => {
+    const store = makeStore();
+    store.create({ url: "https://a.test" });
+    expect(() => store.moveToTop("nope")).toThrow();
+    expect(() => store.moveToBottom("nope")).toThrow();
+  });
+
+  test("both throw on an archived id", () => {
+    const store = makeStore();
+    store.create({ url: "https://a.test" }); // t1
+    store.create({ url: "https://b.test" }); // t2 (active)
+    store.archive("t1");
+    expect(() => store.moveToTop("t1")).toThrow(/archived/);
+    expect(() => store.moveToBottom("t1")).toThrow(/archived/);
+  });
+});
+
 describe("TabStore.close (MRU activation)", () => {
   test("closing a non-active tab leaves the active pointer unchanged", () => {
     const store = makeStore();
