@@ -706,6 +706,27 @@ describe("TabStore.archiveIdle", () => {
       expect(tab.archivedAt).not.toBeNull();
     }
   });
+
+  test("archive and archiveIdle stamp archivedAt/archivalSeq from one shared clock and counter", () => {
+    // Hold the clock still while creating so every tab shares lastActiveAt, then
+    // jump it once: BOTH archival paths read this single value as archivedAt.
+    const { store, setClock } = makeClockStore(1000);
+    store.create({ url: "https://a.test" }); // t1
+    store.create({ url: "https://b.test" }); // t2
+    store.create({ url: "https://c.test" }); // t3 (active, exempt from the sweep)
+
+    setClock(9999);
+    store.archive("t1"); // manual archive stamps archivedAt via stampArchived
+    expect(store.archiveIdle(0)).toEqual(["t2"]); // idle sweep stamps t2 the same
+
+    const archived = store.archived();
+    // Both paths stamped the SAME clock value as archivedAt.
+    expect(archived.map((t) => t.archivedAt)).toEqual([9999, 9999]);
+    // archivalSeq is drawn from ONE monotonic counter by both paths: t2 (archived
+    // second) gets the larger seq, so under an equal archivedAt it sorts FIRST in
+    // archived() (archivedAt desc, then archivalSeq desc).
+    expect(archived.map((t) => t.id)).toEqual(["t2", "t1"]);
+  });
 });
 
 describe("TabStore.rebaseActivity", () => {

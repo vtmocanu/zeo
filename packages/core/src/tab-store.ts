@@ -208,6 +208,28 @@ export class TabStore {
   }
 
   /**
+   * Returns the record with the given id, or throws the standard
+   * `Cannot ${verb} unknown tab: ${id}` error the id-taking commands share.
+   */
+  private findRecord(id: string, verb: string): TabRecord {
+    const record = this.tabs.find((tab) => tab.id === id);
+    if (!record) {
+      throw new Error(`Cannot ${verb} unknown tab: ${id}`);
+    }
+    return record;
+  }
+
+  /**
+   * Stamps an archival on `record`: sets `archivedAt` to `at` and assigns a
+   * fresh monotonic `archivalSeq`. Shared by `archive` and `archiveIdle` so both
+   * stamp identically for one clock value.
+   */
+  private stampArchived(record: TabRecord, at: number): void {
+    record.archivedAt = at;
+    record.archivalSeq = ++this.seq;
+  }
+
+  /**
    * Removes the tab with the given id from the store entirely.
    *
    * Active-tab invariant: if the closed tab was active, the most-recently-used
@@ -219,11 +241,8 @@ export class TabStore {
    * matching the archive/idle-sweep protection that already exempts pinned tabs.
    */
   close(id: string): void {
-    const index = this.tabs.findIndex((tab) => tab.id === id);
-    if (index === -1) {
-      throw new Error(`Cannot close unknown tab: ${id}`);
-    }
-    if (this.tabs[index].archivedAt !== null) {
+    const record = this.findRecord(id, "close");
+    if (record.archivedAt !== null) {
       throw new Error(`Cannot close an archived tab: ${id}`);
     }
     // A pinned tab is protected from closing: it must be unpinned first. This
@@ -232,12 +251,12 @@ export class TabStore {
     // Cmd+W could destroy a pinned tab outright (issue #33). Closing a pinned
     // tab is a NO-OP — the record is left in place and the active pointer is
     // untouched.
-    if (this.tabs[index].pinned) {
+    if (record.pinned) {
       return;
     }
 
     const wasActive = this.activeId === id;
-    this.tabs.splice(index, 1);
+    this.tabs.splice(this.tabs.indexOf(record), 1);
 
     if (!wasActive) {
       return;
@@ -258,13 +277,10 @@ export class TabStore {
    * pointer unchanged. Throws on an unknown id.
    */
   remove(id: string): void {
-    const index = this.tabs.findIndex((tab) => tab.id === id);
-    if (index === -1) {
-      throw new Error(`Cannot remove unknown tab: ${id}`);
-    }
+    const record = this.findRecord(id, "remove");
 
     const wasActive = this.activeId === id;
-    this.tabs.splice(index, 1);
+    this.tabs.splice(this.tabs.indexOf(record), 1);
 
     if (!wasActive) {
       return;
@@ -290,10 +306,7 @@ export class TabStore {
    * id both throw, enforcing that archived tabs never become active.
    */
   activate(id: string): void {
-    const record = this.tabs.find((tab) => tab.id === id);
-    if (!record) {
-      throw new Error(`Cannot activate unknown tab: ${id}`);
-    }
+    const record = this.findRecord(id, "activate");
     if (record.archivedAt !== null) {
       throw new Error(`Cannot activate an archived tab: ${id}`);
     }
@@ -342,11 +355,7 @@ export class TabStore {
    * (`pin(a); pin(b); pin(a)` keeps `[a, b]`, never `[b, a]`).
    */
   pin(id: string): void {
-    const index = this.tabs.findIndex((tab) => tab.id === id);
-    if (index === -1) {
-      throw new Error(`Cannot pin unknown tab: ${id}`);
-    }
-    const record = this.tabs[index];
+    const record = this.findRecord(id, "pin");
     if (record.archivedAt !== null) {
       throw new Error(`Cannot pin an archived tab: ${id}`);
     }
@@ -356,7 +365,7 @@ export class TabStore {
     record.pinned = true;
     // Move to the end of the array so it lands after all existing pinned tabs
     // (= the end of the pinned group).
-    this.tabs.splice(index, 1);
+    this.tabs.splice(this.tabs.indexOf(record), 1);
     this.tabs.push(record);
   }
 
@@ -365,11 +374,7 @@ export class TabStore {
    * unknown id. Already-unpinned is a COMPLETE no-op (the record is not moved).
    */
   unpin(id: string): void {
-    const index = this.tabs.findIndex((tab) => tab.id === id);
-    if (index === -1) {
-      throw new Error(`Cannot unpin unknown tab: ${id}`);
-    }
-    const record = this.tabs[index];
+    const record = this.findRecord(id, "unpin");
     if (record.archivedAt !== null) {
       throw new Error(`Cannot unpin an archived tab: ${id}`);
     }
@@ -378,7 +383,7 @@ export class TabStore {
     }
     record.pinned = false;
     // Move to the end of the array (= the end of the unpinned group).
-    this.tabs.splice(index, 1);
+    this.tabs.splice(this.tabs.indexOf(record), 1);
     this.tabs.push(record);
   }
 
@@ -392,10 +397,7 @@ export class TabStore {
     if (!Number.isInteger(toIndex)) {
       throw new Error(`Cannot reorder to a non-integer index: ${toIndex}`);
     }
-    const target = this.tabs.find((tab) => tab.id === id);
-    if (!target) {
-      throw new Error(`Cannot reorder unknown tab: ${id}`);
-    }
+    const target = this.findRecord(id, "reorder");
     if (target.archivedAt !== null) {
       throw new Error(`Cannot reorder an archived tab: ${id}`);
     }
@@ -433,10 +435,7 @@ export class TabStore {
    * (null if none).
    */
   archive(id: string): void {
-    const record = this.tabs.find((tab) => tab.id === id);
-    if (!record) {
-      throw new Error(`Cannot archive unknown tab: ${id}`);
-    }
+    const record = this.findRecord(id, "archive");
     if (record.pinned) {
       throw new Error(`Cannot archive a pinned tab: ${id}`);
     }
@@ -444,8 +443,7 @@ export class TabStore {
       throw new Error(`Cannot archive an archived tab: ${id}`);
     }
 
-    record.archivedAt = this.now();
-    record.archivalSeq = ++this.seq;
+    this.stampArchived(record, this.now());
 
     if (this.activeId === id) {
       this.activateMru();
@@ -476,8 +474,7 @@ export class TabStore {
       ) {
         continue;
       }
-      record.archivedAt = now;
-      record.archivalSeq = ++this.seq;
+      this.stampArchived(record, now);
       archivedIds.push(record.id);
     }
     return archivedIds;
@@ -488,18 +485,14 @@ export class TabStore {
    * the record to the end of the array (= the end of the unpinned group).
    */
   restore(id: string): void {
-    const index = this.tabs.findIndex((tab) => tab.id === id);
-    if (index === -1) {
-      throw new Error(`Cannot restore unknown tab: ${id}`);
-    }
-    const record = this.tabs[index];
+    const record = this.findRecord(id, "restore");
     if (record.archivedAt === null) {
       throw new Error(`Cannot restore a tab that is not archived: ${id}`);
     }
 
     record.archivedAt = null;
     record.pinned = false;
-    this.tabs.splice(index, 1);
+    this.tabs.splice(this.tabs.indexOf(record), 1);
     this.tabs.push(record);
 
     this.stampOutgoing(record.id);

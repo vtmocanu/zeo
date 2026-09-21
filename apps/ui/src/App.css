@@ -229,7 +229,11 @@ body {
   font-size: 12px;
 }
 
-.tab-item__close {
+/* Shared base for the small icon buttons in a row (the tab close button and the
+   archived-row delete button): reset, size, hidden-by-default, plus the shared
+   focus-reveal and hover background. Each button carries this class plus its own
+   class, which keeps only the row-specific (parent-context) reveal selectors. */
+.icon-button {
   appearance: none;
   border: none;
   background: none;
@@ -244,22 +248,23 @@ body {
   transition: opacity 0.1s ease-in-out;
 }
 
+/* Reveal on the button's own focus; keep keyboard-reachable. */
+.icon-button:focus,
+.icon-button:focus-visible {
+  opacity: 1;
+}
+
+.icon-button:hover {
+  background: #45455c;
+  color: #fff;
+}
+
 /* Reveal the close button on hover, when the row is active, or when any
    control inside the row is focused (keeps it keyboard-reachable). */
 .tab-item:hover .tab-item__close,
 .tab-item--active .tab-item__close,
 .tab-item:focus-within .tab-item__close {
   opacity: 1;
-}
-
-.tab-item__close:focus,
-.tab-item__close:focus-visible {
-  opacity: 1;
-}
-
-.tab-item__close:hover {
-  background: #45455c;
-  color: #fff;
 }
 
 /* Per-tab blocked-count shield. Always visible when count > 0 (unlike the
@@ -504,35 +509,11 @@ body {
   white-space: nowrap;
 }
 
-.archived-item__delete {
-  appearance: none;
-  border: none;
-  background: none;
-  color: #9a9ab0;
-  font-size: 14px;
-  line-height: 1;
-  cursor: pointer;
-  padding: 2px 4px;
-  border-radius: 4px;
-  flex: 0 0 auto;
-  opacity: 0;
-  transition: opacity 0.1s ease-in-out;
-}
-
-/* Match the tab-row convention: reveal on hover / focus, keep keyboard-reachable. */
+/* Match the tab-row convention: reveal on hover / focus, keep keyboard-reachable.
+   The button's own :focus/:hover styling is shared via .icon-button above. */
 .archived-item:hover .archived-item__delete,
 .archived-item:focus-within .archived-item__delete {
   opacity: 1;
-}
-
-.archived-item__delete:focus,
-.archived-item__delete:focus-visible {
-  opacity: 1;
-}
-
-.archived-item__delete:hover {
-  background: #45455c;
-  color: #fff;
 }
 
 /* Command bar ------------------------------------------------------------- */

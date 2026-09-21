@@ -1,12 +1,13 @@
 import { ipcMain, Menu, session } from "electron";
 import type { MenuItemConstructorOptions } from "electron";
-import { IPC, buildSpaceContextMenu, dropBlockedTab } from "@zeo/core";
+import { IPC, buildSpaceContextMenu } from "@zeo/core";
 import type { Profile, Space, SpaceContextMenuResult, SpacesState } from "@zeo/core";
 import { updateDownload } from "./db.js";
 import { terminalizeProfileDownloads } from "./download-ops.js";
 import { runtime } from "./state.js";
 import { broadcast } from "./broadcast.js";
 import { createViewFor, destroyView } from "./views.js";
+import { forgetTab } from "./tabs.js";
 import { reconcileAndApply } from "./layout.js";
 import { installDownloadHandler, logDownloadError } from "./downloads.js";
 
@@ -46,12 +47,9 @@ export function deleteSpace(id: string): void {
   runtime.store.deleteSpace(id);
 
   for (const tabId of removedTabIds) {
-    runtime.blocking = dropBlockedTab(runtime.blocking, tabId);
-    runtime.tabOrigin.delete(tabId);
-    // History per-tab state lives and dies with the real tab (not the view).
-    runtime.lastHistoryKey.delete(tabId);
-    runtime.lastVisitId.delete(tabId);
-    runtime.hasRealTitle.delete(tabId);
+    // Drop the blocked count, origin marker, and history per-tab state for good,
+    // mirroring closeTab/removeTab.
+    forgetTab(tabId);
   }
 
   if (wasActive) {

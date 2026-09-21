@@ -70,6 +70,24 @@ export function navigateTab(id: string, url: string): void {
   // load owns the retry state from here.
 }
 
+/**
+ * The per-tab forget sequence shared by {@link closeTab}, {@link removeTab}, and
+ * `deleteSpace`'s per-tab loop: drop the tab's blocked count and its origin
+ * marker, plus the history per-tab state that lives and dies with the real tab
+ * (not the view). Does NOT destroy the view — each caller keeps its own view
+ * teardown order (`closeTab`/`removeTab` destroy AFTER the store delete;
+ * `deleteSpace` destroys BEFORE it).
+ */
+export function forgetTab(id: string): void {
+  runtime.blocking = dropBlockedTab(runtime.blocking, id);
+  runtime.tabOrigin.delete(id);
+  // History per-tab state lives and dies with the real tab (not the view), so
+  // drop it here alongside tabOrigin.
+  runtime.lastHistoryKey.delete(id);
+  runtime.lastVisitId.delete(id);
+  runtime.hasRealTitle.delete(id);
+}
+
 /** Full close lifecycle: store removal, view teardown, re-activation, broadcast. */
 export function closeTab(id: string): void {
   // A pinned tab cannot be closed (issue #33). Mirror the store's pinned no-op
@@ -87,14 +105,9 @@ export function closeTab(id: string): void {
   }
   // A thrown Error (e.g. unknown id) propagates out to the caller.
   runtime.store.close(id);
-  // Real tab removal: drop the blocked count and the origin marker for good.
-  runtime.blocking = dropBlockedTab(runtime.blocking, id);
-  runtime.tabOrigin.delete(id);
-  // History per-tab state lives and dies with the real tab (not the view), so
-  // drop it here alongside tabOrigin.
-  runtime.lastHistoryKey.delete(id);
-  runtime.lastVisitId.delete(id);
-  runtime.hasRealTitle.delete(id);
+  // Real tab removal: drop the blocked count, the origin marker, and the
+  // history per-tab state for good.
+  forgetTab(id);
   destroyView(id);
   // If the closed tab was a split pane, keep the surviving pane active before the
   // split collapses; then reconcile (→ single) and re-lay the view. Lazy restore
@@ -113,14 +126,9 @@ export function closeTab(id: string): void {
 export function removeTab(id: string): void {
   // A thrown Error (e.g. unknown id) propagates out to the caller.
   runtime.store.remove(id);
-  // Real tab removal: drop the blocked count and the origin marker for good.
-  runtime.blocking = dropBlockedTab(runtime.blocking, id);
-  runtime.tabOrigin.delete(id);
-  // History per-tab state lives and dies with the real tab (not the view), so
-  // drop it here alongside tabOrigin.
-  runtime.lastHistoryKey.delete(id);
-  runtime.lastVisitId.delete(id);
-  runtime.hasRealTitle.delete(id);
+  // Real tab removal: drop the blocked count, the origin marker, and the
+  // history per-tab state for good.
+  forgetTab(id);
   destroyView(id);
   // If the removed tab was a split pane, keep the surviving pane active before the
   // split collapses; then reconcile (→ single) and re-lay the view (lazy restore
