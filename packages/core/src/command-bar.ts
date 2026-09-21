@@ -15,8 +15,18 @@ import type { Suggestion } from "./suggest.js";
  *   reads "Search history", the typed text filters recent/matching visits, there
  *   is no text (navigate/search) action row, and accepting a row navigates the
  *   active tab to that url.
+ * - `"downloads"` opens the bar to filter the download list: it opens with
+ *   `initialText: ""`, the input placeholder reads "Filter downloads", the typed
+ *   text is a filter only (no navigate/search row and no command row), and
+ *   submit is not a valid action (accepting a row opens/reveals/removes that
+ *   download over the bridge).
  */
-export type CommandBarMode = "navigate" | "new-tab" | "commands" | "history";
+export type CommandBarMode =
+  | "navigate"
+  | "new-tab"
+  | "commands"
+  | "history"
+  | "downloads";
 
 /**
  * The command bar's serializable state, broadcast from main to the renderer.

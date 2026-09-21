@@ -36,6 +36,9 @@ const ALL_IDS: CommandId[] = [
   "settings.openGeneral",
   "settings.openProfiles",
   "settings.openHistory",
+  "downloads.open",
+  "downloads.openFolder",
+  "downloads.clearFinished",
   "find.open",
   "find.next",
   "find.previous",
@@ -44,13 +47,15 @@ const ALL_IDS: CommandId[] = [
 
 /**
  * Builds a command context, defaulting to no active tab, a single space, a
- * closed settings view, and a closed find session with no query.
+ * closed settings view, no finished download, and a closed find session with no
+ * query.
  */
 function context(partial: Partial<CommandContext> = {}): CommandContext {
   return {
     activeTab: partial.activeTab === undefined ? null : partial.activeTab,
     spaceCount: partial.spaceCount ?? 1,
     settingsOpen: partial.settingsOpen ?? false,
+    hasFinishedDownload: partial.hasFinishedDownload ?? false,
     find: partial.find ?? { open: false, hasQuery: false },
   };
 }
@@ -147,6 +152,41 @@ describe("history commands", () => {
       expect(isCommandEnabled(id, context({ activeTab: null, spaceCount: 1 }))).toBe(true);
       expect(isCommandEnabled(id, context({ activeTab: activeTab(), spaceCount: 3 }))).toBe(true);
     }
+  });
+});
+
+describe("downloads commands", () => {
+  test("downloads.open is a view command with the Cmd+Shift+J accelerator", () => {
+    const entry = COMMANDS.find((c) => c.id === "downloads.open");
+    expect(entry).toBeDefined();
+    expect(entry?.menu).toBe("view");
+    expect(entry?.accelerator).toBe("CmdOrCtrl+Shift+J");
+  });
+
+  test("downloads.openFolder is a view command with no accelerator", () => {
+    const entry = COMMANDS.find((c) => c.id === "downloads.openFolder");
+    expect(entry).toBeDefined();
+    expect(entry?.menu).toBe("view");
+    expect(entry?.accelerator).toBeNull();
+  });
+
+  test("downloads.clearFinished is a view command with no accelerator", () => {
+    const entry = COMMANDS.find((c) => c.id === "downloads.clearFinished");
+    expect(entry).toBeDefined();
+    expect(entry?.menu).toBe("view");
+    expect(entry?.accelerator).toBeNull();
+  });
+
+  test("downloads.open and downloads.openFolder are always enabled", () => {
+    for (const id of ["downloads.open", "downloads.openFolder"] as const) {
+      expect(isCommandEnabled(id, context({ activeTab: null, spaceCount: 1 }))).toBe(true);
+      expect(isCommandEnabled(id, context({ activeTab: activeTab(), spaceCount: 3 }))).toBe(true);
+    }
+  });
+
+  test("downloads.clearFinished is gated on a finished download existing", () => {
+    expect(isCommandEnabled("downloads.clearFinished", context({ hasFinishedDownload: true }))).toBe(true);
+    expect(isCommandEnabled("downloads.clearFinished", context({ hasFinishedDownload: false }))).toBe(false);
   });
 });
 
@@ -371,13 +411,13 @@ describe("isCommandEnabled — no active tab yields exactly the expected set", (
 
   test("with one space: only the always-enabled commands", () => {
     expect(enabledIds(context({ activeTab: null, spaceCount: 1 }))).toEqual(
-      ["bar.open-commands", "bar.open-location", "blocking.toggle", "history.clear", "history.open", "settings.open", "settings.openGeneral", "settings.openHistory", "settings.openProfiles", "space.new", "space.rename", "tab.new"].sort(),
+      ["bar.open-commands", "bar.open-location", "blocking.toggle", "downloads.open", "downloads.openFolder", "history.clear", "history.open", "settings.open", "settings.openGeneral", "settings.openHistory", "settings.openProfiles", "space.new", "space.rename", "tab.new"].sort(),
     );
   });
 
   test("with more than one space: the always-enabled commands plus space.delete", () => {
     expect(enabledIds(context({ activeTab: null, spaceCount: 2 }))).toEqual(
-      ["bar.open-commands", "bar.open-location", "blocking.toggle", "history.clear", "history.open", "settings.open", "settings.openGeneral", "settings.openHistory", "settings.openProfiles", "space.delete", "space.new", "space.rename", "tab.new"].sort(),
+      ["bar.open-commands", "bar.open-location", "blocking.toggle", "downloads.open", "downloads.openFolder", "history.clear", "history.open", "settings.open", "settings.openGeneral", "settings.openHistory", "settings.openProfiles", "space.delete", "space.new", "space.rename", "tab.new"].sort(),
     );
   });
 });
