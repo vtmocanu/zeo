@@ -8,7 +8,7 @@
     "node": ">=24"
   },
   "scripts": {
-    "lint": "eslint .",
+    "lint": "eslint . && pnpm --filter @zeo/desktop run lint:cycles",
     "typecheck": "pnpm -r run typecheck",
     "test": "pnpm -r run test",
     "build": "pnpm -r run build",

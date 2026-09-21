@@ -27,6 +27,21 @@ milestone, a minor bump only for very large breakthroughs.
   scenario was already prevented upstream by the persisted-database check, so
   this is a defensive hardening with no change to reachable behavior.
 
+- Downloads: clearing finished downloads now deletes the persisted rows before
+  clearing them from memory and broadcasting; a failed database delete no longer
+  removes the rows from the UI only for them to reappear on the next launch (the
+  command-palette action and the IPC handler now share one implementation).
+
+- Downloads: a persistence failure when a new download starts no longer abandons
+  the live download — its progress/completion listeners, filename reservation,
+  and in-memory record are kept, and only a failure to set the save path aborts
+  the download.
+
+- Content blocking: attaching the blocker to a profile's session when remapping
+  a space's profile or creating a profile is now best-effort — a failure is
+  logged and the remaining lifecycle steps (download-handler install, view
+  recreation, reconcile, broadcast) still run.
+
 ## [0.0.22] - 2026-09-21
 
 ### Added

@@ -121,6 +121,16 @@ export default tseslint.config(
     },
   },
   {
+    // The main process is split into one-responsibility modules; keep it that way.
+    // No module may regrow past 800 non-blank, non-comment lines (PRD 9.2 §3). The
+    // ceiling excludes tests, which are allowed to be long.
+    files: ["apps/desktop/src/main/**/*.ts"],
+    ignores: ["apps/desktop/src/main/**/*.test.ts"],
+    rules: {
+      "max-lines": ["error", { max: 800, skipBlankLines: true, skipComments: true }],
+    },
+  },
+  {
     // The @zeo/adblock cosmetic frame preload is a hand-written CommonJS script
     // that runs in a sandboxed browser frame: it uses `require("electron")` plus
     // DOM globals (window/document/MutationObserver), so it needs the CommonJS
