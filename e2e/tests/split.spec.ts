@@ -4,6 +4,10 @@ import { fileURLToPath } from "node:url";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+// PRD 9.1 — shared main-process view-URL poll helper and the suite-wide poll
+// timeout (VIEW_POLL_TIMEOUT_MS), so every view wait is tuned in one place and a
+// cold runner does not flake on the default 5 s (issue #66).
+import { waitForViewUrl, VIEW_POLL_TIMEOUT_MS } from "./helpers/view";
 
 // Absolute path to the built Electron main entry, resolved from this test file
 // (e2e is ESM, so no __dirname). Layout mirrors persistence.spec.ts: e2e/tests ->
@@ -109,7 +113,7 @@ function asSplit(layout: BridgeLayout): BridgeSplit {
 async function sidebarWindow(app: ElectronApplication): Promise<Page> {
   await app.firstWindow();
 
-  const deadline = Date.now() + 15_000;
+  const deadline = Date.now() + VIEW_POLL_TIMEOUT_MS;
   while (Date.now() < deadline) {
     for (const w of app.windows()) {
       try {
@@ -125,7 +129,9 @@ async function sidebarWindow(app: ElectronApplication): Promise<Page> {
     await new Promise((resolve) => setTimeout(resolve, 200));
   }
 
-  throw new Error('No renderer window exposing data-testid="sidebar" was found within 15s');
+  throw new Error(
+    `No renderer window exposing data-testid="sidebar" was found within ${VIEW_POLL_TIMEOUT_MS}ms`,
+  );
 }
 
 /**
@@ -138,7 +144,7 @@ async function sidebarWindow(app: ElectronApplication): Promise<Page> {
  * context can be momentarily destroyed.
  */
 async function windowByUrl(app: ElectronApplication, urlSubstring: string): Promise<Page> {
-  const deadline = Date.now() + 20_000;
+  const deadline = Date.now() + VIEW_POLL_TIMEOUT_MS;
   while (Date.now() < deadline) {
     for (const w of app.windows()) {
       try {
@@ -152,7 +158,9 @@ async function windowByUrl(app: ElectronApplication, urlSubstring: string): Prom
     await new Promise((resolve) => setTimeout(resolve, 200));
   }
 
-  throw new Error(`No window whose url includes "${urlSubstring}" was found within 20s`);
+  throw new Error(
+    `No window whose url includes "${urlSubstring}" was found within ${VIEW_POLL_TIMEOUT_MS}ms`,
+  );
 }
 
 /**
@@ -347,9 +355,11 @@ test.describe("PRD 7.1 split view", () => {
       expect(split.left).toBe(left);
       expect(split.right).toBe(right);
 
-      // Both pane views are materialized side by side (found by their in-url probes).
-      await windowByUrl(app, "ZEOSPLIT_L");
-      await windowByUrl(app, "ZEOSPLIT_R");
+      // Both pane views are materialized side by side — poll the main process
+      // (bounded by VIEW_POLL_TIMEOUT_MS) until each pane's in-url probe surfaces
+      // on a live view, rather than snapshotting a possibly-stale Page url.
+      await waitForViewUrl(app, "ZEOSPLIT_L");
+      await waitForViewUrl(app, "ZEOSPLIT_R");
 
       // The sidebar shows two paned rows and EXACTLY ONE focused pane.
       await expect(sidebar.getByTestId("tab-pane")).toHaveCount(2);
