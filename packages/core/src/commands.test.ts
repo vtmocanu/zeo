@@ -229,8 +229,9 @@ describe("settings section-open commands", () => {
 });
 
 describe("isCommandEnabled — active-tab-gated commands", () => {
-  test("tab.close needs an active tab", () => {
-    expect(isCommandEnabled("tab.close", context({ activeTab: activeTab() }))).toBe(true);
+  test("tab.close needs an unpinned active tab", () => {
+    expect(isCommandEnabled("tab.close", context({ activeTab: activeTab({ pinned: false }) }))).toBe(true);
+    expect(isCommandEnabled("tab.close", context({ activeTab: activeTab({ pinned: true }) }))).toBe(false);
     expect(isCommandEnabled("tab.close", context({ activeTab: null }))).toBe(false);
   });
 

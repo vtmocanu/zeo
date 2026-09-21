@@ -27,6 +27,17 @@ milestone, a minor bump only for very large breakthroughs.
   section registers zeo for `http`/`https`. The persisted toggle bumps the
   database to schema version 9.
 
+### Fixed
+
+- Pinned tabs are no longer destroyed by `Cmd+W`. Closing a pinned tab is now a
+  no-op — the Close Tab command, the tab context-menu's Close item, and the
+  sidebar row's close button are all disabled or hidden while a tab is pinned,
+  matching the existing rule that pinned tabs are exempt from archiving and the
+  idle auto-sweep. Unpin a tab first to close it.
+
+- Sidebar: the pinned tabs section now stays fixed (sticky) at the top of the
+  scroll area instead of scrolling out of view with a long unpinned list.
+
 ## [0.0.21] - 2026-09-21
 
 ### Added

@@ -97,6 +97,7 @@ interface ZeoBridge {
     create(url?: string): Promise<BridgeTab>;
     close(id: string): Promise<void>;
     pin(id: string): Promise<void>;
+    unpin(id: string): Promise<void>;
     archive(id: string): Promise<void>;
     restore(id: string): Promise<void>;
     remove(id: string): Promise<void>;
@@ -756,6 +757,71 @@ test.describe("zeo desktop app", () => {
     await expect(pinnedSection.getByTestId("tab-item")).toHaveCount(1);
   });
 
+  // Issue #36 — the pinned section stays fixed at the top of the scroll area even
+  // when a long unpinned list is scrolled to the bottom. Guards the BEHAVIOR, not
+  // just the CSS: we overflow the `.sidebar__sections` scrollport, scroll it to the
+  // end, and assert the pinned section's viewport top still tracks the container's
+  // top. Regressing to a non-sticky rule would let it scroll out of view here.
+  test("the pinned section stays stuck to the top when the unpinned list overflows", async () => {
+    // Pin the seeded/active tab (mirrors the neighbor test) so a pinned section
+    // exists to stay put.
+    const targetId = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      const state = await zeo.tabs.list();
+      return state.activeTabId ?? state.tabs[0].id;
+    });
+    await sidebar.evaluate(async (id) => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.tabs.pin(id);
+    }, targetId);
+    await expect(sidebar.getByTestId("pinned-section")).toBeVisible();
+
+    // Create enough UNPINNED tabs to overflow the scrollport. 30 rows comfortably
+    // exceed the default 800px-tall test window's sidebar; the overflow assertion
+    // below fails loudly if a future layout change makes that untrue. Use tiny
+    // `data:` URLs (NOT network — the CI docker sidecar is offline): a `data:` load
+    // commits instantly and each row renders from the broadcast state regardless of
+    // navigation completion, so this stays fast and deterministic.
+    const unpinnedCount = 30;
+    await sidebar.evaluate(async (count) => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      for (let i = 0; i < count; i += 1) {
+        await zeo.tabs.create(`data:text/html,<title>row-${i}</title>`);
+      }
+    }, unpinnedCount);
+    // Wait for the rows to render before measuring layout.
+    await expect(sidebar.getByTestId("unpinned-section").getByTestId("tab-item")).toHaveCount(
+      unpinnedCount,
+    );
+
+    // Scroll the container to the bottom and measure the sticky section in one
+    // synchronous evaluate: setting `scrollTop` and reading `getBoundingClientRect`
+    // both flush layout, so a single pass is stable (no polling needed).
+    const measured = await sidebar.evaluate(() => {
+      const sections = document.querySelector(".sidebar__sections");
+      const pinned = document.querySelector(".sidebar__section--pinned");
+      if (sections === null || pinned === null) {
+        throw new Error("sidebar sections or pinned section not found");
+      }
+      const overflowed = sections.scrollHeight > sections.clientHeight;
+      sections.scrollTop = sections.scrollHeight;
+      return {
+        overflowed,
+        position: getComputedStyle(pinned).position,
+        containerTop: sections.getBoundingClientRect().top,
+        pinnedTop: pinned.getBoundingClientRect().top,
+      };
+    });
+
+    // The list really overflowed (otherwise there is nothing to scroll and the
+    // test would pass vacuously), the section is `sticky`, and after scrolling to
+    // the bottom the pinned section's top still sits at the container's top. The
+    // 2px tolerance absorbs subpixel/border rounding.
+    expect(measured.overflowed).toBe(true);
+    expect(measured.position).toBe("sticky");
+    expect(Math.abs(measured.pinnedTop - measured.containerTop)).toBeLessThanOrEqual(2);
+  });
+
   // Case (d): the renderer's state carries the archived tab in `archived`.
   test("archiving a tab surfaces it in the broadcast state's archived list", async () => {
     // Create a dedicated non-pinned tab and archive it, then read the state via
@@ -958,6 +1024,97 @@ test.describe("zeo desktop app", () => {
     expect(pinnedById.get("unpin")).toMatchObject({ id: "unpin", label: "Unpin" });
     expect(pinnedById.has("pin")).toBe(false);
     expect(pinnedById.get("archive")?.enabled).toBe(false);
+    expect(pinnedById.get("close")?.enabled).toBe(false);
+  });
+
+  // Issue #33 — a pinned tab is protected from closing on BOTH bridge paths: the
+  // IPC `tabs.close` no-ops (resolves, tab RECORD stays AND its WebContentsView
+  // is left intact), and the `tab.close` command is disabled while the active tab
+  // is pinned (run REJECTS). The view assertion is the one that catches the
+  // main-process close-path bug: a store-only guard leaves the record but still
+  // tears down and reloads the pinned tab's view.
+  test("close is a no-op on a pinned tab and the tab.close command rejects while pinned", async () => {
+    // A dedicated tab at a UNIQUE data: URL so its WebContentsView page is
+    // findable by url below, then pinned. tabs.create activates the new tab, so
+    // the pinned tab is also the active tab. A data: URL keeps this offline.
+    const pinnedId = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      const created = await zeo.tabs.create("data:text/html,pinned-close-guard-view");
+      await zeo.tabs.pin(created.id);
+      return created.id;
+    });
+
+    // Locate the pinned tab's WebContentsView Page by its loaded url. Same
+    // defensive poll/try-catch as sidebarWindow: a navigating view can throw.
+    let tabPage: Page | undefined;
+    const pageDeadline = Date.now() + 15_000;
+    while (tabPage === undefined && Date.now() < pageDeadline) {
+      for (const w of app.windows()) {
+        try {
+          if (w.url().includes("pinned-close-guard-view")) {
+            tabPage = w;
+            break;
+          }
+        } catch {
+          // A tab's WebContentsView can momentarily lose its execution context
+          // while navigating; skip any window we can't query this pass.
+        }
+      }
+      if (tabPage === undefined) {
+        await new Promise((resolve) => setTimeout(resolve, 200));
+      }
+    }
+    expect(tabPage).toBeDefined();
+    const pinnedPage = tabPage as Page;
+
+    // Mark the live view so we can later prove it is the SAME, un-torn-down page.
+    await pinnedPage.evaluate(() => {
+      (globalThis as unknown as Record<string, unknown>)["__pinnedAlive"] = true;
+    });
+
+    // IPC close path: no-op on a pinned tab — resolves, but the tab stays.
+    await sidebar.evaluate(async (id) => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.tabs.close(id);
+    }, pinnedId);
+    const afterIpcClose = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      return zeo.tabs.list();
+    });
+    // RECORD survived.
+    expect(afterIpcClose.tabs.some((t) => t.id === pinnedId && t.pinned)).toBe(true);
+    // VIEW survived: the marker persists on the SAME page. Had closeTab torn the
+    // view down, pinnedPage's target would be closed and the evaluate would throw.
+    const aliveAfterClose = await pinnedPage
+      .evaluate(() => Boolean((globalThis as unknown as Record<string, unknown>)["__pinnedAlive"]))
+      .catch(() => false);
+    expect(aliveAfterClose).toBe(true);
+
+    // Command path: tab.close is disabled while the active tab is pinned, so run() REJECTS.
+    const rejected = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      try {
+        await zeo.commands.run("tab.close");
+        return false;
+      } catch {
+        return true;
+      }
+    });
+    expect(rejected).toBe(true);
+
+    // The pinned tab survived both attempts.
+    const afterCmd = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      return zeo.tabs.list();
+    });
+    expect(afterCmd.tabs.some((t) => t.id === pinnedId)).toBe(true);
+
+    // Cleanup: unpin then close so tab counts stay predictable for any sibling test.
+    await sidebar.evaluate(async (id) => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.tabs.unpin(id);
+      await zeo.tabs.close(id);
+    }, pinnedId);
   });
 
   test("pointer drag reorders pinned rows and moves tabs across the pin boundary", async () => {

@@ -167,8 +167,9 @@ export const COMMANDS: readonly CommandDescriptor[] = [
  * `downloads.clearFinished` needs at least one finished download
  * (`hasFinishedDownload`). Every other
  * `tab.*` needs an active tab; on top of that `tab.pin` needs it unpinned,
- * `tab.unpin` pinned, `tab.archive` unpinned, and `tab.back` / `tab.forward`
- * the matching history flag. `space.delete` needs more than one space.
+ * `tab.unpin` pinned, `tab.archive` unpinned, `tab.close` unpinned (a pinned
+ * tab cannot be closed), and `tab.back` / `tab.forward` the matching history
+ * flag. `space.delete` needs more than one space.
  * `blocking.allowSite` needs an active tab with an http(s) `siteHost` that is
  * not yet allowlisted; `blocking.disallowSite` needs an active tab whose site
  * is allowlisted; `settings.close` needs the settings view open. `zoom.in` and
@@ -214,10 +215,11 @@ export function isCommandEnabled(id: CommandId, context: CommandContext): boolea
       return context.activeTab !== null && context.activeTab.siteAllowlisted;
     case "settings.close":
       return context.settingsOpen;
-    case "tab.close":
     case "tab.copy-url":
     case "tab.reload":
       return context.activeTab !== null;
+    case "tab.close":
+      return context.activeTab !== null && !context.activeTab.pinned;
     case "tab.pin":
       return context.activeTab !== null && !context.activeTab.pinned;
     case "tab.unpin":
