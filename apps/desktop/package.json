@@ -8,6 +8,7 @@
     "build": "electron-vite build && node scripts/copy-renderer.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
+    "lint:cycles": "madge --circular --ts-config tsconfig.json --extensions ts --exclude 'packages/core' src/main",
     "dev": "ELECTRON_RENDERER_URL=http://localhost:5173 electron-vite dev"
   },
   "dependencies": {
@@ -22,6 +23,7 @@
     "@types/node": "^24.5.2",
     "electron": "^44.0.0",
     "electron-vite": "^5.0.0",
+    "madge": "^8.0.0",
     "typescript": "^5.9.2",
     "vite": "^8.0.0",
     "vitest": "^4.0.0"

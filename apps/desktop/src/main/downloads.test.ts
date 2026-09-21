@@ -6,8 +6,8 @@ import {
   createThrottledPersister,
   terminalizeProfileDownloads,
   cleanupOrphanedDoneItem,
-} from "./downloads.js";
-import type { DownloadRegistryEntry } from "./downloads.js";
+} from "./download-ops.js";
+import type { DownloadRegistryEntry } from "./download-ops.js";
 
 /** Builds a {@link Download} with defaults, overridable per field. */
 function makeDownload(overrides: Partial<Download> = {}): Download {
