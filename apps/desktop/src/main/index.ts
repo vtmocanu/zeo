@@ -22,6 +22,7 @@ import {
   reconcileLayout,
   focusedPaneTab,
   paneOf,
+  layoutsEqual,
   buildSpaceContextMenu,
   defaultSpaceName,
   commandBarBounds,
@@ -2121,7 +2122,15 @@ function applyLayout(): void {
  * collapses to single when the split can no longer be honored.
  */
 function reconcileAndApply(): void {
+  const previous = layout;
   layout = reconcileLayout(layout, store.list().map((t) => t.id), store.activeTabId);
+  if (!layoutsEqual(previous, layout)) {
+    // The window layout lives outside the store snapshot, so a reconcile-driven
+    // semantic change (a pane focus flip or a collapse to SINGLE_LAYOUT) must be
+    // persisted now — scheduleSave(store)/flushLayoutSave do not cover it, and the
+    // app must not exit with split metadata the store no longer supports (#140).
+    persistLayout();
+  }
   applyLayout();
 }
 
@@ -2184,6 +2193,16 @@ function flushLayoutSave(): void {
   clearTimeout(layoutSaveTimer);
   layoutSaveTimer = null;
   persistLayout();
+}
+
+// Test-only (never wired in a production build): expose the RAW persisted window
+// layout — read straight from `meta.layoutMode` + the pane-id columns via
+// {@link readWindowLayout}, WITHOUT reconciling against live tabs — so the e2e can
+// assert a mid-session collapse was actually written to SQLite, not merely
+// re-derived by startup reconciliation (#140).
+if (process.env.ZEO_E2E === "1") {
+  (globalThis as Record<string, unknown>).__zeoPersistedLayout = (): WindowLayout =>
+    readWindowLayout();
 }
 
 /**
@@ -3445,6 +3464,10 @@ function setActive(id: string | null): void {
  * matches the store even on a path that mutated the store without reconciling.
  */
 function broadcast({ persist = true }: { persist?: boolean } = {}): void {
+  // Idempotent guard only: reconcileAndApply owns persisting a reconcile-driven
+  // layout change (#140), and every collapse-capable path routes through it before
+  // reaching here, so this raw reconcile must never be the first place a collapse
+  // is observed — keep it a no-op re-reconcile, not a new persistence site.
   layout = reconcileLayout(layout, store.list().map((t) => t.id), store.activeTabId);
   const snapshot = fullSnapshot();
   win?.webContents.send(IPC.stateChange, snapshot);

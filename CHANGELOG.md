@@ -11,6 +11,11 @@ milestone, a minor bump only for very large breakthroughs.
 
 ### Fixed
 
+- Split view: a split that collapses back to a single view during a session
+  (closing, removing or archiving a paned tab, activating a non-paned tab,
+  creating a tab, or switching spaces) is now persisted immediately, so quitting
+  no longer leaves stale split metadata in the database.
+
 - macOS: with all windows closed, tab and other menu accelerators (e.g. New Tab)
   now recreate a window first instead of silently mutating hidden tab state or
   opening a non-visible command bar; a command bar left open when the last window
