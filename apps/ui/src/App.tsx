@@ -19,6 +19,7 @@ import {
   paneOf,
   siteKeyForUrl,
 } from "@zeo/core";
+import { Favicon } from "./Favicon.js";
 import "./App.css";
 
 // Pointer travel (px) required before a press turns into a drag. Below this a
@@ -306,8 +307,6 @@ function TabRow({
   zoomFactor: number;
   onPointerDown: (event: ReactPointerEvent<HTMLLIElement>) => void;
 }) {
-  const hasFavicon =
-    typeof tab.faviconUrl === "string" && tab.faviconUrl.length > 0;
   const paned = paneSide !== null;
   const className = [
     "tab-item",
@@ -340,16 +339,7 @@ function TabRow({
           .catch(() => {});
       }}
     >
-      {hasFavicon ? (
-        <img className="tab-item__favicon" src={tab.faviconUrl ?? ""} alt="" />
-      ) : (
-        <span
-          className="tab-item__favicon tab-item__favicon--fallback"
-          aria-hidden="true"
-        >
-          ◦
-        </span>
-      )}
+      <Favicon url={tab.faviconUrl} title={tab.title} />
       <button
         type="button"
         className="tab-item__title"
@@ -407,7 +397,7 @@ function TabRow({
       {!pinned && (
         <button
           type="button"
-          className="tab-item__close"
+          className="icon-button tab-item__close"
           aria-label={`Close ${tab.title}`}
           onClick={(event) => {
             event.stopPropagation();
@@ -427,25 +417,13 @@ function TabRow({
  * and shows when the tab was archived. All side effects go through the bridge.
  */
 function ArchivedRow({ tab, now }: { tab: Tab; now: number }) {
-  const hasFavicon =
-    typeof tab.faviconUrl === "string" && tab.faviconUrl.length > 0;
-
   return (
     <li
       className="archived-item"
       data-testid="archived-item"
       data-archived-id={tab.id}
     >
-      {hasFavicon ? (
-        <img className="tab-item__favicon" src={tab.faviconUrl ?? ""} alt="" />
-      ) : (
-        <span
-          className="tab-item__favicon tab-item__favicon--fallback"
-          aria-hidden="true"
-        >
-          ◦
-        </span>
-      )}
+      <Favicon url={tab.faviconUrl} title={tab.title} />
       <button
         type="button"
         className="archived-item__title"
@@ -459,7 +437,7 @@ function ArchivedRow({ tab, now }: { tab: Tab; now: number }) {
       </span>
       <button
         type="button"
-        className="archived-item__delete"
+        className="icon-button archived-item__delete"
         data-testid="archived-delete"
         aria-label={`Delete ${tab.title}`}
         onClick={(event) => {
