@@ -2425,6 +2425,9 @@ const commandHandlers: Record<CommandId, () => void> = {
     reconcileAndApply();
     broadcast();
   },
+  // From the macOS menu bar with no window, ensureWindow recreates one but this
+  // first send reaches an unloaded renderer and is dropped (a second invocation
+  // works); space.rename has no accelerator, so this is an obscure, benign edge.
   "space.rename": () =>
     win?.webContents.send(IPC.spaceMenuAction, { action: "rename", spaceId: store.activeSpaceId }),
   "space.delete": () => deleteSpace(store.activeSpaceId),
@@ -3666,6 +3669,19 @@ function showSpaceContextMenu(id: string, x: number, y: number): SpaceContextMen
 }
 
 /**
+ * Ensures a window exists before a menu-driven command runs. On darwin the app
+ * survives `window-all-closed` and the application menu stays live, so an
+ * accelerator can fire with no window; recreating one first (never seeding — the
+ * in-memory store already reflects the user's state) is the macOS-native
+ * behavior and mirrors {@link app.on}("activate").
+ */
+function ensureWindow(): void {
+  if (win === null) {
+    createWindow(false);
+  }
+}
+
+/**
  * Creates the main window and its renderer. When `seed` is true and no open tab
  * exists, seeds the default first tab (a fresh launch); a restored launch and a
  * macOS re-activate pass `seed: false`. Restored tabs are NOT eagerly given
@@ -3783,7 +3799,20 @@ function createWindow(seed: boolean): void {
     views.clear();
     overlay = null;
     find = closeFind(find);
-    commandBar = { ...commandBar, surface: "bar" };
+    // Fully close the command bar (not just reset its surface): win.on("closed"
+    // previously preserved commandBar.open, so a bar open at close resurrected as
+    // a phantom overlay on the next window recreation (broadcast → refreshCommandState
+    // → layoutOverlay when open). commandBarRevision bumps so a raced click is rejected.
+    commandBar = {
+      open: false,
+      mode: commandBar.mode,
+      initialText: "",
+      query: "",
+      suggestions: [],
+      selectedIndex: -1,
+      revision: ++commandBarRevision,
+      surface: "bar",
+    };
     // Drop the settings view with the window it was parented to; a later
     // createWindow + settings.open recreates it lazily.
     if (settingsView !== null && !settingsView.webContents.isDestroyed()) {
@@ -3799,6 +3828,12 @@ function createWindow(seed: boolean): void {
     }
     dividerView = null;
     win = null;
+    // Rebuild the menu so its enabled flags reflect the no-window/no-live-view
+    // context: with views cleared, commandContextOf() yields canGoBack/canGoForward
+    // === false and siteHost === null, so tab.back/tab.forward/zoom.* are disabled
+    // (their accelerators would otherwise fire and throw after recreation) while
+    // tab.new/tab.close/tab.reload/space.new stay enabled.
+    buildMenu();
   });
 
   // Seed the first tab into the active (seeded "Personal") space only on a truly
@@ -4311,6 +4346,7 @@ function buildMenu(): void {
       accelerator: `CmdOrCtrl+Alt+${i + 1}`,
       visible: false,
       click: () => {
+        ensureWindow();
         const tabs = store.list();
         const target = tabs[i];
         if (target !== undefined) {
@@ -4333,7 +4369,18 @@ function buildMenu(): void {
       label: entry.label,
       accelerator: entry.accelerator ?? undefined,
       enabled: entry.enabled,
-      click: () => executeCommand(entry.id),
+      click: () => {
+        ensureWindow();
+        try {
+          executeCommand(entry.id);
+        } catch (err: unknown) {
+          // A stale-enabled menu item (e.g. a frozen menu's Go Back after the
+          // window was closed and a fresh view has no history) is rejected by
+          // executeCommand's enablement check; log rather than throw out of the
+          // native menu dispatcher, matching the context-menu closures.
+          console.error(`menu command "${entry.id}" failed:`, err);
+        }
+      },
     }));
 
   const tabsSubmenu: MenuItemConstructorOptions[] = [
@@ -4349,6 +4396,7 @@ function buildMenu(): void {
       accelerator: `CmdOrCtrl+${i + 1}`,
       visible: false,
       click: () => {
+        ensureWindow();
         const target = store.spaces()[i];
         if (target !== undefined) {
           store.setActiveSpace(target.id);
