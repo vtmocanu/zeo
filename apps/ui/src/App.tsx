@@ -7,14 +7,16 @@ import {
   type ReactNode,
   type RefObject,
 } from "react";
-import type { Tab, TabsState } from "@zeo/core";
+import type { PaneSide, Tab, TabsState } from "@zeo/core";
 import {
   SIDEBAR_WIDTH,
   DEFAULT_SEARCH_ENGINE_ID,
+  SINGLE_LAYOUT,
   defaultSpaceName,
   formatRelativeArchived,
   formatZoomPercent,
   hostMatchesAllowlist,
+  paneOf,
   siteKeyForUrl,
 } from "@zeo/core";
 import "./App.css";
@@ -271,12 +273,19 @@ function useTabDrag(pinned: Tab[], unpinned: Tab[]) {
  * count). The count shield is dimmed when blocking is globally disabled. Shows a
  * clickable zoom badge (sibling of the shield) when `zoomFactor !== 1.0`;
  * clicking it dispatches `zoom.reset` to return the host to actual size.
+ *
+ * Split view: when the tab occupies a pane (`paneSide !== null`) the row is
+ * marked `tab-item--paned` (and `tab-item--pane-focused` for the focused pane),
+ * and clicking its title focuses that pane instead of activating the tab. The
+ * derived flags come from the parent; this row holds no split logic.
  */
 function TabRow({
   tab,
   isActive,
   pinned,
   dragging,
+  paneSide,
+  paneFocused,
   blockedCount,
   blockingEnabled,
   allowlisted,
@@ -288,6 +297,8 @@ function TabRow({
   isActive: boolean;
   pinned: boolean;
   dragging: boolean;
+  paneSide: PaneSide | null;
+  paneFocused: boolean;
   blockedCount: number;
   blockingEnabled: boolean;
   allowlisted: boolean;
@@ -297,11 +308,14 @@ function TabRow({
 }) {
   const hasFavicon =
     typeof tab.faviconUrl === "string" && tab.faviconUrl.length > 0;
+  const paned = paneSide !== null;
   const className = [
     "tab-item",
     pinned ? "tab-item--pinned" : "",
     isActive ? "tab-item--active" : "",
     dragging ? "tab-item--dragging" : "",
+    paned ? "tab-item--paned" : "",
+    paneFocused ? "tab-item--pane-focused" : "",
   ]
     .filter(Boolean)
     .join(" ");
@@ -309,8 +323,9 @@ function TabRow({
   return (
     <li
       className={className}
-      data-testid="tab-item"
+      data-testid={paned ? "tab-pane" : "tab-item"}
       data-tab-id={tab.id}
+      data-pane={paneSide ?? undefined}
       aria-current={isActive ? "true" : undefined}
       onPointerDown={onPointerDown}
       onContextMenu={(event) => {
@@ -339,7 +354,11 @@ function TabRow({
         type="button"
         className="tab-item__title"
         title={tab.url}
-        onClick={() => void window.zeo?.tabs.activate(tab.id).catch(() => {})}
+        onClick={() =>
+          paneSide !== null
+            ? void window.zeo?.splitView.focusPane(paneSide).catch(() => {})
+            : void window.zeo?.tabs.activate(tab.id).catch(() => {})
+        }
       >
         {tab.title}
       </button>
@@ -385,17 +404,19 @@ function TabRow({
           {formatZoomPercent(zoomFactor)}
         </button>
       ) : null}
-      <button
-        type="button"
-        className="tab-item__close"
-        aria-label={`Close ${tab.title}`}
-        onClick={(event) => {
-          event.stopPropagation();
-          void window.zeo?.tabs.close(tab.id).catch(() => {});
-        }}
-      >
-        ×
-      </button>
+      {!pinned && (
+        <button
+          type="button"
+          className="tab-item__close"
+          aria-label={`Close ${tab.title}`}
+          onClick={(event) => {
+            event.stopPropagation();
+            void window.zeo?.tabs.close(tab.id).catch(() => {});
+          }}
+        >
+          ×
+        </button>
+      )}
     </li>
   );
 }
@@ -524,6 +545,7 @@ export function App() {
       tabId: null,
       activeRequestId: null,
     },
+    layout: SINGLE_LAYOUT,
   });
   const [showArchived, setShowArchived] = useState(false);
   const [now, setNow] = useState(() => Date.now());
@@ -695,6 +717,7 @@ export function App() {
           tab.id === state.activeTabId && host !== null
             ? (state.zoom.byHost[host] ?? 1.0)
             : 1.0;
+        const paneSide = paneOf(state.layout, tab.id);
         children.push(
           <TabRow
             key={tab.id}
@@ -702,6 +725,8 @@ export function App() {
             isActive={tab.id === state.activeTabId}
             pinned={section === "pinned"}
             dragging={tab.id === draggingId}
+            paneSide={paneSide}
+            paneFocused={paneSide !== null && tab.id === state.activeTabId}
             blockedCount={state.blocking.blockedByTab[tab.id] ?? 0}
             blockingEnabled={state.blocking.enabled}
             allowlisted={allowlisted}

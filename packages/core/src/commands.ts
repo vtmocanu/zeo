@@ -45,7 +45,12 @@ export type CommandId =
   | "find.open"
   | "find.next"
   | "find.previous"
-  | "find.close";
+  | "find.close"
+  | "view.split"
+  | "view.splitChoose"
+  | "view.unsplit"
+  | "view.focusOtherPane"
+  | "view.swapPanes";
 
 /**
  * One registry entry: its {@link CommandId}, human title, search `keywords`,
@@ -70,9 +75,13 @@ export interface CommandDescriptor {
  * the host has no entry or the tab is non-http(s)) — or `null` when no tab is
  * active; the number of spaces; `settingsOpen`, whether the settings view is
  * currently open; `hasFinishedDownload`, whether at least one finished
- * download exists (which gates `downloads.clearFinished`); and `find`, whether
- * the find session is `open` and whether it currently `hasQuery` (a non-empty
- * committed query), which gate the directional find commands.
+ * download exists (which gates `downloads.clearFinished`); `find`, whether the
+ * find session is `open` and whether it currently `hasQuery` (a non-empty
+ * committed query), which gate the directional find commands; `layoutMode`,
+ * whether the active space's window is `"single"` or `"split"`, and
+ * `openTabCount`, the active space's open-tab count — together they gate the
+ * split-view commands (a split needs two open tabs; exiting or navigating a
+ * split needs one to already exist).
  */
 export interface CommandContext {
   activeTab: {
@@ -87,6 +96,8 @@ export interface CommandContext {
   settingsOpen: boolean;
   hasFinishedDownload: boolean;
   find: { open: boolean; hasQuery: boolean };
+  layoutMode: "single" | "split";
+  openTabCount: number;
 }
 
 /**
@@ -132,6 +143,11 @@ export const COMMANDS: readonly CommandDescriptor[] = [
   { id: "find.next", title: "Find Next", keywords: ["find", "next", "search"], accelerator: "CmdOrCtrl+G", menu: "view" },
   { id: "find.previous", title: "Find Previous", keywords: ["find", "previous", "search"], accelerator: "CmdOrCtrl+Shift+G", menu: "view" },
   { id: "find.close", title: "Close Find", keywords: ["find", "close", "search"], accelerator: null, menu: null },
+  { id: "view.split", title: "Split View", keywords: ["split", "view", "pane", "side", "columns"], accelerator: "CmdOrCtrl+\\", menu: "view" },
+  { id: "view.splitChoose", title: "Split View with Tab…", keywords: ["split", "view", "pane", "choose", "tab", "columns"], accelerator: null, menu: "view" },
+  { id: "view.unsplit", title: "Exit Split View", keywords: ["unsplit", "single", "exit", "split", "pane"], accelerator: "CmdOrCtrl+Shift+\\", menu: "view" },
+  { id: "view.focusOtherPane", title: "Focus Other Pane", keywords: ["focus", "pane", "other", "split", "switch"], accelerator: "CmdOrCtrl+Alt+Right", menu: "view" },
+  { id: "view.swapPanes", title: "Swap Panes", keywords: ["swap", "panes", "split", "exchange", "sides"], accelerator: "CmdOrCtrl+Alt+S", menu: "view" },
 ];
 
 /**
@@ -142,11 +158,11 @@ export const COMMANDS: readonly CommandDescriptor[] = [
  * `settings.openHistory`, `downloads.open`, `downloads.openFolder`.
  * `downloads.clearFinished` needs at least one finished download
  * (`hasFinishedDownload`). Every other
- * `tab.*` needs an active tab — `tab.close`, `tab.copy-url`, `tab.moveToTop`,
+ * `tab.*` needs an active tab — `tab.copy-url`, `tab.moveToTop`,
  * `tab.moveToBottom`, and `tab.reload` need nothing more; on top of that
- * `tab.pin` needs it unpinned,
- * `tab.unpin` pinned, `tab.archive` unpinned, and `tab.back` / `tab.forward`
- * the matching history flag. `space.delete` needs more than one space.
+ * `tab.close` needs it unpinned (a pinned tab cannot be closed), `tab.pin` needs
+ * it unpinned, `tab.unpin` pinned, `tab.archive` unpinned, and `tab.back` /
+ * `tab.forward` the matching history flag. `space.delete` needs more than one space.
  * `blocking.allowSite` needs an active tab with an http(s) `siteHost` that is
  * not yet allowlisted; `blocking.disallowSite` needs an active tab whose site
  * is allowlisted; `settings.close` needs the settings view open. `zoom.in` and
@@ -155,6 +171,9 @@ export const COMMANDS: readonly CommandDescriptor[] = [
  * is nothing to reset when the host is already at actual size). `find.open`
  * needs an active tab; `find.next` and `find.previous` need the find session
  * open with a non-empty query (`context.find.open && context.find.hasQuery`).
+ * `view.split` and `view.splitChoose` need a single-pane layout with at least two
+ * open tabs to split against; `view.unsplit`, `view.focusOtherPane`, and
+ * `view.swapPanes` need the layout to already be `"split"`.
  */
 export function isCommandEnabled(id: CommandId, context: CommandContext): boolean {
   switch (id) {
@@ -187,12 +206,13 @@ export function isCommandEnabled(id: CommandId, context: CommandContext): boolea
       return context.activeTab !== null && context.activeTab.siteAllowlisted;
     case "settings.close":
       return context.settingsOpen;
-    case "tab.close":
     case "tab.copy-url":
     case "tab.moveToTop":
     case "tab.moveToBottom":
     case "tab.reload":
       return context.activeTab !== null;
+    case "tab.close":
+      return context.activeTab !== null && !context.activeTab.pinned;
     case "tab.pin":
       return context.activeTab !== null && !context.activeTab.pinned;
     case "tab.unpin":
@@ -219,6 +239,13 @@ export function isCommandEnabled(id: CommandId, context: CommandContext): boolea
       return context.find.open && context.find.hasQuery;
     case "find.close":
       return context.find.open;
+    case "view.split":
+    case "view.splitChoose":
+      return context.layoutMode === "single" && context.openTabCount >= 2;
+    case "view.unsplit":
+    case "view.focusOtherPane":
+    case "view.swapPanes":
+      return context.layoutMode === "split";
     default: {
       const exhaustive: never = id;
       return exhaustive;

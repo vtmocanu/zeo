@@ -15,6 +15,10 @@ import type { Suggestion } from "./suggest.js";
  *   reads "Search history", the typed text filters recent/matching visits, there
  *   is no text (navigate/search) action row, and accepting a row navigates the
  *   active tab to that url.
+ * - `"split"` opens the bar to pick the second pane for a split: the typed text
+ *   filters the active space's OTHER open tabs (the active tab excluded), there is
+ *   no text (navigate/search) action row, and accepting a tab row fills the
+ *   second pane, entering the split against that tab.
  * - `"downloads"` opens the bar to filter the download list: it opens with
  *   `initialText: ""`, the input placeholder reads "Filter downloads", the typed
  *   text is a filter only (no navigate/search row and no command row), and
@@ -26,6 +30,7 @@ export type CommandBarMode =
   | "new-tab"
   | "commands"
   | "history"
+  | "split"
   | "downloads";
 
 /**

@@ -40,6 +40,8 @@ export type {
   SpaceContextMenuItem,
   SpaceContextMenuResult,
   SpaceMenuAction,
+  DividerGeometry,
+  SplitViewApi,
 } from "./ipc.js";
 export { IPC } from "./ipc.js";
 export type { BlockingState } from "./blocking.js";
@@ -134,4 +136,22 @@ export {
   FIND_BAR_INSET,
   FIND_BAR_TOP,
   findBarBounds,
+  DIVIDER_WIDTH,
+  splitPaneBounds,
 } from "./layout.js";
+export {
+  SINGLE_LAYOUT,
+  DEFAULT_SPLIT_RATIO,
+  MIN_SPLIT_RATIO,
+  MAX_SPLIT_RATIO,
+  clampRatio,
+  enterSplit,
+  unsplit,
+  swapPanes,
+  setRatio,
+  focusOtherPane,
+  reconcileLayout,
+  focusedPaneTab,
+  paneOf,
+} from "./split-view.js";
+export type { PaneSide, SingleLayout, SplitLayout, WindowLayout } from "./split-view.js";

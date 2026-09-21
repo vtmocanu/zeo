@@ -9,9 +9,27 @@ milestone, a minor bump only for very large breakthroughs.
 
 ## [Unreleased]
 
+### Fixed
+
+- Pinned tabs are no longer destroyed by `Cmd+W`. Closing a pinned tab is now a
+  no-op — the Close Tab command, the tab context-menu's Close item, and the
+  sidebar row's close button are all disabled or hidden while a tab is pinned,
+  matching the existing rule that pinned tabs are exempt from archiving and the
+  idle auto-sweep. Unpin a tab first to close it.
+
+- Sidebar: the pinned tabs section now stays fixed (sticky) at the top of the
+  scroll area instead of scrolling out of view with a long unpinned list.
+
 ## [0.0.21] - 2026-09-21
 
 ### Added
+
+- Split view: press `Cmd+\` to show two tabs of the active space side by side,
+  separated by a draggable divider (ratio clamped to 20–80%). `Cmd+Alt+Right`
+  moves keyboard focus between panes, `Cmd+Alt+S` swaps them, and `Cmd+Shift+\`
+  (or closing a paned tab) returns to a single view. "Split View with Tab…" opens
+  the command bar to pick which tab fills the second pane. The split (panes and
+  divider ratio) is persisted and restored across relaunch.
 
 - Tab ordering: "Move Tab to Top" and "Move Tab to Bottom" reorder the active
   tab to the first or last position of its own group (pinned or unpinned). They

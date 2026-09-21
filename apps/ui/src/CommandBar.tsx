@@ -275,9 +275,11 @@ export function CommandBar() {
             ? "Run a command"
             : mode === "history"
               ? "Search history"
-              : mode === "downloads"
-                ? "Filter downloads"
-                : "Search or enter address"
+              : mode === "split"
+                ? "Split with tab…"
+                : mode === "downloads"
+                  ? "Filter downloads"
+                  : "Search or enter address"
         }
         spellCheck={false}
         autoComplete="off"

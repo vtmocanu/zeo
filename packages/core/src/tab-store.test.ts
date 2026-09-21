@@ -581,6 +581,17 @@ describe("TabStore.close (MRU activation)", () => {
     expect(store.archived().map((t) => t.id)).toEqual(["t1"]);
   });
 
+  test("closing a pinned tab is a no-op (pinned tabs stay open)", () => {
+    const store = makeStore();
+    store.create({ url: "https://a.test" }); // t1
+    store.create({ url: "https://b.test" }); // t2 (active)
+    store.pin("t2"); // t2 is the pinned, active tab
+
+    store.close("t2"); // must NOT destroy the pinned tab
+    expect(store.list().map((t) => t.id)).toContain("t2");
+    expect(store.activeTabId).toBe("t2"); // active pointer untouched
+  });
+
   test("the implicitly activated MRU successor is stamped as an activation", () => {
     const store = makeStore();
     store.create({ url: "https://a.test" });
