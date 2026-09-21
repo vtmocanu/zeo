@@ -2735,11 +2735,18 @@ function createWindow(seed: boolean): void {
     win = null;
   });
 
-  // Seed the first tab into the active (seeded "Personal") space only on a fresh
-  // launch with no open tab. A restored or re-activated launch keeps its state
-  // and does not seed. Views are created lazily: only the active tab's view is
-  // materialized now; every other tab gets its view on first activation.
-  if (seed && store.allOpenTabs().length === 0) {
+  // Seed the first tab into the active (seeded "Personal") space only on a truly
+  // empty store — no open AND no archived tabs. A restored or re-activated launch
+  // keeps its state and does not seed (the persisted-DB check drives `seed`, and
+  // `hasData()` already counts archived rows), so an archived-only session shows
+  // the empty-with-archive state rather than a fresh tab seeded over the archive.
+  // Views are created lazily: only the active tab's view is materialized now;
+  // every other tab gets its view on first activation.
+  if (
+    seed &&
+    store.allOpenTabs().length === 0 &&
+    store.allArchivedTabs().length === 0
+  ) {
     store.create({ url: DEFAULT_URL, title: titleForUrl(DEFAULT_URL) });
   }
   ensureActiveView();
