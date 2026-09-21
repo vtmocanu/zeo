@@ -9,6 +9,13 @@ milestone, a minor bump only for very large breakthroughs.
 
 ## [Unreleased]
 
+### Fixed
+
+- Split view: a split that collapses back to a single view during a session
+  (closing, removing or archiving a paned tab, activating a non-paned tab,
+  creating a tab, or switching spaces) is now persisted immediately, so quitting
+  no longer leaves stale split metadata in the database.
+
 ## [0.0.21] - 2026-09-21
 
 ### Added

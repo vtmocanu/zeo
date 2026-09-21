@@ -595,6 +595,25 @@ test.describe("PRD 7.1 split view", () => {
           return zeo.tabs.close(id);
         }, right);
         expect((await splitState(first.sidebar)).mode).toBe("single");
+        // #140: the collapse must be PERSISTED immediately, not merely held in
+        // memory. Read the RAW persisted layout (main's readWindowLayout, which
+        // reads meta.layoutMode + the pane-id columns WITHOUT reconciling) from
+        // launch #1's still-open main, where the synchronous persist has already
+        // run. Reading it here directly pins the runtime persist the bug is about
+        // and stays a valid guard regardless of startup behavior — a launch-#2 read
+        // would silently re-mask this bug if startup ever began persisting.
+        const persistedInLaunch1 = await first.app.evaluate(() => {
+          const read = (globalThis as { __zeoPersistedLayout?: () => unknown })
+            .__zeoPersistedLayout;
+          if (read === undefined) {
+            throw new Error("ZEO_E2E __zeoPersistedLayout hook was not installed");
+          }
+          return read() as { mode: string };
+        });
+        // readWindowLayout returns a split ONLY when layoutMode==='split' AND both
+        // pane-id columns are non-null, so a 'single' here proves the collapse (the
+        // 'single' mode with cleared pane columns) reached SQLite.
+        expect(persistedInLaunch1.mode).toBe("single");
         await waitForDebouncedSave();
       } finally {
         await first.app.close();

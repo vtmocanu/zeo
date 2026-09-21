@@ -179,3 +179,21 @@ export function paneOf(layout: WindowLayout, tabId: string): PaneSide | null {
   }
   return null;
 }
+
+/**
+ * Structural equality of two window layouts: two singles are always equal; a
+ * single and a split never are; two splits match only when their pane tab ids,
+ * ratio, and focused pane all match. Lets main decide whether a reconcile
+ * produced a change worth persisting.
+ */
+export function layoutsEqual(a: WindowLayout, b: WindowLayout): boolean {
+  if (a.mode === "single" || b.mode === "single") {
+    return a.mode === b.mode;
+  }
+  return (
+    a.left === b.left &&
+    a.right === b.right &&
+    a.ratio === b.ratio &&
+    a.focused === b.focused
+  );
+}

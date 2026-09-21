@@ -153,5 +153,6 @@ export {
   reconcileLayout,
   focusedPaneTab,
   paneOf,
+  layoutsEqual,
 } from "./split-view.js";
 export type { PaneSide, SingleLayout, SplitLayout, WindowLayout } from "./split-view.js";
