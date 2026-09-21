@@ -6,6 +6,7 @@ import {
   formatAccelerator,
 } from "./commands.js";
 import type { CommandId, CommandContext } from "./commands.js";
+import { DEFAULT_ZOOM_FACTOR } from "./zoom.js";
 
 const ALL_IDS: CommandId[] = [
   "tab.new",
@@ -14,6 +15,8 @@ const ALL_IDS: CommandId[] = [
   "tab.unpin",
   "tab.archive",
   "tab.copy-url",
+  "tab.moveToTop",
+  "tab.moveToBottom",
   "tab.reload",
   "tab.back",
   "tab.forward",
@@ -29,20 +32,47 @@ const ALL_IDS: CommandId[] = [
   "settings.close",
   "history.open",
   "history.clear",
+  "zoom.in",
+  "zoom.out",
+  "zoom.reset",
   "settings.openGeneral",
   "settings.openProfiles",
   "settings.openHistory",
+  "downloads.open",
+  "downloads.openFolder",
+  "downloads.clearFinished",
+  "find.open",
+  "find.next",
+  "find.previous",
+  "find.close",
+  "quickBrowse.promote",
+  "quickBrowse.promoteToSpace",
+  "quickBrowse.dismiss",
+  "quickBrowse.openInTab",
+  "browser.setDefault",
+  "view.split",
+  "view.splitChoose",
+  "view.unsplit",
+  "view.focusOtherPane",
+  "view.swapPanes",
 ];
 
 /**
- * Builds a command context, defaulting to no active tab, a single space, and a
- * closed settings view.
+ * Builds a command context, defaulting to no active tab, a single space, a
+ * closed settings view, a closed quick-browse window, no finished download, a
+ * closed find session with no query, a single-pane layout, and a single open
+ * tab.
  */
 function context(partial: Partial<CommandContext> = {}): CommandContext {
   return {
     activeTab: partial.activeTab === undefined ? null : partial.activeTab,
     spaceCount: partial.spaceCount ?? 1,
     settingsOpen: partial.settingsOpen ?? false,
+    quickBrowseOpen: partial.quickBrowseOpen ?? false,
+    hasFinishedDownload: partial.hasFinishedDownload ?? false,
+    find: partial.find ?? { open: false, hasQuery: false },
+    layoutMode: partial.layoutMode ?? "single",
+    openTabCount: partial.openTabCount ?? 1,
   };
 }
 
@@ -59,6 +89,7 @@ function activeTab(
     canGoForward: false,
     siteHost: "example.com",
     siteAllowlisted: false,
+    zoomFactor: DEFAULT_ZOOM_FACTOR,
     ...over,
   };
 }
@@ -140,6 +171,65 @@ describe("history commands", () => {
   });
 });
 
+describe("downloads commands", () => {
+  test("downloads.open is a view command with the Cmd+Shift+J accelerator", () => {
+    const entry = COMMANDS.find((c) => c.id === "downloads.open");
+    expect(entry).toBeDefined();
+    expect(entry?.menu).toBe("view");
+    expect(entry?.accelerator).toBe("CmdOrCtrl+Shift+J");
+  });
+
+  test("downloads.openFolder is a view command with no accelerator", () => {
+    const entry = COMMANDS.find((c) => c.id === "downloads.openFolder");
+    expect(entry).toBeDefined();
+    expect(entry?.menu).toBe("view");
+    expect(entry?.accelerator).toBeNull();
+  });
+
+  test("downloads.clearFinished is a view command with no accelerator", () => {
+    const entry = COMMANDS.find((c) => c.id === "downloads.clearFinished");
+    expect(entry).toBeDefined();
+    expect(entry?.menu).toBe("view");
+    expect(entry?.accelerator).toBeNull();
+  });
+
+  test("downloads.open and downloads.openFolder are always enabled", () => {
+    for (const id of ["downloads.open", "downloads.openFolder"] as const) {
+      expect(isCommandEnabled(id, context({ activeTab: null, spaceCount: 1 }))).toBe(true);
+      expect(isCommandEnabled(id, context({ activeTab: activeTab(), spaceCount: 3 }))).toBe(true);
+    }
+  });
+
+  test("downloads.clearFinished is gated on a finished download existing", () => {
+    expect(isCommandEnabled("downloads.clearFinished", context({ hasFinishedDownload: true }))).toBe(true);
+    expect(isCommandEnabled("downloads.clearFinished", context({ hasFinishedDownload: false }))).toBe(false);
+  });
+});
+
+describe("move-tab commands", () => {
+  const moveIds = ["tab.moveToTop", "tab.moveToBottom"] as const;
+
+  test("each is registered exactly once as a tabs command with no accelerator", () => {
+    for (const id of moveIds) {
+      const matches = COMMANDS.filter((c) => c.id === id);
+      expect(matches).toHaveLength(1);
+      expect(matches[0]?.menu).toBe("tabs");
+      expect(matches[0]?.accelerator).toBeNull();
+    }
+  });
+
+  test("neither title nor keywords contain the substring 'pin'", () => {
+    for (const id of moveIds) {
+      const entry = COMMANDS.find((c) => c.id === id);
+      expect(entry).toBeDefined();
+      expect(entry?.title.toLowerCase()).not.toContain("pin");
+      for (const keyword of entry?.keywords ?? []) {
+        expect(keyword).not.toContain("pin");
+      }
+    }
+  });
+});
+
 describe("settings section-open commands", () => {
   const sectionIds = [
     "settings.openGeneral",
@@ -165,14 +255,25 @@ describe("settings section-open commands", () => {
 });
 
 describe("isCommandEnabled — active-tab-gated commands", () => {
-  test("tab.close needs an active tab", () => {
-    expect(isCommandEnabled("tab.close", context({ activeTab: activeTab() }))).toBe(true);
+  test("tab.close needs an unpinned active tab", () => {
+    expect(isCommandEnabled("tab.close", context({ activeTab: activeTab({ pinned: false }) }))).toBe(true);
+    expect(isCommandEnabled("tab.close", context({ activeTab: activeTab({ pinned: true }) }))).toBe(false);
     expect(isCommandEnabled("tab.close", context({ activeTab: null }))).toBe(false);
   });
 
   test("tab.copy-url needs an active tab", () => {
     expect(isCommandEnabled("tab.copy-url", context({ activeTab: activeTab() }))).toBe(true);
     expect(isCommandEnabled("tab.copy-url", context({ activeTab: null }))).toBe(false);
+  });
+
+  test("tab.moveToTop needs an active tab", () => {
+    expect(isCommandEnabled("tab.moveToTop", context({ activeTab: activeTab() }))).toBe(true);
+    expect(isCommandEnabled("tab.moveToTop", context({ activeTab: null }))).toBe(false);
+  });
+
+  test("tab.moveToBottom needs an active tab", () => {
+    expect(isCommandEnabled("tab.moveToBottom", context({ activeTab: activeTab() }))).toBe(true);
+    expect(isCommandEnabled("tab.moveToBottom", context({ activeTab: null }))).toBe(false);
   });
 
   test("tab.reload needs an active tab", () => {
@@ -257,6 +358,180 @@ describe("isCommandEnabled — allowlist and settings commands", () => {
   });
 });
 
+describe("zoom commands", () => {
+  test("all three are view-menu commands with the ladder accelerators", () => {
+    for (const [id, accelerator] of [
+      ["zoom.in", "CmdOrCtrl+="],
+      ["zoom.out", "CmdOrCtrl+-"],
+      ["zoom.reset", "CmdOrCtrl+0"],
+    ] as const) {
+      const entry = COMMANDS.find((c) => c.id === id);
+      expect(entry).toBeDefined();
+      expect(entry?.menu).toBe("view");
+      expect(entry?.accelerator).toBe(accelerator);
+    }
+  });
+
+  test("zoom.in and zoom.out need an active tab with a non-null http(s) siteHost", () => {
+    for (const id of ["zoom.in", "zoom.out"] as const) {
+      expect(isCommandEnabled(id, context({ activeTab: activeTab({ siteHost: "example.com" }) }))).toBe(true);
+      expect(isCommandEnabled(id, context({ activeTab: activeTab({ siteHost: null }) }))).toBe(false);
+      expect(isCommandEnabled(id, context({ activeTab: null }))).toBe(false);
+    }
+  });
+
+  test("zoom.in and zoom.out ignore the current factor", () => {
+    for (const id of ["zoom.in", "zoom.out"] as const) {
+      expect(isCommandEnabled(id, context({ activeTab: activeTab({ zoomFactor: 1.0 }) }))).toBe(true);
+      expect(isCommandEnabled(id, context({ activeTab: activeTab({ zoomFactor: 1.25 }) }))).toBe(true);
+    }
+  });
+
+  test("zoom.reset toggles on the active host's factor crossing 1.0", () => {
+    // Disabled at the default factor: nothing to reset.
+    expect(
+      isCommandEnabled("zoom.reset", context({ activeTab: activeTab({ siteHost: "example.com", zoomFactor: 1.0 }) })),
+    ).toBe(false);
+    // Enabled once the host sits at a non-default factor.
+    expect(
+      isCommandEnabled("zoom.reset", context({ activeTab: activeTab({ siteHost: "example.com", zoomFactor: 1.25 }) })),
+    ).toBe(true);
+    // Disabled again when there is no http(s) host, regardless of the factor.
+    expect(
+      isCommandEnabled("zoom.reset", context({ activeTab: activeTab({ siteHost: null, zoomFactor: 1.25 }) })),
+    ).toBe(false);
+    expect(isCommandEnabled("zoom.reset", context({ activeTab: null }))).toBe(false);
+  });
+});
+
+describe("find commands", () => {
+  const findIds = ["find.open", "find.next", "find.previous"] as const;
+
+  test("each is registered exactly once as a view command with its accelerator", () => {
+    for (const [id, accelerator] of [
+      ["find.open", "CmdOrCtrl+F"],
+      ["find.next", "CmdOrCtrl+G"],
+      ["find.previous", "CmdOrCtrl+Shift+G"],
+    ] as const) {
+      const matches = COMMANDS.filter((c) => c.id === id);
+      expect(matches).toHaveLength(1);
+      expect(matches[0]?.menu).toBe("view");
+      expect(matches[0]?.accelerator).toBe(accelerator);
+    }
+  });
+
+  test("the three accelerators are unique across the whole registry", () => {
+    for (const id of findIds) {
+      const accelerator = COMMANDS.find((c) => c.id === id)?.accelerator;
+      expect(COMMANDS.filter((c) => c.accelerator === accelerator)).toHaveLength(1);
+    }
+  });
+
+  test("find.open is enabled with an active tab and disabled with none", () => {
+    expect(isCommandEnabled("find.open", context({ activeTab: activeTab() }))).toBe(true);
+    expect(isCommandEnabled("find.open", context({ activeTab: null }))).toBe(false);
+  });
+
+  test("find.close is registered once with no accelerator and no menu", () => {
+    const matches = COMMANDS.filter((c) => c.id === "find.close");
+    expect(matches).toHaveLength(1);
+    expect(matches[0]?.menu).toBeNull();
+    expect(matches[0]?.accelerator).toBeNull();
+  });
+
+  test("find.close needs the find session open", () => {
+    expect(isCommandEnabled("find.close", context({ find: { open: true, hasQuery: false } }))).toBe(true);
+    expect(isCommandEnabled("find.close", context({ find: { open: true, hasQuery: true } }))).toBe(true);
+    expect(isCommandEnabled("find.close", context({ find: { open: false, hasQuery: false } }))).toBe(false);
+  });
+
+  test("find.next and find.previous need find open with a query", () => {
+    for (const id of ["find.next", "find.previous"] as const) {
+      expect(isCommandEnabled(id, context({ find: { open: true, hasQuery: true } }))).toBe(true);
+      expect(isCommandEnabled(id, context({ find: { open: true, hasQuery: false } }))).toBe(false);
+      expect(isCommandEnabled(id, context({ find: { open: false, hasQuery: true } }))).toBe(false);
+      expect(isCommandEnabled(id, context({ find: { open: false, hasQuery: false } }))).toBe(false);
+    }
+  });
+});
+
+describe("quick-browse and set-default commands", () => {
+  const quickBrowseIds = [
+    "quickBrowse.promote",
+    "quickBrowse.promoteToSpace",
+    "quickBrowse.dismiss",
+    "quickBrowse.openInTab",
+  ] as const;
+  const newIds = [...quickBrowseIds, "browser.setDefault"] as const;
+
+  test("the five new ids are present, unique, and have no accelerator or menu", () => {
+    for (const id of newIds) {
+      const matches = COMMANDS.filter((c) => c.id === id);
+      expect(matches).toHaveLength(1);
+      expect(matches[0]?.accelerator).toBeNull();
+      expect(matches[0]?.menu).toBeNull();
+    }
+  });
+
+  test("the four quickBrowse.* commands are enabled only when quickBrowseOpen is true", () => {
+    for (const id of quickBrowseIds) {
+      expect(isCommandEnabled(id, context({ quickBrowseOpen: true }))).toBe(true);
+      // Disabled when closed, including with no active tab.
+      expect(isCommandEnabled(id, context({ quickBrowseOpen: false }))).toBe(false);
+      expect(
+        isCommandEnabled(id, context({ quickBrowseOpen: false, activeTab: null })),
+      ).toBe(false);
+    }
+  });
+
+  test("browser.setDefault is always enabled", () => {
+    expect(isCommandEnabled("browser.setDefault", context({ quickBrowseOpen: true }))).toBe(true);
+    expect(isCommandEnabled("browser.setDefault", context({ quickBrowseOpen: false }))).toBe(true);
+    expect(
+      isCommandEnabled("browser.setDefault", context({ quickBrowseOpen: false, activeTab: null })),
+    ).toBe(true);
+  });
+});
+
+describe("split-view commands", () => {
+  const splitPair = ["view.split", "view.splitChoose"] as const;
+  const inSplit = ["view.unsplit", "view.focusOtherPane", "view.swapPanes"] as const;
+
+  test("each is registered exactly once in the view menu", () => {
+    for (const id of [...splitPair, ...inSplit]) {
+      const matches = COMMANDS.filter((c) => c.id === id);
+      expect(matches).toHaveLength(1);
+      expect(matches[0]?.menu).toBe("view");
+    }
+  });
+
+  test("the split/unsplit accelerators are a single backslash and its shifted form", () => {
+    expect(COMMANDS.find((c) => c.id === "view.split")?.accelerator).toBe("CmdOrCtrl+\\");
+    expect(COMMANDS.find((c) => c.id === "view.unsplit")?.accelerator).toBe("CmdOrCtrl+Shift+\\");
+    expect(COMMANDS.find((c) => c.id === "view.splitChoose")?.accelerator).toBeNull();
+  });
+
+  test("view.split and view.splitChoose need a single layout with at least two open tabs", () => {
+    for (const id of splitPair) {
+      // Enabled only when single AND openTabCount >= 2.
+      expect(isCommandEnabled(id, context({ layoutMode: "single", openTabCount: 2 }))).toBe(true);
+      // The 1-vs-2 boundary: a single open tab has nothing to split against.
+      expect(isCommandEnabled(id, context({ layoutMode: "single", openTabCount: 1 }))).toBe(false);
+      // Already split: cannot split again.
+      expect(isCommandEnabled(id, context({ layoutMode: "split", openTabCount: 2 }))).toBe(false);
+      expect(isCommandEnabled(id, context({ layoutMode: "split", openTabCount: 5 }))).toBe(false);
+    }
+  });
+
+  test("view.unsplit, view.focusOtherPane, view.swapPanes need a split layout", () => {
+    for (const id of inSplit) {
+      expect(isCommandEnabled(id, context({ layoutMode: "split", openTabCount: 2 }))).toBe(true);
+      expect(isCommandEnabled(id, context({ layoutMode: "single", openTabCount: 2 }))).toBe(false);
+      expect(isCommandEnabled(id, context({ layoutMode: "single", openTabCount: 1 }))).toBe(false);
+    }
+  });
+});
+
 describe("isCommandEnabled — no active tab yields exactly the expected set", () => {
   function enabledIds(ctx: CommandContext): CommandId[] {
     return ALL_IDS.filter((id) => isCommandEnabled(id, ctx)).sort();
@@ -264,13 +539,13 @@ describe("isCommandEnabled — no active tab yields exactly the expected set", (
 
   test("with one space: only the always-enabled commands", () => {
     expect(enabledIds(context({ activeTab: null, spaceCount: 1 }))).toEqual(
-      ["bar.open-commands", "bar.open-location", "blocking.toggle", "history.clear", "history.open", "settings.open", "settings.openGeneral", "settings.openHistory", "settings.openProfiles", "space.new", "space.rename", "tab.new"].sort(),
+      ["bar.open-commands", "bar.open-location", "blocking.toggle", "browser.setDefault", "downloads.open", "downloads.openFolder", "history.clear", "history.open", "settings.open", "settings.openGeneral", "settings.openHistory", "settings.openProfiles", "space.new", "space.rename", "tab.new"].sort(),
     );
   });
 
   test("with more than one space: the always-enabled commands plus space.delete", () => {
     expect(enabledIds(context({ activeTab: null, spaceCount: 2 }))).toEqual(
-      ["bar.open-commands", "bar.open-location", "blocking.toggle", "history.clear", "history.open", "settings.open", "settings.openGeneral", "settings.openHistory", "settings.openProfiles", "space.delete", "space.new", "space.rename", "tab.new"].sort(),
+      ["bar.open-commands", "bar.open-location", "blocking.toggle", "browser.setDefault", "downloads.open", "downloads.openFolder", "history.clear", "history.open", "settings.open", "settings.openGeneral", "settings.openHistory", "settings.openProfiles", "space.delete", "space.new", "space.rename", "tab.new"].sort(),
     );
   });
 });

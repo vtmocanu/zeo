@@ -15,6 +15,15 @@ import type { AddressInfo } from "node:net";
 // the registry itself rather than hard-coded literals, so a registry edit that
 // changes a shortcut or a command's menu is caught here without touching the test.
 import { commandBarBounds, COMMANDS } from "@zeo/core";
+// PRD 9.1 — shared view-URL poll helpers (VIEW_POLL_TIMEOUT_MS-bounded), so
+// every WebContentsView URL/partition/existence/absence wait in this spec goes
+// through one module rather than an inline `getAllWebContents()` poll.
+import {
+  loadViewUrl,
+  waitForViewGone,
+  waitForViewOnPartition,
+  waitForViewUrl,
+} from "./helpers/view";
 
 // Absolute path to the built Electron main entry, resolved from this test file
 // (e2e is ESM, so no __dirname). Layout: e2e/tests/app.spec.ts -> repo root is
@@ -88,6 +97,7 @@ interface ZeoBridge {
     create(url?: string): Promise<BridgeTab>;
     close(id: string): Promise<void>;
     pin(id: string): Promise<void>;
+    unpin(id: string): Promise<void>;
     archive(id: string): Promise<void>;
     restore(id: string): Promise<void>;
     remove(id: string): Promise<void>;
@@ -275,6 +285,18 @@ async function commandBarWindow(app: ElectronApplication): Promise<Page> {
 }
 
 /**
+ * Canonicalize a stored tab url for equality comparison so a pre-normalization
+ * snapshot (e.g. "https://example.com", captured before the view's did-navigate
+ * mirrors the live "https://example.com/" into the store) compares equal to the
+ * settled value. Chromium normalizes a bare authority to a trailing-slash path on
+ * commit, and the main process mirrors that live url into the store asynchronously,
+ * so a raw string compare across two reads is timing-flaky (issue #144). Passes
+ * null through so an absent active tab still compares by identity.
+ */
+const canonicalTabUrl = (u: string | null): string | null =>
+  u === null ? null : new URL(u).href;
+
+/**
  * Read the NATIVE geometry the main process gave the command-bar overlay: the
  * window's content size plus the overlay `WebContentsView`'s own bounds height.
  * Runs in the MAIN process via `app.evaluate` (the renderer cannot read its own
@@ -386,6 +408,34 @@ async function startLocalPageServer(): Promise<LocalPageServer> {
         server.close((err) => (err ? reject(err) : resolve()));
       }),
   };
+}
+
+/**
+ * Make the active tab's command-context host a real, committed http(s) host so
+ * the host-dependent command rows (blocking.allowSite, zoom.in, zoom.out) are
+ * enabled when the tests below open commands mode. `commandContextOf` derives
+ * `siteHost` from the tab view's LIVE URL; the seeded example.com tab cannot be
+ * relied on offline (its load fails and its view URL may never resolve to a
+ * host), so command enablement would flake. Create a FRESH tab at a loopback page
+ * that commits deterministically offline — createTab activates it, and a
+ * single-entry tab keeps canGoBack false so tab.back is NOT enabled. Mirrors the
+ * loopback-commit pattern of the enablement-refresh test; the committed URL
+ * persists after the server closes, so the host stays live for the rest of the
+ * test.
+ */
+async function waitForCommandHostReady(app: ElectronApplication, page: Page): Promise<void> {
+  const server = await startLocalPageServer();
+  try {
+    const token = "zeo-cmdhost-probe";
+    const pageUrl = `${server.base}/page.html?probe=${token}`;
+    await page.evaluate(async (url) => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.tabs.create(url);
+    }, pageUrl);
+    await waitForViewUrl(app, token);
+  } finally {
+    await server.close();
+  }
 }
 
 test.describe("zeo desktop app", () => {
@@ -719,6 +769,71 @@ test.describe("zeo desktop app", () => {
     await expect(pinnedSection.getByTestId("tab-item")).toHaveCount(1);
   });
 
+  // Issue #36 — the pinned section stays fixed at the top of the scroll area even
+  // when a long unpinned list is scrolled to the bottom. Guards the BEHAVIOR, not
+  // just the CSS: we overflow the `.sidebar__sections` scrollport, scroll it to the
+  // end, and assert the pinned section's viewport top still tracks the container's
+  // top. Regressing to a non-sticky rule would let it scroll out of view here.
+  test("the pinned section stays stuck to the top when the unpinned list overflows", async () => {
+    // Pin the seeded/active tab (mirrors the neighbor test) so a pinned section
+    // exists to stay put.
+    const targetId = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      const state = await zeo.tabs.list();
+      return state.activeTabId ?? state.tabs[0].id;
+    });
+    await sidebar.evaluate(async (id) => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.tabs.pin(id);
+    }, targetId);
+    await expect(sidebar.getByTestId("pinned-section")).toBeVisible();
+
+    // Create enough UNPINNED tabs to overflow the scrollport. 30 rows comfortably
+    // exceed the default 800px-tall test window's sidebar; the overflow assertion
+    // below fails loudly if a future layout change makes that untrue. Use tiny
+    // `data:` URLs (NOT network — the CI docker sidecar is offline): a `data:` load
+    // commits instantly and each row renders from the broadcast state regardless of
+    // navigation completion, so this stays fast and deterministic.
+    const unpinnedCount = 30;
+    await sidebar.evaluate(async (count) => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      for (let i = 0; i < count; i += 1) {
+        await zeo.tabs.create(`data:text/html,<title>row-${i}</title>`);
+      }
+    }, unpinnedCount);
+    // Wait for the rows to render before measuring layout.
+    await expect(sidebar.getByTestId("unpinned-section").getByTestId("tab-item")).toHaveCount(
+      unpinnedCount,
+    );
+
+    // Scroll the container to the bottom and measure the sticky section in one
+    // synchronous evaluate: setting `scrollTop` and reading `getBoundingClientRect`
+    // both flush layout, so a single pass is stable (no polling needed).
+    const measured = await sidebar.evaluate(() => {
+      const sections = document.querySelector(".sidebar__sections");
+      const pinned = document.querySelector(".sidebar__section--pinned");
+      if (sections === null || pinned === null) {
+        throw new Error("sidebar sections or pinned section not found");
+      }
+      const overflowed = sections.scrollHeight > sections.clientHeight;
+      sections.scrollTop = sections.scrollHeight;
+      return {
+        overflowed,
+        position: getComputedStyle(pinned).position,
+        containerTop: sections.getBoundingClientRect().top,
+        pinnedTop: pinned.getBoundingClientRect().top,
+      };
+    });
+
+    // The list really overflowed (otherwise there is nothing to scroll and the
+    // test would pass vacuously), the section is `sticky`, and after scrolling to
+    // the bottom the pinned section's top still sits at the container's top. The
+    // 2px tolerance absorbs subpixel/border rounding.
+    expect(measured.overflowed).toBe(true);
+    expect(measured.position).toBe("sticky");
+    expect(Math.abs(measured.pinnedTop - measured.containerTop)).toBeLessThanOrEqual(2);
+  });
+
   // Case (d): the renderer's state carries the archived tab in `archived`.
   test("archiving a tab surfaces it in the broadcast state's archived list", async () => {
     // Create a dedicated non-pinned tab and archive it, then read the state via
@@ -894,6 +1009,8 @@ test.describe("zeo desktop app", () => {
     expect(res.tabId).toBe(id);
     expect(res.items.map((item) => item.id)).toEqual([
       "pin",
+      "moveToTop",
+      "moveToBottom",
       "archive",
       "close",
       "copyUrl",
@@ -903,6 +1020,10 @@ test.describe("zeo desktop app", () => {
     expect(byId.get("archive")?.enabled).toBe(true);
     expect(byId.get("close")?.enabled).toBe(true);
     expect(byId.get("copyUrl")?.enabled).toBe(true);
+    // Issue #135 — the seeded tab is alone in its group (N=1), so both move
+    // items are present but disabled.
+    expect(byId.get("moveToTop")).toMatchObject({ id: "moveToTop", label: "Move to Top", enabled: false });
+    expect(byId.get("moveToBottom")).toMatchObject({ id: "moveToBottom", label: "Move to Bottom", enabled: false });
 
     await sidebar.evaluate(async (tabId) => {
       delete (globalThis as unknown as { __zeoLastContextMenu?: BridgeMenuResult })
@@ -913,7 +1034,7 @@ test.describe("zeo desktop app", () => {
     await row.click({ button: "right" });
     await expect
       .poll(async () => (await lastMenu())?.items.map((item) => item.id) ?? null)
-      .toEqual(["unpin", "archive", "close", "copyUrl"]);
+      .toEqual(["unpin", "moveToTop", "moveToBottom", "archive", "close", "copyUrl"]);
 
     const pinnedRes = (await lastMenu()) as BridgeMenuResult;
     expect(pinnedRes.tabId).toBe(id);
@@ -921,6 +1042,173 @@ test.describe("zeo desktop app", () => {
     expect(pinnedById.get("unpin")).toMatchObject({ id: "unpin", label: "Unpin" });
     expect(pinnedById.has("pin")).toBe(false);
     expect(pinnedById.get("archive")?.enabled).toBe(false);
+    // Issue #135 — pinning moved the tab into the (now single-member) pinned
+    // group, so both move items remain present but disabled.
+    expect(pinnedById.get("moveToTop")?.enabled).toBe(false);
+    expect(pinnedById.get("moveToBottom")?.enabled).toBe(false);
+    // Issue #33 — a pinned tab's Close item is present but disabled.
+    expect(pinnedById.get("close")?.enabled).toBe(false);
+  });
+
+  // Issue #135 — the context menu's Move to Top / Move to Bottom items enable per
+  // the TARGET row's position within its own pinned/unpinned group: moveToTop iff
+  // a tab sits above it, moveToBottom iff one sits below. Drive showContextMenu
+  // directly (under ZEO_E2E=1 it returns the descriptor without popping a native
+  // menu), so the three positions are deterministic without pointer events.
+  test("context-menu move items enable per position within the group", async () => {
+    const positions = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      // Fresh launch seeds one unpinned tab; capture its id before creating more,
+      // so the unpinned group is [seeded, t1, t2] in creation order.
+      const seeded = await zeo.tabs.list();
+      const seededId = seeded.activeTabId ?? seeded.tabs[0].id;
+      const t1 = await zeo.tabs.create();
+      const t2 = await zeo.tabs.create();
+      const moveFlags = async (id: string) => {
+        const menu = await zeo.tabs.showContextMenu(id, 0, 0);
+        const byId = new Map(menu.items.map((item) => [item.id, item.enabled]));
+        return { top: byId.get("moveToTop") ?? null, bottom: byId.get("moveToBottom") ?? null };
+      };
+      return {
+        first: await moveFlags(seededId),
+        middle: await moveFlags(t1.id),
+        last: await moveFlags(t2.id),
+      };
+    });
+
+    // First in the group: nothing above (moveToTop off), a tab below (moveToBottom on).
+    expect(positions.first).toEqual({ top: false, bottom: true });
+    // Middle: a tab on each side, so both are enabled.
+    expect(positions.middle).toEqual({ top: true, bottom: true });
+    // Last: a tab above (moveToTop on), nothing below (moveToBottom off).
+    expect(positions.last).toEqual({ top: true, bottom: false });
+  });
+
+  // Issue #135 — tab.moveToTop / tab.moveToBottom reorder the ACTIVE tab to the
+  // first/last slot of its group. Native menu clicks aren't drivable headlessly,
+  // so exercise the command path via commands.run. Each is a synchronous store
+  // reorder that main broadcasts, so a straight await-then-read of tabs.list()
+  // (pinned-first then unpinned; all unpinned here) is deterministic — no overlay.
+  test("the move-to-top/bottom commands reorder the active tab within its group", async () => {
+    // Fresh launch seeds one unpinned tab; add two more so the unpinned group is
+    // [seeded, t1, t2] with t2 (the last created) active.
+    const ids = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      const seeded = await zeo.tabs.list();
+      const seededId = seeded.activeTabId ?? seeded.tabs[0].id;
+      const t1 = await zeo.tabs.create();
+      const t2 = await zeo.tabs.create();
+      return { seededId, t1: t1.id, t2: t2.id };
+    });
+
+    // moveToTop acts on the active tab (t2), lifting it to the front of the group.
+    const afterTop = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.commands.run("tab.moveToTop");
+      const s = await zeo.tabs.list();
+      return s.tabs.map((t) => t.id);
+    });
+    expect(afterTop).toEqual([ids.t2, ids.seededId, ids.t1]);
+
+    // Activate the seeded tab, then send it to the bottom of the group.
+    const afterBottom = await sidebar.evaluate(async (seededId) => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.tabs.activate(seededId);
+      await zeo.commands.run("tab.moveToBottom");
+      const s = await zeo.tabs.list();
+      return s.tabs.map((t) => t.id);
+    }, ids.seededId);
+    expect(afterBottom).toEqual([ids.t2, ids.t1, ids.seededId]);
+  });
+
+  // Issue #33 — a pinned tab is protected from closing on BOTH bridge paths: the
+  // IPC `tabs.close` no-ops (resolves, tab RECORD stays AND its WebContentsView
+  // is left intact), and the `tab.close` command is disabled while the active tab
+  // is pinned (run REJECTS). The view assertion is the one that catches the
+  // main-process close-path bug: a store-only guard leaves the record but still
+  // tears down and reloads the pinned tab's view.
+  test("close is a no-op on a pinned tab and the tab.close command rejects while pinned", async () => {
+    // A dedicated tab at a UNIQUE data: URL so its WebContentsView page is
+    // findable by url below, then pinned. tabs.create activates the new tab, so
+    // the pinned tab is also the active tab. A data: URL keeps this offline.
+    const pinnedId = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      const created = await zeo.tabs.create("data:text/html,pinned-close-guard-view");
+      await zeo.tabs.pin(created.id);
+      return created.id;
+    });
+
+    // Locate the pinned tab's WebContentsView Page by its loaded url. Same
+    // defensive poll/try-catch as sidebarWindow: a navigating view can throw.
+    let tabPage: Page | undefined;
+    const pageDeadline = Date.now() + 15_000;
+    while (tabPage === undefined && Date.now() < pageDeadline) {
+      for (const w of app.windows()) {
+        try {
+          if (w.url().includes("pinned-close-guard-view")) {
+            tabPage = w;
+            break;
+          }
+        } catch {
+          // A tab's WebContentsView can momentarily lose its execution context
+          // while navigating; skip any window we can't query this pass.
+        }
+      }
+      if (tabPage === undefined) {
+        await new Promise((resolve) => setTimeout(resolve, 200));
+      }
+    }
+    expect(tabPage).toBeDefined();
+    const pinnedPage = tabPage as Page;
+
+    // Mark the live view so we can later prove it is the SAME, un-torn-down page.
+    await pinnedPage.evaluate(() => {
+      (globalThis as unknown as Record<string, unknown>)["__pinnedAlive"] = true;
+    });
+
+    // IPC close path: no-op on a pinned tab — resolves, but the tab stays.
+    await sidebar.evaluate(async (id) => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.tabs.close(id);
+    }, pinnedId);
+    const afterIpcClose = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      return zeo.tabs.list();
+    });
+    // RECORD survived.
+    expect(afterIpcClose.tabs.some((t) => t.id === pinnedId && t.pinned)).toBe(true);
+    // VIEW survived: the marker persists on the SAME page. Had closeTab torn the
+    // view down, pinnedPage's target would be closed and the evaluate would throw.
+    const aliveAfterClose = await pinnedPage
+      .evaluate(() => Boolean((globalThis as unknown as Record<string, unknown>)["__pinnedAlive"]))
+      .catch(() => false);
+    expect(aliveAfterClose).toBe(true);
+
+    // Command path: tab.close is disabled while the active tab is pinned, so run() REJECTS.
+    const rejected = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      try {
+        await zeo.commands.run("tab.close");
+        return false;
+      } catch {
+        return true;
+      }
+    });
+    expect(rejected).toBe(true);
+
+    // The pinned tab survived both attempts.
+    const afterCmd = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      return zeo.tabs.list();
+    });
+    expect(afterCmd.tabs.some((t) => t.id === pinnedId)).toBe(true);
+
+    // Cleanup: unpin then close so tab counts stay predictable for any sibling test.
+    await sidebar.evaluate(async (id) => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.tabs.unpin(id);
+      await zeo.tabs.close(id);
+    }, pinnedId);
   });
 
   test("pointer drag reorders pinned rows and moves tabs across the pin boundary", async () => {
@@ -1237,19 +1525,12 @@ test.describe("zeo desktop app", () => {
     // Three distinct tabs were created, one per space.
     expect(new Set([tabA.id, tabB.id, tabA2.id]).size).toBe(3);
 
-    // Poll (web-first, no fixed sleep) until all three tab WebContentsViews are
+    // Wait (web-first, no fixed sleep) until all three tab WebContentsViews are
     // present in the main process, matched by their in-URL token, before we
-    // assert on their sessions.
-    await expect
-      .poll(
-        async () =>
-          app.evaluate(({ webContents }, tokens) => {
-            const urls = webContents.getAllWebContents().map((wc) => wc.getURL());
-            return tokens.filter((t) => urls.some((u) => u.includes(t))).length;
-          }, [tokenA, tokenB, tokenA2]),
-        { message: "expected all three tab WebContentsViews to have loaded" },
-      )
-      .toBe(3);
+    // assert on their sessions. Each wait returns on first observation.
+    await waitForViewUrl(app, tokenA);
+    await waitForViewUrl(app, tokenB);
+    await waitForViewUrl(app, tokenA2);
 
     // In MAIN: assert partition wiring by identity, then set/read a cookie on
     // profile A's Session. Return only serializable booleans; assert outside.
@@ -1363,29 +1644,13 @@ test.describe("zeo desktop app", () => {
     // Poll (web-first, no fixed sleep) until the tab's view exists AND runs on the
     // SOURCE partition's Session by identity — proving it STARTED on the old
     // partition, so the upcoming remap has a live view to migrate.
-    await expect
-      .poll(
-        async () =>
-          app.evaluate(({ session, webContents }, data) => {
-            const wc = webContents
-              .getAllWebContents()
-              .find((w) => w.getURL().includes(data.token));
-            return wc !== undefined && wc.session === session.fromPartition("persist:" + data.fromId);
-          }, setup),
-        { message: "expected the tab view to start on the source profile's partition" },
-      )
-      .toBe(true);
+    await waitForViewOnPartition(app, setup.token, setup.fromId);
 
     const liveToken = "ZEOISO_FOXTROT";
-    await app.evaluate(async ({ webContents }, data) => {
-      const wc = webContents
-        .getAllWebContents()
-        .find((w) => w.getURL().includes(data.token));
-      if (wc === undefined) {
-        throw new Error("live view for the migration tab not found");
-      }
-      await wc.loadURL("data:text/html," + data.liveToken);
-    }, { ...setup, liveToken });
+    // Navigate the live view to a new data: URL and WAIT until getURL() observably
+    // reports it, so remapSpaceProfile's pre-teardown getURL() snapshot can only
+    // read the new URL — the exact race issue #66 hit when it read the old one.
+    await loadViewUrl(app, setup.token, "data:text/html," + liveToken);
 
     // Over the bridge: reassign the space to the DESTINATION profile. This triggers
     // remapSpaceProfile's live path — capture tab ids, destroy views, move the
@@ -1395,23 +1660,12 @@ test.describe("zeo desktop app", () => {
       await zeo.spaces.setProfile(data.spaceId, data.toId);
     }, setup);
 
-    await expect
-      .poll(
-        async () =>
-          app.evaluate(({ session, webContents }, data) => {
-            const wc = webContents
-              .getAllWebContents()
-              .find((w) => w.getURL().includes(data.liveToken));
-            return wc !== undefined && wc.session === session.fromPartition("persist:" + data.toId);
-          }, { ...setup, liveToken }),
-        { message: "expected the recreated tab view on the destination partition at the navigated URL" },
-      )
-      .toBe(true);
+    // The recreated view carries the navigated URL onto the DESTINATION partition.
+    await waitForViewOnPartition(app, liveToken, setup.toId);
 
-    const staleViewExists = await app.evaluate(({ webContents }, data) => {
-      return webContents.getAllWebContents().some((w) => w.getURL().includes(data.token));
-    }, setup);
-    expect(staleViewExists).toBe(false);
+    // The old view is gone: a torn-down WebContents can stay enumerable for a tick
+    // after close(), so poll to absence rather than reading it once.
+    await waitForViewGone(app, setup.token);
   });
 
   test("deleting a profile clears its partition's stored data", async () => {
@@ -1934,7 +2188,7 @@ test.describe("zeo desktop app", () => {
       };
     }, before.active);
     expect(after.count).toBe(before.count);
-    expect(after.url).toBe(before.url);
+    expect(canonicalTabUrl(after.url)).toBe(canonicalTabUrl(before.url));
   });
 
   // §5 bullet 5 — the headless seam: submit works with the bar CLOSED. Navigating,
@@ -1992,7 +2246,7 @@ test.describe("zeo desktop app", () => {
       };
     });
     expect(r3.postCount).toBe(r3.preCount);
-    expect(r3.postUrl).toBe(r3.preUrl);
+    expect(canonicalTabUrl(r3.postUrl)).toBe(canonicalTabUrl(r3.preUrl));
   });
 
   // §5 bullet 6 — core-level scheme rejection surfaces end to end: a `file:` scheme
@@ -3093,6 +3347,10 @@ test.describe("zeo desktop app", () => {
     "tab.pin",
     "tab.archive",
     "tab.copy-url",
+    // Issue #135 — tab.moveToTop / tab.moveToBottom are always enabled when a
+    // tab is active, so they list in registry order right after tab.copy-url.
+    "tab.moveToTop",
+    "tab.moveToBottom",
     "tab.reload",
     "space.new",
     "space.rename",
@@ -3102,17 +3360,44 @@ test.describe("zeo desktop app", () => {
     "settings.open",
     "history.open",
     "history.clear",
-    // PRD 6.5 — the three always-enabled section-open commands appended at the END
-    // of the registry, so they trail the commands-mode list in registry order.
+    // PRD 6.4 — zoom.in/zoom.out are enabled (zoom.reset is hidden at the default
+    // factor), sitting in registry order right after history.clear.
+    "zoom.in",
+    "zoom.out",
+    // PRD 6.5 — the three always-enabled section-open commands trail the registry,
+    // so they close out the commands-mode list in registry order.
     "settings.openGeneral",
     "settings.openProfiles",
     "settings.openHistory",
+    // PRD 6.2 — downloads.open / downloads.openFolder are always-enabled view
+    // commands appended after settings.openHistory in the registry, so they
+    // trail the commands-mode list in registry order. (downloads.clearFinished
+    // needs a finished download, of which a fresh launch has none, so it is not
+    // listed here.)
+    "downloads.open",
+    "downloads.openFolder",
+    // PRD 6.3 — find.open is menu:"view" and enabled whenever there is an active
+    // tab, so it trails the registry (after the downloads view commands) and
+    // closes out the commands-mode list. find.next/find.previous are disabled
+    // while find is closed (which it is here), so they do NOT appear.
+    "find.open",
+    // PRD 7.2 — browser.setDefault is the always-enabled default-browser command
+    // that trails the registry (the four quickBrowse.* commands sit before it but
+    // are disabled with no quick-browse window open, so only this one appears).
+    "browser.setDefault",
+    // PRD 7.1 — view.split / view.splitChoose are the last registry rows and are
+    // enabled in single layout with >=2 open tabs (this host context seeds a
+    // loopback tab alongside the initial tab, so >=2). view.unsplit /
+    // view.focusOtherPane / view.swapPanes need split mode, so they do NOT appear.
+    "view.split",
+    "view.splitChoose",
   ];
 
   // §5 bullet 1 — commands mode opens empty, lists only enabled command rows in
   // registry order (no navigate/search/tab/space rows, and never bar.open-commands),
   // and the overlay input shows the "Run a command" placeholder with an empty value.
   test("commands mode lists only enabled commands in registry order, empty with the Run a command placeholder", async () => {
+    await waitForCommandHostReady(app, sidebar);
     const st = await sidebar.evaluate(async () => {
       const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
       await zeo.commandBar.open("commands");
@@ -3321,6 +3606,7 @@ test.describe("zeo desktop app", () => {
   // empty query and the full command list (it joins tab.new/bar.open-location as an
   // accept exception).
   test("accepting the bar.open-commands row from new-tab and navigate modes leaves the bar open in commands mode", async () => {
+    await waitForCommandHostReady(app, sidebar);
     for (const mode of ["new-tab", "navigate"] as const) {
       await sidebar.evaluate(async (m) => {
         const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
@@ -3452,17 +3738,7 @@ test.describe("zeo desktop app", () => {
       // Wait until the fresh tab's view has committed the loopback page. The lookup
       // is by URL token in the main process (network-free); on a loopback origin the
       // commit is effectively immediate.
-      await expect
-        .poll(
-          async () =>
-            app.evaluate(
-              ({ webContents }, tok) =>
-                webContents.getAllWebContents().some((w) => w.getURL().includes(tok)),
-              token,
-            ),
-          { message: "expected the fresh tab to commit the loopback page" },
-        )
-        .toBe(true);
+      await waitForViewUrl(app, token);
 
       // Open commands mode. Anchor the setup BEFORE the negative assertion so the
       // latter cannot pass vacuously: the empty-query commands list is every enabled

@@ -301,6 +301,29 @@ describe("SpaceStore per-space tab isolation", () => {
     expect(() => store.close(b.id)).toThrow(/unknown tab/i);
     expect(() => store.activate(b.id)).toThrow(/unknown tab/i);
   });
+
+  test("moveToTop/moveToBottom delegate to the active space's tab store", () => {
+    const store = makeStore();
+    const personalId = store.activeSpaceId;
+    const a = store.create({ url: "https://a.test" });
+    const b = store.create({ url: "https://b.test" });
+    const c = store.create({ url: "https://c.test" });
+
+    store.moveToTop(c.id);
+    expect(store.list().map((t) => t.id)).toEqual([c.id, a.id, b.id]);
+    store.moveToBottom(c.id);
+    expect(store.list().map((t) => t.id)).toEqual([a.id, b.id, c.id]);
+
+    // A tab id from another space is rejected by the active store.
+    const work = store.createSpace("Work");
+    store.setActiveSpace(work.id);
+    expect(() => store.moveToTop(a.id)).toThrow(/unknown tab/i);
+    expect(() => store.moveToBottom(a.id)).toThrow(/unknown tab/i);
+
+    // The move did not disturb Personal's order.
+    store.setActiveSpace(personalId);
+    expect(store.list().map((t) => t.id)).toEqual([a.id, b.id, c.id]);
+  });
 });
 
 describe("SpaceStore active-tab preservation across switches", () => {

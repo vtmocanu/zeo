@@ -15,8 +15,27 @@ import type { Suggestion } from "./suggest.js";
  *   reads "Search history", the typed text filters recent/matching visits, there
  *   is no text (navigate/search) action row, and accepting a row navigates the
  *   active tab to that url.
+ * - `"promote"` opens the bar to pick a target SPACE for the quick-browse link:
+ *   the typed text filters spaces by name, there is no text (navigate/search)
+ *   action row, and every row is a `"space"` suggestion.
+ * - `"split"` opens the bar to pick the second pane for a split: the typed text
+ *   filters the active space's OTHER open tabs (the active tab excluded), there is
+ *   no text (navigate/search) action row, and accepting a tab row fills the
+ *   second pane, entering the split against that tab.
+ * - `"downloads"` opens the bar to filter the download list: it opens with
+ *   `initialText: ""`, the input placeholder reads "Filter downloads", the typed
+ *   text is a filter only (no navigate/search row and no command row), and
+ *   submit is not a valid action (accepting a row opens/reveals/removes that
+ *   download over the bridge).
  */
-export type CommandBarMode = "navigate" | "new-tab" | "commands" | "history";
+export type CommandBarMode =
+  | "navigate"
+  | "new-tab"
+  | "commands"
+  | "history"
+  | "promote"
+  | "split"
+  | "downloads";
 
 /**
  * The command bar's serializable state, broadcast from main to the renderer.
@@ -42,4 +61,10 @@ export interface CommandBarState {
    * (the clicked index would otherwise resolve against different rows).
    */
   revision: number;
+  /**
+   * Which surface the single overlay `WebContentsView` renders: the command bar
+   * (`"bar"`) or the find bar (`"find"`). The two are mutually exclusive surfaces
+   * of that one overlay; defaults to `"bar"`.
+   */
+  surface: "bar" | "find";
 }

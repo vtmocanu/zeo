@@ -2,9 +2,18 @@ import { describe, expect, it } from "vitest";
 import {
   commandBarBounds,
   settingsBounds,
+  findBarBounds,
+  quickBrowsePageBounds,
+  splitPaneBounds,
+  DIVIDER_WIDTH,
   COMMAND_BAR_HEIGHT,
   SUGGESTION_ROW_HEIGHT,
   SIDEBAR_WIDTH,
+  FIND_BAR_WIDTH,
+  FIND_BAR_HEIGHT,
+  FIND_BAR_INSET,
+  FIND_BAR_TOP,
+  QUICK_BROWSE_CHROME_HEIGHT,
 } from "./layout.js";
 
 describe("commandBarBounds", () => {
@@ -66,6 +75,119 @@ describe("commandBarBounds", () => {
   it("returns an all-zero rect when the window cannot seat the input row", () => {
     // y = round(60 * 0.12) = 7; room = 60 - 7 = 53 < COMMAND_BAR_HEIGHT (56).
     expect(commandBarBounds(1280, 60, 0)).toEqual({ x: 0, y: 0, width: 0, height: 0 });
+  });
+});
+
+describe("findBarBounds", () => {
+  it("right-aligns a full-width bar within the page region at the top inset", () => {
+    // contentWidth 1280 → pageWidth 1040, width = min(360, 1040 - 24) = 360,
+    // x = 240 + 1040 - 360 - 12 = 908.
+    expect(findBarBounds(1280)).toEqual({
+      x: 908,
+      y: FIND_BAR_TOP,
+      width: FIND_BAR_WIDTH,
+      height: FIND_BAR_HEIGHT,
+    });
+  });
+
+  it("insets the bar by FIND_BAR_INSET on the right edge of the page region", () => {
+    const bounds = findBarBounds(1280);
+    expect(bounds.x + bounds.width).toBe(1280 - FIND_BAR_INSET);
+    expect(bounds.x).toBeGreaterThanOrEqual(SIDEBAR_WIDTH + FIND_BAR_INSET);
+  });
+
+  it("clamps the width to pageWidth - 24 in a narrow page region, inset both sides", () => {
+    // contentWidth 500 → pageWidth 260, width = min(360, 260 - 24) = 236,
+    // x = 240 + 260 - 236 - 12 = 252 = SIDEBAR_WIDTH + FIND_BAR_INSET.
+    const bounds = findBarBounds(500);
+    expect(bounds.width).toBe(260 - 2 * FIND_BAR_INSET);
+    expect(bounds.x).toBe(SIDEBAR_WIDTH + FIND_BAR_INSET);
+    // Inset by exactly FIND_BAR_INSET on both the left and right edges.
+    expect(bounds.x - SIDEBAR_WIDTH).toBe(FIND_BAR_INSET);
+    expect(bounds.x + bounds.width).toBe(500 - FIND_BAR_INSET);
+    expect(bounds.y).toBe(FIND_BAR_TOP);
+    expect(bounds.height).toBe(FIND_BAR_HEIGHT);
+  });
+
+  it("collapses to an all-zero rect when the page region is too narrow", () => {
+    // contentWidth 260 → pageWidth 20, 20 - 24 = -4 → width floored to 0.
+    expect(findBarBounds(260)).toEqual({ x: 0, y: 0, width: 0, height: 0 });
+  });
+
+  it("collapses to an all-zero rect at the boundary pageWidth - 24 === 0", () => {
+    // contentWidth 264 → pageWidth 24, 24 - 24 = 0 → width 0.
+    expect(findBarBounds(SIDEBAR_WIDTH + 2 * FIND_BAR_INSET)).toEqual({
+      x: 0,
+      y: 0,
+      width: 0,
+      height: 0,
+    });
+  });
+
+  it("yields no negative dimensions when contentWidth equals the sidebar width", () => {
+    const bounds = findBarBounds(SIDEBAR_WIDTH);
+    expect(bounds).toEqual({ x: 0, y: 0, width: 0, height: 0 });
+    expect(bounds.width).toBeGreaterThanOrEqual(0);
+    expect(bounds.height).toBeGreaterThanOrEqual(0);
+  });
+});
+
+describe("quickBrowsePageBounds", () => {
+  it("fills the width below the chrome bar for a normal window", () => {
+    expect(quickBrowsePageBounds(480, 640)).toEqual({
+      x: 0,
+      y: QUICK_BROWSE_CHROME_HEIGHT,
+      width: 480,
+      height: 640 - QUICK_BROWSE_CHROME_HEIGHT,
+    });
+  });
+
+  it("floors the height at 0 when the window is shorter than the chrome bar", () => {
+    const bounds = quickBrowsePageBounds(480, QUICK_BROWSE_CHROME_HEIGHT - 10);
+    expect(bounds).toEqual({
+      x: 0,
+      y: QUICK_BROWSE_CHROME_HEIGHT,
+      width: 480,
+      height: 0,
+    });
+    expect(bounds.height).toBeGreaterThanOrEqual(0);
+  });
+});
+
+describe("splitPaneBounds", () => {
+  it("tiles two equal panes plus the divider across the page region at ratio 0.5", () => {
+    // contentWidth 1280 → pageWidth 1040, usable 1034, leftW round(1034*0.5)=517.
+    const bounds = splitPaneBounds(1280, 800, 0.5);
+    expect(bounds.left.width).toBe(517);
+    expect(bounds.right.width).toBe(517);
+    expect(bounds.divider.x).toBe(757);
+    expect(bounds.left.width + DIVIDER_WIDTH + bounds.right.width).toBe(1040);
+    // Panes abut the divider with no gap or overlap.
+    expect(bounds.left.x).toBe(SIDEBAR_WIDTH);
+    expect(bounds.divider.x).toBe(bounds.left.x + bounds.left.width);
+    expect(bounds.right.x).toBe(bounds.divider.x + DIVIDER_WIDTH);
+  });
+
+  it("clamps an out-of-range ratio to the max fraction", () => {
+    // ratio 0.9 clamps to 0.8 → leftW round(1034*0.8)=827.
+    expect(splitPaneBounds(1280, 800, 0.9).left.width).toBe(827);
+  });
+
+  it("returns all-zero rects when the page region cannot seat the divider", () => {
+    // contentWidth 244 → pageWidth 4, usable 4-6=-2 ≤ 0.
+    const zero = { x: 0, y: 0, width: 0, height: 0 };
+    expect(splitPaneBounds(244, 800, 0.5)).toEqual({
+      left: zero,
+      divider: zero,
+      right: zero,
+    });
+  });
+
+  it("gives every rect the full content height", () => {
+    const bounds = splitPaneBounds(1280, 640, 0.5);
+    expect(bounds.left.height).toBe(640);
+    expect(bounds.divider.height).toBe(640);
+    expect(bounds.right.height).toBe(640);
   });
 });
 

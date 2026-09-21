@@ -10,6 +10,7 @@ function catalog(partial: Partial<SuggestCatalog>): SuggestCatalog {
     archived: partial.archived ?? [],
     commands: partial.commands ?? [],
     history: partial.history ?? [],
+    downloads: partial.downloads ?? [],
   };
 }
 
@@ -74,6 +75,24 @@ function archivedTab(
     url: "https://example.test/",
     spaceName: "Personal",
     archivedAt: 0,
+    ...over,
+  };
+}
+
+/** A minimal download catalog entry with sensible defaults. */
+function downloadEntry(
+  over: Partial<SuggestCatalog["downloads"][number]> & { id: string },
+): SuggestCatalog["downloads"][number] {
+  return {
+    url: "https://example.test/file.bin",
+    filename: "file.bin",
+    path: "/downloads/file.bin",
+    totalBytes: 0,
+    receivedBytes: 0,
+    state: "progressing",
+    startedAt: 0,
+    completedAt: null,
+    spaceId: null,
     ...over,
   };
 }
@@ -609,6 +628,219 @@ describe("suggest — history mode", () => {
     const rows = suggest("doc", catalog({ history }), options({ mode: "history" }));
     expect(rows).toHaveLength(8);
     expect(rows.every((r) => r.kind === "history")).toBe(true);
+  });
+});
+
+describe("suggest — promote mode", () => {
+  test("returns only space rows, no row 0 and no other kinds", () => {
+    const rows = suggest(
+      "work",
+      catalog({
+        // Tabs, commands, history and archived tabs present; promote mode must
+        // ignore them entirely and never emit a row-0 text action.
+        spaces: [
+          { id: "sp", name: "Work", active: false },
+          { id: "sp2", name: "Personal", active: true },
+        ],
+        tabs: [tab({ tabId: "t", title: "Work", url: "https://work.test/" })],
+        commands: [command({ id: "tab.new", title: "Work", keywords: ["work"] })],
+        history: [historyEntry({ url: "https://work.test/a", title: "Work" })],
+        archived: [archivedTab({ tabId: "a", title: "Work", url: "https://arch.test/" })],
+      }),
+      options({ mode: "promote" }),
+    );
+    expect(rows.every((r) => r.kind === "space")).toBe(true);
+    expect(rows).toEqual([{ kind: "space", spaceId: "sp", name: "Work" }]);
+  });
+
+  test("row 0 is never a navigate/search text action in promote mode", () => {
+    const rows = suggest(
+      "example.com",
+      catalog({
+        spaces: [{ id: "sp", name: "Example", active: false }],
+      }),
+      options({ mode: "promote" }),
+    );
+    // "example.com" resolves to a navigate URL in other modes; here it must not,
+    // and it matches no space name, so the list is empty.
+    expect(rows).toEqual([]);
+  });
+
+  test("an empty query lists all spaces in catalog order", () => {
+    const rows = suggest(
+      "  ",
+      catalog({
+        spaces: [
+          { id: "s1", name: "Personal", active: true },
+          { id: "s2", name: "Work", active: false },
+          { id: "s3", name: "Side", active: false },
+        ],
+      }),
+      options({ mode: "promote" }),
+    );
+    expect(rows).toEqual([
+      { kind: "space", spaceId: "s1", name: "Personal" },
+      { kind: "space", spaceId: "s2", name: "Work" },
+      { kind: "space", spaceId: "s3", name: "Side" },
+    ]);
+  });
+
+  test("a non-empty query filters spaces by name", () => {
+    const rows = suggest(
+      "work",
+      catalog({
+        spaces: [
+          { id: "s1", name: "Personal", active: true },
+          { id: "s2", name: "Work", active: false },
+          { id: "s3", name: "Homework", active: false },
+        ],
+      }),
+      options({ mode: "promote" }),
+    );
+    // Both "Work" (prefix, tier 1) and "Homework" (substring, tier 3) match;
+    // the prefix match ranks first.
+    expect(rows).toEqual([
+      { kind: "space", spaceId: "s2", name: "Work" },
+      { kind: "space", spaceId: "s3", name: "Homework" },
+    ]);
+  });
+});
+
+describe("suggest — split mode", () => {
+  test("empty query returns the active space's other open tabs, MRU-first, active and archived excluded", () => {
+    const rows = suggest(
+      "  ",
+      catalog({
+        spaces: [{ id: "s1", name: "Personal", active: true }],
+        tabs: [
+          tab({ tabId: "a", title: "A", spaceId: "s1", lastActiveAt: 3 }),
+          tab({ tabId: "active", title: "Active", spaceId: "s1", lastActiveAt: 100 }),
+          tab({ tabId: "b", title: "B", spaceId: "s1", lastActiveAt: 7 }),
+        ],
+        // Archived tabs are never offered as a split target.
+        archived: [archivedTab({ tabId: "arch", title: "Arch", spaceId: "s1" })],
+      }),
+      options({ mode: "split", activeTabId: "active" }),
+    );
+    expect(rows.every((r) => r.kind === "tab")).toBe(true);
+    expect(rows.map((r) => (r.kind === "tab" ? r.tabId : ""))).toEqual(["b", "a"]);
+  });
+
+  test("only the active space's tabs are offered", () => {
+    const rows = suggest(
+      "",
+      catalog({
+        spaces: [
+          { id: "s1", name: "Personal", active: true },
+          { id: "s2", name: "Work", active: false },
+        ],
+        tabs: [
+          tab({ tabId: "here", title: "Here", spaceId: "s1", lastActiveAt: 1 }),
+          tab({ tabId: "there", title: "There", spaceId: "s2", lastActiveAt: 9 }),
+        ],
+      }),
+      options({ mode: "split", activeTabId: null }),
+    );
+    expect(rows.map((r) => (r.kind === "tab" ? r.tabId : ""))).toEqual(["here"]);
+  });
+
+  test("a non-empty query filters by title or url substring", () => {
+    const rows = suggest(
+      "docs",
+      catalog({
+        spaces: [{ id: "s1", name: "Personal", active: true }],
+        tabs: [
+          tab({ tabId: "match", title: "Docs", url: "https://d.test/", spaceId: "s1", lastActiveAt: 1 }),
+          tab({ tabId: "miss", title: "Other", url: "https://o.test/", spaceId: "s1", lastActiveAt: 2 }),
+        ],
+      }),
+      options({ mode: "split", activeTabId: null }),
+    );
+    expect(rows.map((r) => (r.kind === "tab" ? r.tabId : ""))).toEqual(["match"]);
+  });
+});
+
+describe("suggest — downloads mode", () => {
+  test("an empty query lists every download in catalog (newest-first) order", () => {
+    const rows = suggest(
+      "  ",
+      catalog({
+        downloads: [
+          downloadEntry({ id: "c", filename: "third.bin", startedAt: 3 }),
+          downloadEntry({ id: "b", filename: "second.bin", startedAt: 2 }),
+          downloadEntry({ id: "a", filename: "first.bin", startedAt: 1 }),
+        ],
+      }),
+      options({ mode: "downloads" }),
+    );
+    expect(rows.every((r) => r.kind === "download")).toBe(true);
+    expect(rows.map((r) => (r.kind === "download" ? r.id : ""))).toEqual([
+      "c",
+      "b",
+      "a",
+    ]);
+  });
+
+  test("a non-empty query matches on filename", () => {
+    const rows = suggest(
+      "report",
+      catalog({
+        downloads: [
+          downloadEntry({ id: "a", filename: "report.bin", url: "https://a.test/x" }),
+          downloadEntry({ id: "b", filename: "notes.txt", url: "https://b.test/y" }),
+        ],
+      }),
+      options({ mode: "downloads" }),
+    );
+    expect(rows.map((r) => (r.kind === "download" ? r.id : ""))).toEqual(["a"]);
+  });
+
+  test("a non-empty query matches on url", () => {
+    const rows = suggest(
+      "cdn.example",
+      catalog({
+        downloads: [
+          downloadEntry({ id: "a", filename: "report.bin", url: "https://cdn.example/x" }),
+          downloadEntry({ id: "b", filename: "notes.txt", url: "https://other.test/y" }),
+        ],
+      }),
+      options({ mode: "downloads" }),
+    );
+    expect(rows.map((r) => (r.kind === "download" ? r.id : ""))).toEqual(["a"]);
+  });
+
+  test("no navigate/search/command/tab row ever appears in downloads mode", () => {
+    const rows = suggest(
+      "example.com",
+      catalog({
+        // Tabs, spaces, commands and history present; downloads mode ignores them.
+        spaces: [{ id: "sp", name: "Example", active: false }],
+        tabs: [tab({ tabId: "t", title: "Example", url: "https://example.com/" })],
+        commands: [command({ id: "tab.new", title: "Example", keywords: [] })],
+        history: [historyEntry({ url: "https://example.com/", title: "Example" })],
+        downloads: [downloadEntry({ id: "d", filename: "example.com.html" })],
+      }),
+      options({ mode: "downloads" }),
+    );
+    expect(rows.every((r) => r.kind === "download")).toBe(true);
+    expect(rows.map((r) => (r.kind === "download" ? r.id : ""))).toEqual(["d"]);
+  });
+
+  test("caps the download rows at MAX_MATCHES on a non-empty query", () => {
+    const downloads = Array.from({ length: 12 }, (_, i) =>
+      downloadEntry({ id: `d${i}`, filename: `doc-${i}.bin`, startedAt: i }),
+    );
+    const rows = suggest("doc", catalog({ downloads }), options({ mode: "downloads" }));
+    expect(rows).toHaveLength(8);
+    expect(rows.every((r) => r.kind === "download")).toBe(true);
+  });
+
+  test("an empty query is NOT capped at MAX_MATCHES", () => {
+    const downloads = Array.from({ length: 12 }, (_, i) =>
+      downloadEntry({ id: `d${i}`, filename: `doc-${i}.bin`, startedAt: i }),
+    );
+    const rows = suggest("  ", catalog({ downloads }), options({ mode: "downloads" }));
+    expect(rows).toHaveLength(12);
   });
 });
 
