@@ -6,9 +6,12 @@ import type {
   CommandBarState,
   CommandDescriptor,
   CommandId,
+  DividerGeometry,
+  Download,
   FindState,
   HistoryEntry,
   HistoryVisit,
+  PaneSide,
   Profile,
   SearchEngineId,
   Settings,
@@ -19,6 +22,7 @@ import type {
   Tab,
   TabContextMenuResult,
   TabsState,
+  WindowLayout,
   ZeoApi,
   ZoomState,
 } from "@zeo/core";
@@ -97,6 +101,14 @@ const api = {
     stats: (): Promise<{ entries: number; visits: number }> =>
       ipcRenderer.invoke(IPC.historyStats),
   },
+  downloads: {
+    list: (): Promise<Download[]> => ipcRenderer.invoke(IPC.downloadsList),
+    cancel: (id: string): Promise<void> => ipcRenderer.invoke(IPC.downloadsCancel, id),
+    open: (id: string): Promise<void> => ipcRenderer.invoke(IPC.downloadsOpen, id),
+    reveal: (id: string): Promise<void> => ipcRenderer.invoke(IPC.downloadsReveal, id),
+    remove: (id: string): Promise<void> => ipcRenderer.invoke(IPC.downloadsRemove, id),
+    clearFinished: (): Promise<void> => ipcRenderer.invoke(IPC.downloadsClearFinished),
+  },
   settings: {
     get: (): Promise<Settings> => ipcRenderer.invoke(IPC.settingsGet),
     setSearchEngine: (id: SearchEngineId): Promise<void> =>
@@ -115,6 +127,21 @@ const api = {
     previous: (): Promise<void> => ipcRenderer.invoke(IPC.findPrevious),
     close: (): Promise<void> => ipcRenderer.invoke(IPC.findClose),
     state: (): Promise<FindState> => ipcRenderer.invoke(IPC.findState),
+  },
+  splitView: {
+    split: (): Promise<void> => ipcRenderer.invoke(IPC.splitViewSplit),
+    splitWith: (tabId: string): Promise<void> =>
+      ipcRenderer.invoke(IPC.splitViewSplitWith, tabId),
+    unsplit: (): Promise<void> => ipcRenderer.invoke(IPC.splitViewUnsplit),
+    swap: (): Promise<void> => ipcRenderer.invoke(IPC.splitViewSwap),
+    focusPane: (pane: PaneSide): Promise<void> =>
+      ipcRenderer.invoke(IPC.splitViewFocusPane, pane),
+    focusOther: (): Promise<void> => ipcRenderer.invoke(IPC.splitViewFocusOther),
+    setRatio: (ratio: number): Promise<void> =>
+      ipcRenderer.invoke(IPC.splitViewSetRatio, ratio),
+    dividerGeometry: (): Promise<DividerGeometry> =>
+      ipcRenderer.invoke(IPC.splitViewDividerGeometry),
+    state: (): Promise<WindowLayout> => ipcRenderer.invoke(IPC.splitViewState),
   },
   onStateChange: (listener: (state: TabsState) => void): (() => void) => {
     const handler = (_event: Electron.IpcRendererEvent, state: TabsState): void => listener(state);
@@ -136,6 +163,14 @@ const api = {
     ipcRenderer.on(IPC.spaceMenuAction, handler);
     return () => {
       ipcRenderer.removeListener(IPC.spaceMenuAction, handler);
+    };
+  },
+  onDividerLayout: (listener: (geom: DividerGeometry) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, geom: DividerGeometry): void =>
+      listener(geom);
+    ipcRenderer.on(IPC.splitViewDividerLayout, handler);
+    return () => {
+      ipcRenderer.removeListener(IPC.splitViewDividerLayout, handler);
     };
   },
 } satisfies ZeoApi;
