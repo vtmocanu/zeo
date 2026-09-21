@@ -964,19 +964,51 @@ test.describe("zeo desktop app", () => {
   });
 
   // Issue #33 — a pinned tab is protected from closing on BOTH bridge paths: the
-  // IPC `tabs.close` no-ops in the store (resolves, tab stays), and the
-  // `tab.close` command is disabled while the active tab is pinned (run REJECTS).
+  // IPC `tabs.close` no-ops (resolves, tab RECORD stays AND its WebContentsView
+  // is left intact), and the `tab.close` command is disabled while the active tab
+  // is pinned (run REJECTS). The view assertion is the one that catches the
+  // main-process close-path bug: a store-only guard leaves the record but still
+  // tears down and reloads the pinned tab's view.
   test("close is a no-op on a pinned tab and the tab.close command rejects while pinned", async () => {
-    // A dedicated tab, pinned. tabs.create activates the new tab, so the pinned
-    // tab is also the active tab. A data: URL keeps this offline-deterministic.
+    // A dedicated tab at a UNIQUE data: URL so its WebContentsView page is
+    // findable by url below, then pinned. tabs.create activates the new tab, so
+    // the pinned tab is also the active tab. A data: URL keeps this offline.
     const pinnedId = await sidebar.evaluate(async () => {
       const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
-      const created = await zeo.tabs.create("data:text/html,pinned-close-guard");
+      const created = await zeo.tabs.create("data:text/html,pinned-close-guard-view");
       await zeo.tabs.pin(created.id);
       return created.id;
     });
 
-    // IPC close path: store no-op on a pinned tab — resolves, but the tab stays.
+    // Locate the pinned tab's WebContentsView Page by its loaded url. Same
+    // defensive poll/try-catch as sidebarWindow: a navigating view can throw.
+    let tabPage: Page | undefined;
+    const pageDeadline = Date.now() + 15_000;
+    while (tabPage === undefined && Date.now() < pageDeadline) {
+      for (const w of app.windows()) {
+        try {
+          if (w.url().includes("pinned-close-guard-view")) {
+            tabPage = w;
+            break;
+          }
+        } catch {
+          // A tab's WebContentsView can momentarily lose its execution context
+          // while navigating; skip any window we can't query this pass.
+        }
+      }
+      if (tabPage === undefined) {
+        await new Promise((resolve) => setTimeout(resolve, 200));
+      }
+    }
+    expect(tabPage).toBeDefined();
+    const pinnedPage = tabPage as Page;
+
+    // Mark the live view so we can later prove it is the SAME, un-torn-down page.
+    await pinnedPage.evaluate(() => {
+      (globalThis as unknown as Record<string, unknown>)["__pinnedAlive"] = true;
+    });
+
+    // IPC close path: no-op on a pinned tab — resolves, but the tab stays.
     await sidebar.evaluate(async (id) => {
       const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
       await zeo.tabs.close(id);
@@ -985,7 +1017,14 @@ test.describe("zeo desktop app", () => {
       const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
       return zeo.tabs.list();
     });
+    // RECORD survived.
     expect(afterIpcClose.tabs.some((t) => t.id === pinnedId && t.pinned)).toBe(true);
+    // VIEW survived: the marker persists on the SAME page. Had closeTab torn the
+    // view down, pinnedPage's target would be closed and the evaluate would throw.
+    const aliveAfterClose = await pinnedPage
+      .evaluate(() => Boolean((globalThis as unknown as Record<string, unknown>)["__pinnedAlive"]))
+      .catch(() => false);
+    expect(aliveAfterClose).toBe(true);
 
     // Command path: tab.close is disabled while the active tab is pinned, so run() REJECTS.
     const rejected = await sidebar.evaluate(async () => {

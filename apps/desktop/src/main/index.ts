@@ -1826,6 +1826,19 @@ function acceptCommandBar(index?: number, revision?: number): void {
 
 /** Full close lifecycle: store removal, view teardown, re-activation, broadcast. */
 function closeTab(id: string): void {
+  // A pinned tab cannot be closed (issue #33). Mirror the store's pinned no-op
+  // HERE, before any view/state teardown: `store.close` alone leaves the record
+  // in place but does NOT undo the destroyView/ensureActiveView/dropBlockedTab
+  // work below, so a direct `tabs.close(pinnedId)` IPC would still tear down and
+  // reload a pinned tab's view and reset its blocked-count/history. Guarding the
+  // main-process close path here keeps a pinned tab's view fully intact. An
+  // unknown or archived id is NOT in `list()` (open, non-archived tabs only), so
+  // it falls through to `store.close` and throws exactly as before. Unpin first
+  // to close.
+  const target = store.list().find((t) => t.id === id);
+  if (target?.pinned) {
+    return;
+  }
   // A thrown Error (e.g. unknown id) propagates out to the caller.
   store.close(id);
   // Real tab removal: drop the blocked count and the origin marker for good.
