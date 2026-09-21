@@ -9,6 +9,14 @@ milestone, a minor bump only for very large breakthroughs.
 
 ## [Unreleased]
 
+### Fixed
+
+- Main process: the fresh-launch tab seed now fires only for a truly empty store
+  (no open **or** archived tabs), making the "don't seed a default tab over an
+  archived-only session" invariant explicit at the seed guard. The reported
+  scenario was already prevented upstream by the persisted-database check, so
+  this is a defensive hardening with no change to reachable behavior.
+
 ## [0.0.22] - 2026-09-21
 
 ### Added
