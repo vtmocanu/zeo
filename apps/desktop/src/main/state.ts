@@ -77,7 +77,7 @@ type Timer = ReturnType<typeof setTimeout> | null;
  * writes. Its properties are reassigned in place (`runtime.win = ...`), so a
  * module never holds a stale copy of a reassigned binding; the collection fields
  * (Maps/Sets/arrays) are mutated in place via `.set`/`.add`/`.delete`/`.clear`/
- * `.push`. The six hook fields are late-bound cross-module callbacks each owning
+ * `.push`. The seven hook fields are late-bound cross-module callbacks each owning
  * module registers at load, breaking an otherwise-cyclic value import.
  */
 export interface RuntimeState {
@@ -134,6 +134,7 @@ export interface RuntimeState {
   closeFindSession: ((returnFocus?: boolean) => void) | null;
   rebuildMenu: (() => void) | null;
   createWindow: ((seed: boolean) => void) | null;
+  openPopupAsTab: ((ownerTabId: string, url: string) => void) | null;
 }
 
 /**
@@ -210,4 +211,5 @@ export const runtime: RuntimeState = {
   closeFindSession: null,
   rebuildMenu: null,
   createWindow: null,
+  openPopupAsTab: null,
 };

@@ -6,7 +6,7 @@ import { updateDownload } from "./db.js";
 import { terminalizeProfileDownloads } from "./download-ops.js";
 import { runtime } from "./state.js";
 import { broadcast } from "./broadcast.js";
-import { createViewFor, destroyView } from "./views.js";
+import { createViewFor, destroyView, unloadSpaceViews } from "./views.js";
 import { forgetTab } from "./tabs.js";
 import { reconcileAndApply } from "./layout.js";
 import { installDownloadHandler, logDownloadError } from "./downloads.js";
@@ -212,6 +212,24 @@ export function showSpaceContextMenu(id: string, x: number, y: number): SpaceCon
   return result;
 }
 
+/**
+ * The single space-switch transition (PRD 9.3 §5). Switches the active space,
+ * frees the OUTGOING space's views except its own active tab and any audible one
+ * (#58), then reconciles the window layout (a split of the outgoing space's tabs
+ * collapses to single) and materializes the incoming space's active view. A
+ * no-op when `id` is already the active space.
+ */
+export function switchSpace(id: string): void {
+  const outgoing = runtime.store.activeSpaceId;
+  if (id === outgoing) {
+    return;
+  }
+  runtime.store.setActiveSpace(id);
+  unloadSpaceViews(outgoing, runtime.store.activeTabIdOf(outgoing));
+  reconcileAndApply();
+  broadcast();
+}
+
 // --- Space commands -----------------------------------------------------------
 // The renderer's single UI bridge drives these; tab WebContentsViews have no
 // bridge and cannot dispatch. A thrown Error (unknown/last space) propagates out
@@ -230,12 +248,7 @@ ipcMain.handle(IPC.spacesRename, (_event, id: string, name: string): void => {
 });
 
 ipcMain.handle(IPC.spacesActivate, (_event, id: string): void => {
-  runtime.store.setActiveSpace(id);
-  // A space switch invalidates any split of the outgoing space's tabs: reconcile
-  // (→ single, hiding the divider) and show the incoming space's active tab,
-  // materializing that tab's view if the restored space never had one.
-  reconcileAndApply();
-  broadcast();
+  switchSpace(id);
 });
 
 ipcMain.handle(IPC.spacesDelete, (_event, id: string): void => {

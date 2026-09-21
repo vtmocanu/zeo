@@ -22,6 +22,7 @@ import { startBlocking } from "./blocking.js";
 import { buildMenu } from "./menu.js";
 import { createWindow } from "./window.js";
 import { sweepIdle } from "./tabs.js";
+import { unloadIdleViews, viewUnloadIntervalMs } from "./views.js";
 import { handleExternalLink, drainExternalLinks } from "./quick-browse.js";
 import { flushLayoutSave } from "./layout.js";
 
@@ -88,6 +89,11 @@ app.whenReady().then(async () => {
     sweepIdle();
   }
   setInterval(sweepIdle, SWEEP_INTERVAL_MS);
+
+  // Idle view-unload policy (#40/#58): tear down hidden, silent views left idle
+  // past the threshold. No launch-time run — a restored session materializes
+  // only the active view already.
+  setInterval(() => unloadIdleViews(Date.now()), viewUnloadIntervalMs());
 
   // Cold-launch drain (PRD 7.2): the window and settings now exist, so dispatch any
   // links that arrived before appReady, in arrival order, through the handoff path.

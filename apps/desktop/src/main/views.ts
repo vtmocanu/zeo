@@ -10,8 +10,11 @@ import {
   zoomIn,
   zoomOut,
   DEFAULT_ZOOM_FACTOR,
+  selectViewsToUnload,
+  VIEW_UNLOAD_AFTER_MS,
+  VIEW_UNLOAD_INTERVAL_MS,
 } from "@zeo/core";
-import type { Tab } from "@zeo/core";
+import type { Tab, UnloadCandidate } from "@zeo/core";
 import { updateVisitTitle } from "./db.js";
 import { runtime } from "./state.js";
 import { broadcast, scheduleBlockingBroadcast } from "./broadcast.js";
@@ -90,6 +93,14 @@ export function createViewFor(tab: Tab, spaceId: string, urlOverride?: string): 
     },
   });
   runtime.views.set(tab.id, { view, spaceId });
+  // Route every page-initiated popup (window.open / target="_blank") into a tab
+  // in the owning space instead of a BrowserWindow (#62). The handler calls a
+  // late-bound runtime hook so views.ts keeps NO import edge to tabs.ts (madge
+  // --circular clean); tabs.ts registers runtime.openPopupAsTab at module load.
+  view.webContents.setWindowOpenHandler(({ url }) => {
+    runtime.openPopupAsTab?.(tab.id, url);
+    return { action: "deny" };
+  });
   // Disable pinch-to-zoom so the visual viewport never drifts from the applied
   // per-site factor; zoom is driven only by setZoomFactor via applyViewZoom.
   view.webContents.setVisualZoomLevelLimits(1, 1);
@@ -340,4 +351,112 @@ export function ensureActiveView(): void {
     }
   }
   setActive(activeTabId);
+}
+
+/**
+ * Tears down `id`'s view while its tab stays in the store — {@link destroyView}
+ * by another name so call sites read as intent (it adds no behavior). A no-op
+ * when `views` has no entry.
+ */
+export function unloadView(id: string): void {
+  destroyView(id);
+}
+
+/**
+ * Unloads every tracked view owned by `spaceId` except `keepTabId` and except a
+ * currently-audible one — the outgoing-space teardown of a space switch (#58).
+ * Snapshots the `views` entries before iterating, since unloadView mutates it.
+ */
+export function unloadSpaceViews(spaceId: string, keepTabId: string | null): void {
+  for (const [tabId, tracked] of [...runtime.views]) {
+    if (tracked.spaceId !== spaceId || tabId === keepTabId) {
+      continue;
+    }
+    const wc = tracked.view.webContents;
+    if (!wc.isDestroyed() && wc.isCurrentlyAudible()) {
+      continue;
+    }
+    unloadView(tabId);
+  }
+}
+
+/**
+ * The tab ids the ACTIVE space currently shows on screen: the active tab in
+ * single mode, or BOTH panes in split mode. A view for one of these is never
+ * idle-unloaded even when it is not `store.activeTabId` (the non-focused split
+ * pane is visible but not the active tab).
+ */
+function shownTabIds(): Set<string> {
+  const shown = new Set<string>();
+  if (runtime.layout.mode === "split") {
+    shown.add(runtime.layout.left);
+    shown.add(runtime.layout.right);
+  } else if (runtime.store.activeTabId !== null) {
+    shown.add(runtime.store.activeTabId);
+  }
+  return shown;
+}
+
+/**
+ * Runs the idle-unload policy over every tracked view and tears down each id the
+ * pure {@link selectViewsToUnload} returns (hidden, silent, idle past the
+ * threshold). `visible` is "shown in the active space's current layout" (active
+ * tab OR either split pane), so a visible non-focused pane is never unloaded; a
+ * view whose tab no longer belongs to any space is skipped. Broadcasts once iff
+ * anything was unloaded (the unloadedTabIds slice changed).
+ */
+export function unloadIdleViews(now: number): void {
+  const shown = shownTabIds();
+  const activeSpaceId = runtime.store.activeSpaceId;
+  const candidates: UnloadCandidate[] = [];
+  for (const [tabId, tracked] of runtime.views) {
+    const spaceId = runtime.store.spaceOfTab(tabId);
+    if (spaceId === null) {
+      continue;
+    }
+    const tab = runtime.store.tabsOfSpace(spaceId).find((t) => t.id === tabId);
+    if (tab === undefined) {
+      continue;
+    }
+    const wc = tracked.view.webContents;
+    candidates.push({
+      tabId,
+      lastActiveAt: tab.lastActiveAt,
+      visible: spaceId === activeSpaceId && shown.has(tabId),
+      audible: !wc.isDestroyed() && wc.isCurrentlyAudible(),
+    });
+  }
+  const toUnload = selectViewsToUnload(candidates, now, viewUnloadAfterMs());
+  for (const id of toUnload) {
+    unloadView(id);
+  }
+  if (toUnload.length > 0) {
+    broadcast();
+  }
+}
+
+/**
+ * The idle threshold / sweep interval (ms): the core constants, overridden by
+ * ZEO_VIEW_UNLOAD_AFTER_MS / ZEO_VIEW_UNLOAD_INTERVAL_MS ONLY when
+ * ZEO_E2E === "1" and the env value parses as a positive integer. A packaged
+ * build ignores both.
+ */
+function envPositiveIntWhenE2E(name: string): number | null {
+  if (process.env.ZEO_E2E !== "1") {
+    return null;
+  }
+  const raw = process.env[name];
+  if (raw === undefined) {
+    return null;
+  }
+  const n = Number(raw);
+  return Number.isInteger(n) && n > 0 ? n : null;
+}
+
+export function viewUnloadAfterMs(): number {
+  return envPositiveIntWhenE2E("ZEO_VIEW_UNLOAD_AFTER_MS") ?? VIEW_UNLOAD_AFTER_MS;
+}
+
+export function viewUnloadIntervalMs(): number {
+  return envPositiveIntWhenE2E("ZEO_VIEW_UNLOAD_INTERVAL_MS") ?? VIEW_UNLOAD_INTERVAL_MS;
 }

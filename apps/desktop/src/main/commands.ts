@@ -19,14 +19,14 @@ import { layoutOverlay } from "./overlay.js";
 import { openCommandBar, closeCommandBar, recomputeSuggestions } from "./command-bar.js";
 import { createTab, closeTab, pinTab, unpinTab, moveTabToTop, moveTabToBottom, archiveTab } from "./tabs.js";
 import { createViewFor, setActive } from "./views.js";
-import { deleteSpace } from "./spaces.js";
+import { deleteSpace, switchSpace } from "./spaces.js";
 import { setBlockingEnabled, allowSite, disallowSite } from "./blocking.js";
 import { openSettings, openSettingsAt, closeSettings } from "./settings.js";
 import { invalidateAllHistoryKeys, logHistoryError } from "./history.js";
 import { zoomActiveTab } from "./zoom.js";
 import { openFindSession, findNext, findPrevious, closeFindSession } from "./find.js";
 import { teardownQuickBrowse, setAsDefaultBrowser } from "./quick-browse.js";
-import { reconcileAndApply, doSplit, doUnsplit, doFocusOther, doSwap } from "./layout.js";
+import { doSplit, doUnsplit, doFocusOther, doSwap } from "./layout.js";
 import { downloadsDir, logDownloadError } from "./downloads.js";
 import { clearFinishedDownloadsSequenced } from "./download-ops.js";
 
@@ -107,12 +107,7 @@ const commandHandlers: Record<CommandId, () => void> = {
     runtime.views.get(runtime.store.activeTabId!)?.view.webContents.navigationHistory.goForward(),
   "space.new": () => {
     const space = runtime.store.createSpace(defaultSpaceName(runtime.store.spaces()));
-    runtime.store.setActiveSpace(space.id);
-    // Switching to the new space invalidates any split of the old space's tabs, so
-    // reconcile (→ single) and re-lay the new space's active view (hiding the
-    // divider).
-    reconcileAndApply();
-    broadcast();
+    switchSpace(space.id);
   },
   // From the macOS menu bar with no window, ensureWindow recreates one but this
   // first send reaches an unloaded renderer and is dropped (a second invocation
