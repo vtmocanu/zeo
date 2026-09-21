@@ -7,6 +7,20 @@ import { commandContextOf, executeCommand } from "./commands.js";
 import { activateTab, reconcileAndApply } from "./layout.js";
 
 /**
+ * Ensures a window exists before a menu-driven command runs. On darwin the app
+ * survives `window-all-closed` and the application menu stays live, so an
+ * accelerator can fire with no window; recreating one first (never seeding — the
+ * in-memory store already reflects the user's state) is the macOS-native behavior
+ * and mirrors app.on("activate"). Uses the runtime.createWindow hook so menu.ts
+ * adds no import edge to window.ts, keeping `madge --circular` clean.
+ */
+function ensureWindow(): void {
+  if (runtime.win === null) {
+    runtime.createWindow?.(false);
+  }
+}
+
+/**
  * Builds and installs the application menu. Accelerators here are
  * application-level, so they fire whether focus is in the sidebar renderer or
  * inside a tab's WebContentsView — the reason we use a Menu rather than
@@ -20,6 +34,7 @@ export function buildMenu(): void {
       accelerator: `CmdOrCtrl+Alt+${i + 1}`,
       visible: false,
       click: () => {
+        ensureWindow();
         const tabs = runtime.store.list();
         const target = tabs[i];
         if (target !== undefined) {
@@ -42,7 +57,18 @@ export function buildMenu(): void {
       label: entry.label,
       accelerator: entry.accelerator ?? undefined,
       enabled: entry.enabled,
-      click: () => executeCommand(entry.id),
+      click: () => {
+        ensureWindow();
+        try {
+          executeCommand(entry.id);
+        } catch (err: unknown) {
+          // A stale-enabled menu item (e.g. a frozen menu's Go Back after the
+          // window was closed and a fresh view has no history) is rejected by
+          // executeCommand's enablement check; log rather than throw out of the
+          // native menu dispatcher, matching the context-menu closures.
+          console.error(`menu command "${entry.id}" failed:`, err);
+        }
+      },
     }));
 
   const tabsSubmenu: MenuItemConstructorOptions[] = [
@@ -58,6 +84,7 @@ export function buildMenu(): void {
       accelerator: `CmdOrCtrl+${i + 1}`,
       visible: false,
       click: () => {
+        ensureWindow();
         const target = runtime.store.spaces()[i];
         if (target !== undefined) {
           runtime.store.setActiveSpace(target.id);

@@ -9,6 +9,24 @@ milestone, a minor bump only for very large breakthroughs.
 
 ## [Unreleased]
 
+### Fixed
+
+- Split view: a split that collapses back to a single view during a session
+  (closing, removing or archiving a paned tab, activating a non-paned tab,
+  creating a tab, or switching spaces) is now persisted immediately, so quitting
+  no longer leaves stale split metadata in the database.
+
+- macOS: with all windows closed, tab and other menu accelerators (e.g. New Tab)
+  now recreate a window first instead of silently mutating hidden tab state or
+  opening a non-visible command bar; a command bar left open when the last window
+  closed no longer reappears as a phantom overlay on the next window.
+
+- Main process: the fresh-launch tab seed now fires only for a truly empty store
+  (no open **or** archived tabs), making the "don't seed a default tab over an
+  archived-only session" invariant explicit at the seed guard. The reported
+  scenario was already prevented upstream by the persisted-database check, so
+  this is a defensive hardening with no change to reachable behavior.
+
 ## [0.0.22] - 2026-09-21
 
 ### Added
@@ -48,6 +66,16 @@ milestone, a minor bump only for very large breakthroughs.
   (or closing a paned tab) returns to a single view. "Split View with Tab…" opens
   the command bar to pick which tab fills the second pane. The split (panes and
   divider ratio) is persisted and restored across relaunch.
+
+- Tab ordering: "Move Tab to Top" and "Move Tab to Bottom" reorder the active
+  tab to the first or last position of its own group (pinned or unpinned). They
+  are available from the command bar (`Cmd+K`) and the Tabs menu, and as "Move
+  to Top" / "Move to Bottom" in the tab context menu, where each is enabled only
+  when the tab can actually move that way (both are disabled for a lone tab, and
+  the boundary one is disabled when the tab is already at that edge). Pinning a
+  tab (`Cmd+Shift+P`, or "Pin" in the context menu — now also found by searching
+  "essentials" in the command bar) moves it into the pinned Essentials section
+  at the top of the sidebar.
 
 ## [0.0.20] - 2026-09-14
 

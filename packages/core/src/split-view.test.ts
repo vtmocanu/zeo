@@ -9,6 +9,7 @@ import {
   reconcileLayout,
   focusedPaneTab,
   paneOf,
+  layoutsEqual,
   SINGLE_LAYOUT,
   DEFAULT_SPLIT_RATIO,
   MIN_SPLIT_RATIO,
@@ -189,6 +190,28 @@ describe("paneOf", () => {
 
   it("returns null for a single layout", () => {
     expect(paneOf(SINGLE_LAYOUT, "L")).toBeNull();
+  });
+});
+
+describe("layoutsEqual", () => {
+  it("treats two single layouts as equal", () => {
+    expect(layoutsEqual(SINGLE_LAYOUT, { mode: "single" })).toBe(true);
+  });
+
+  it("treats a single and a split as never equal", () => {
+    expect(layoutsEqual(SINGLE_LAYOUT, split())).toBe(false);
+    expect(layoutsEqual(split(), SINGLE_LAYOUT)).toBe(false);
+  });
+
+  it("treats two splits with identical fields as equal", () => {
+    expect(layoutsEqual(split(), split())).toBe(true);
+  });
+
+  it("treats splits differing in any field as unequal", () => {
+    expect(layoutsEqual(split(), split({ left: "X" }))).toBe(false);
+    expect(layoutsEqual(split(), split({ right: "Y" }))).toBe(false);
+    expect(layoutsEqual(split(), split({ ratio: 0.7 }))).toBe(false);
+    expect(layoutsEqual(split(), split({ focused: "right" }))).toBe(false);
   });
 });
 

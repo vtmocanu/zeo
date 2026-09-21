@@ -99,6 +99,10 @@ export function pushCommandBar(): void {
  * matches the store even on a path that mutated the store without reconciling.
  */
 export function broadcast({ persist = true }: { persist?: boolean } = {}): void {
+  // Idempotent guard only: reconcileAndApply owns persisting a reconcile-driven
+  // layout change (#140), and every collapse-capable path routes through it before
+  // reaching here, so this raw reconcile must never be the first place a collapse
+  // is observed — keep it a no-op re-reconcile, not a new persistence site.
   runtime.layout = reconcileLayout(
     runtime.layout,
     runtime.store.list().map((t) => t.id),

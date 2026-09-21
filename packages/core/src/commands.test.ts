@@ -15,6 +15,8 @@ const ALL_IDS: CommandId[] = [
   "tab.unpin",
   "tab.archive",
   "tab.copy-url",
+  "tab.moveToTop",
+  "tab.moveToBottom",
   "tab.reload",
   "tab.back",
   "tab.forward",
@@ -204,6 +206,30 @@ describe("downloads commands", () => {
   });
 });
 
+describe("move-tab commands", () => {
+  const moveIds = ["tab.moveToTop", "tab.moveToBottom"] as const;
+
+  test("each is registered exactly once as a tabs command with no accelerator", () => {
+    for (const id of moveIds) {
+      const matches = COMMANDS.filter((c) => c.id === id);
+      expect(matches).toHaveLength(1);
+      expect(matches[0]?.menu).toBe("tabs");
+      expect(matches[0]?.accelerator).toBeNull();
+    }
+  });
+
+  test("neither title nor keywords contain the substring 'pin'", () => {
+    for (const id of moveIds) {
+      const entry = COMMANDS.find((c) => c.id === id);
+      expect(entry).toBeDefined();
+      expect(entry?.title.toLowerCase()).not.toContain("pin");
+      for (const keyword of entry?.keywords ?? []) {
+        expect(keyword).not.toContain("pin");
+      }
+    }
+  });
+});
+
 describe("settings section-open commands", () => {
   const sectionIds = [
     "settings.openGeneral",
@@ -238,6 +264,16 @@ describe("isCommandEnabled — active-tab-gated commands", () => {
   test("tab.copy-url needs an active tab", () => {
     expect(isCommandEnabled("tab.copy-url", context({ activeTab: activeTab() }))).toBe(true);
     expect(isCommandEnabled("tab.copy-url", context({ activeTab: null }))).toBe(false);
+  });
+
+  test("tab.moveToTop needs an active tab", () => {
+    expect(isCommandEnabled("tab.moveToTop", context({ activeTab: activeTab() }))).toBe(true);
+    expect(isCommandEnabled("tab.moveToTop", context({ activeTab: null }))).toBe(false);
+  });
+
+  test("tab.moveToBottom needs an active tab", () => {
+    expect(isCommandEnabled("tab.moveToBottom", context({ activeTab: activeTab() }))).toBe(true);
+    expect(isCommandEnabled("tab.moveToBottom", context({ activeTab: null }))).toBe(false);
   });
 
   test("tab.reload needs an active tab", () => {

@@ -15,9 +15,10 @@ import {
   reconcileLayout,
   focusedPaneTab,
   paneOf,
+  layoutsEqual,
 } from "@zeo/core";
 import type { DividerGeometry, PaneSide, Tab, WindowLayout } from "@zeo/core";
-import { writeWindowLayout } from "./db.js";
+import { writeWindowLayout, readWindowLayout } from "./db.js";
 import { runtime, moduleDir, LAYOUT_SAVE_DEBOUNCE_MS } from "./state.js";
 import { broadcast } from "./broadcast.js";
 import { createViewFor, destroyView, ensureActiveView, raiseOverlays } from "./views.js";
@@ -144,11 +145,19 @@ export function applyLayout(): void {
  * collapses to single when the split can no longer be honored.
  */
 export function reconcileAndApply(): void {
+  const previous = runtime.layout;
   runtime.layout = reconcileLayout(
     runtime.layout,
     runtime.store.list().map((t) => t.id),
     runtime.store.activeTabId,
   );
+  if (!layoutsEqual(previous, runtime.layout)) {
+    // The window layout lives outside the store snapshot, so a reconcile-driven
+    // semantic change (a pane focus flip or a collapse to SINGLE_LAYOUT) must be
+    // persisted now — scheduleSave(store)/flushLayoutSave do not cover it, and the
+    // app must not exit with split metadata the store no longer supports (#140).
+    persistLayout();
+  }
   applyLayout();
 }
 
@@ -212,6 +221,16 @@ export function flushLayoutSave(): void {
   clearTimeout(runtime.layoutSaveTimer);
   runtime.layoutSaveTimer = null;
   persistLayout();
+}
+
+// Test-only (never wired in a production build): expose the RAW persisted window
+// layout — read straight from `meta.layoutMode` + the pane-id columns via
+// {@link readWindowLayout}, WITHOUT reconciling against live tabs — so the e2e can
+// assert a mid-session collapse was actually written to SQLite, not merely
+// re-derived by startup reconciliation (#140).
+if (process.env.ZEO_E2E === "1") {
+  (globalThis as Record<string, unknown>).__zeoPersistedLayout = (): WindowLayout =>
+    readWindowLayout();
 }
 
 /**

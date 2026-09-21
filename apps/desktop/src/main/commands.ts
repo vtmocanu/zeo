@@ -18,7 +18,7 @@ import { runtime } from "./state.js";
 import { broadcast, pushCommandBar } from "./broadcast.js";
 import { layoutOverlay } from "./overlay.js";
 import { openCommandBar, closeCommandBar, recomputeSuggestions } from "./command-bar.js";
-import { createTab, closeTab, pinTab, unpinTab, archiveTab } from "./tabs.js";
+import { createTab, closeTab, pinTab, unpinTab, moveTabToTop, moveTabToBottom, archiveTab } from "./tabs.js";
 import { createViewFor, setActive } from "./views.js";
 import { deleteSpace } from "./spaces.js";
 import { setBlockingEnabled, allowSite, disallowSite } from "./blocking.js";
@@ -91,6 +91,8 @@ const commandHandlers: Record<CommandId, () => void> = {
   "tab.close": () => closeTab(runtime.store.activeTabId!),
   "tab.pin": () => pinTab(runtime.store.activeTabId!),
   "tab.unpin": () => unpinTab(runtime.store.activeTabId!),
+  "tab.moveToTop": () => moveTabToTop(runtime.store.activeTabId!),
+  "tab.moveToBottom": () => moveTabToBottom(runtime.store.activeTabId!),
   "tab.archive": () => archiveTab(runtime.store.activeTabId!),
   "tab.copy-url": () => {
     const tab = runtime.store.list().find((t) => t.id === runtime.store.activeTabId);
@@ -112,6 +114,9 @@ const commandHandlers: Record<CommandId, () => void> = {
     reconcileAndApply();
     broadcast();
   },
+  // From the macOS menu bar with no window, ensureWindow recreates one but this
+  // first send reaches an unloaded renderer and is dropped (a second invocation
+  // works); space.rename has no accelerator, so this is an obscure, benign edge.
   "space.rename": () =>
     runtime.win?.webContents.send(IPC.spaceMenuAction, {
       action: "rename",

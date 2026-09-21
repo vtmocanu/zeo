@@ -148,6 +148,20 @@ export function unpinTab(id: string): void {
   broadcast();
 }
 
+// Ordering-only ops: move a tab to the first/last slot of its own pinned or
+// unpinned group. Like pin/unpin/reorder they change no view and no active
+// pointer, so broadcast() alone suffices. The store throws on an unknown or
+// archived id, which propagates out to reject the caller.
+export function moveTabToTop(id: string): void {
+  runtime.store.moveToTop(id);
+  broadcast();
+}
+
+export function moveTabToBottom(id: string): void {
+  runtime.store.moveToBottom(id);
+  broadcast();
+}
+
 export function archiveTab(id: string): void {
   runtime.store.archive(id);
   // If the archived tab was a split pane, keep the surviving pane active before
@@ -182,12 +196,27 @@ export function showTabContextMenu(id: string, x: number, y: number): TabContext
     return { tabId: id, items: [] };
   }
 
+  const group = runtime.store.list().filter((t) => t.pinned === tab.pinned);
+  const indexInGroup = group.findIndex((t) => t.id === id);
+
   const actions: { id: string; label: string; enabled: boolean; click: () => void }[] = [
     {
       id: tab.pinned ? "unpin" : "pin",
       label: tab.pinned ? "Unpin" : "Pin",
       enabled: true,
       click: () => (tab.pinned ? unpinTab(id) : pinTab(id)),
+    },
+    {
+      id: "moveToTop",
+      label: "Move to Top",
+      enabled: indexInGroup > 0,
+      click: () => moveTabToTop(id),
+    },
+    {
+      id: "moveToBottom",
+      label: "Move to Bottom",
+      enabled: indexInGroup >= 0 && indexInGroup < group.length - 1,
+      click: () => moveTabToBottom(id),
     },
     {
       id: "archive",

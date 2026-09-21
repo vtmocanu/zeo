@@ -129,7 +129,20 @@ export function createWindow(seed: boolean): void {
     runtime.views.clear();
     runtime.overlay = null;
     runtime.find = closeFind(runtime.find);
-    runtime.commandBar = { ...runtime.commandBar, surface: "bar" };
+    // Fully close the command bar (not just reset its surface): win.on("closed")
+    // previously preserved commandBar.open, so a bar open at close resurrected as
+    // a phantom overlay on the next window recreation (broadcast → refreshCommandState
+    // → layoutOverlay when open). commandBarRevision bumps so a raced click is rejected.
+    runtime.commandBar = {
+      open: false,
+      mode: runtime.commandBar.mode,
+      initialText: "",
+      query: "",
+      suggestions: [],
+      selectedIndex: -1,
+      revision: ++runtime.commandBarRevision,
+      surface: "bar",
+    };
     // Drop the settings view with the window it was parented to; a later
     // createWindow + settings.open recreates it lazily.
     if (runtime.settingsView !== null && !runtime.settingsView.webContents.isDestroyed()) {
@@ -145,13 +158,26 @@ export function createWindow(seed: boolean): void {
     }
     runtime.dividerView = null;
     runtime.win = null;
+    // Rebuild the menu so its enabled flags reflect the no-window/no-live-view
+    // context: with views cleared, commandContextOf() yields canGoBack/canGoForward
+    // === false and siteHost === null, so tab.back/tab.forward/zoom.* are disabled
+    // (their accelerators would otherwise fire and throw after recreation) while
+    // tab.new/tab.close/tab.reload/space.new stay enabled.
+    runtime.rebuildMenu?.();
   });
 
-  // Seed the first tab into the active (seeded "Personal") space only on a fresh
-  // launch with no open tab. A restored or re-activated launch keeps its state
-  // and does not seed. Views are created lazily: only the active tab's view is
-  // materialized now; every other tab gets its view on first activation.
-  if (seed && runtime.store.allOpenTabs().length === 0) {
+  // Seed the first tab into the active (seeded "Personal") space only on a truly
+  // empty store — no open AND no archived tabs. A restored or re-activated launch
+  // keeps its state and does not seed (the persisted-DB check drives `seed`, and
+  // `hasData()` already counts archived rows), so an archived-only session shows
+  // the empty-with-archive state rather than a fresh tab seeded over the archive.
+  // Views are created lazily: only the active tab's view is materialized now;
+  // every other tab gets its view on first activation.
+  if (
+    seed &&
+    runtime.store.allOpenTabs().length === 0 &&
+    runtime.store.allArchivedTabs().length === 0
+  ) {
     runtime.store.create({ url: DEFAULT_URL, title: titleForUrl(DEFAULT_URL) });
   }
   // Restore the persisted window layout, reconciled against the live open tabs and
