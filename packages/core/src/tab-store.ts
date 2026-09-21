@@ -214,6 +214,9 @@ export class TabStore {
    * remaining OPEN tab becomes active (greatest `lastActiveAt`, tie-broken by
    * `activationSeq`); if none remain, the active pointer becomes null. Closing
    * a non-active tab leaves the active pointer unchanged.
+   *
+   * A pinned tab cannot be closed — `close` is a no-op on it (unpin first),
+   * matching the archive/idle-sweep protection that already exempts pinned tabs.
    */
   close(id: string): void {
     const index = this.tabs.findIndex((tab) => tab.id === id);
@@ -222,6 +225,15 @@ export class TabStore {
     }
     if (this.tabs[index].archivedAt !== null) {
       throw new Error(`Cannot close an archived tab: ${id}`);
+    }
+    // A pinned tab is protected from closing: it must be unpinned first. This
+    // mirrors the existing pinned exemptions (`archive` throws on a pinned tab;
+    // the idle auto-sweep skips pinned tabs) and fixes the inversion where
+    // Cmd+W could destroy a pinned tab outright (issue #33). Closing a pinned
+    // tab is a NO-OP — the record is left in place and the active pointer is
+    // untouched.
+    if (this.tabs[index].pinned) {
+      return;
     }
 
     const wasActive = this.activeId === id;
@@ -411,6 +423,29 @@ export class TabStore {
     positions.forEach((position, i) => {
       this.tabs[position] = group[i];
     });
+  }
+
+  /**
+   * Moves an OPEN tab to the FIRST position of its own group (pinned or
+   * unpinned). Delegates to {@link reorder}, which performs all validation
+   * (unknown/archived id, non-integer index) and leaves the other group and
+   * archived tabs in place. An already-first or single-tab move is a no-op.
+   */
+  moveToTop(id: string): void {
+    this.reorder(id, 0);
+  }
+
+  /**
+   * Moves an OPEN tab to the LAST position of its own group (pinned or
+   * unpinned). {@link reorder} clamps an out-of-range index to the last slot of
+   * the tab's group and performs all validation (unknown/archived id,
+   * non-integer index); `Number.MAX_SAFE_INTEGER` is a finite integer, so it
+   * passes the integer guard and lands the tab last. (`Infinity` would throw —
+   * reorder rejects non-integers.) An already-last or single-tab move is a
+   * no-op.
+   */
+  moveToBottom(id: string): void {
+    this.reorder(id, Number.MAX_SAFE_INTEGER);
   }
 
   /**
