@@ -7,13 +7,16 @@ import {
   type ReactNode,
   type RefObject,
 } from "react";
-import type { Tab, TabsState } from "@zeo/core";
+import type { PaneSide, Tab, TabsState } from "@zeo/core";
 import {
   SIDEBAR_WIDTH,
   DEFAULT_SEARCH_ENGINE_ID,
+  SINGLE_LAYOUT,
   defaultSpaceName,
   formatRelativeArchived,
+  formatZoomPercent,
   hostMatchesAllowlist,
+  paneOf,
   siteKeyForUrl,
 } from "@zeo/core";
 import "./App.css";
@@ -267,36 +270,52 @@ function useTabDrag(pinned: Tab[], unpinned: Tab[]) {
  * injected `window.zeo` bridge. No business logic, no Node/Electron imports.
  * Shows a blocked-count shield when `blockedCount > 0`; when the tab's site is
  * `allowlisted` the shield instead marks blocking as disabled for `host` (no
- * count). The count shield is dimmed when blocking is globally disabled.
+ * count). The count shield is dimmed when blocking is globally disabled. Shows a
+ * clickable zoom badge (sibling of the shield) when `zoomFactor !== 1.0`;
+ * clicking it dispatches `zoom.reset` to return the host to actual size.
+ *
+ * Split view: when the tab occupies a pane (`paneSide !== null`) the row is
+ * marked `tab-item--paned` (and `tab-item--pane-focused` for the focused pane),
+ * and clicking its title focuses that pane instead of activating the tab. The
+ * derived flags come from the parent; this row holds no split logic.
  */
 function TabRow({
   tab,
   isActive,
   pinned,
   dragging,
+  paneSide,
+  paneFocused,
   blockedCount,
   blockingEnabled,
   allowlisted,
   host,
+  zoomFactor,
   onPointerDown,
 }: {
   tab: Tab;
   isActive: boolean;
   pinned: boolean;
   dragging: boolean;
+  paneSide: PaneSide | null;
+  paneFocused: boolean;
   blockedCount: number;
   blockingEnabled: boolean;
   allowlisted: boolean;
   host: string | null;
+  zoomFactor: number;
   onPointerDown: (event: ReactPointerEvent<HTMLLIElement>) => void;
 }) {
   const hasFavicon =
     typeof tab.faviconUrl === "string" && tab.faviconUrl.length > 0;
+  const paned = paneSide !== null;
   const className = [
     "tab-item",
     pinned ? "tab-item--pinned" : "",
     isActive ? "tab-item--active" : "",
     dragging ? "tab-item--dragging" : "",
+    paned ? "tab-item--paned" : "",
+    paneFocused ? "tab-item--pane-focused" : "",
   ]
     .filter(Boolean)
     .join(" ");
@@ -304,8 +323,9 @@ function TabRow({
   return (
     <li
       className={className}
-      data-testid="tab-item"
+      data-testid={paned ? "tab-pane" : "tab-item"}
       data-tab-id={tab.id}
+      data-pane={paneSide ?? undefined}
       aria-current={isActive ? "true" : undefined}
       onPointerDown={onPointerDown}
       onContextMenu={(event) => {
@@ -334,7 +354,11 @@ function TabRow({
         type="button"
         className="tab-item__title"
         title={tab.url}
-        onClick={() => void window.zeo?.tabs.activate(tab.id).catch(() => {})}
+        onClick={() =>
+          paneSide !== null
+            ? void window.zeo?.splitView.focusPane(paneSide).catch(() => {})
+            : void window.zeo?.tabs.activate(tab.id).catch(() => {})
+        }
       >
         {tab.title}
       </button>
@@ -365,17 +389,34 @@ function TabRow({
           <span className="tab-item__shield-count">{blockedCount}</span>
         </span>
       ) : null}
-      <button
-        type="button"
-        className="tab-item__close"
-        aria-label={`Close ${tab.title}`}
-        onClick={(event) => {
-          event.stopPropagation();
-          void window.zeo?.tabs.close(tab.id).catch(() => {});
-        }}
-      >
-        ×
-      </button>
+      {zoomFactor !== 1.0 ? (
+        <button
+          type="button"
+          className="tab-item__zoom"
+          data-testid="tab-zoom"
+          title={`Zoom ${formatZoomPercent(zoomFactor)} — click to reset to actual size`}
+          aria-label={`Zoom ${formatZoomPercent(zoomFactor)}, click to reset to actual size`}
+          onClick={(event) => {
+            event.stopPropagation();
+            void window.zeo?.commands.run("zoom.reset").catch(() => {});
+          }}
+        >
+          {formatZoomPercent(zoomFactor)}
+        </button>
+      ) : null}
+      {!pinned && (
+        <button
+          type="button"
+          className="tab-item__close"
+          aria-label={`Close ${tab.title}`}
+          onClick={(event) => {
+            event.stopPropagation();
+            void window.zeo?.tabs.close(tab.id).catch(() => {});
+          }}
+        >
+          ×
+        </button>
+      )}
     </li>
   );
 }
@@ -484,7 +525,10 @@ export function App() {
     activeTabId: null,
     archived: [],
     settingsOpen: false,
-    settings: { searchEngine: DEFAULT_SEARCH_ENGINE_ID },
+    settings: {
+      searchEngine: DEFAULT_SEARCH_ENGINE_ID,
+      quickBrowseExternal: true,
+    },
     settingsSection: "general",
     settingsSectionNonce: 0,
     blocking: {
@@ -494,6 +538,19 @@ export function App() {
       blockedUnattributed: 0,
       allowlist: [],
     },
+    zoom: { byHost: {} },
+    downloads: { items: [] },
+    find: {
+      open: false,
+      query: "",
+      activeMatch: 0,
+      matchCount: 0,
+      tabId: null,
+      activeRequestId: null,
+    },
+    quickBrowse: null,
+    isDefaultBrowser: false,
+    layout: SINGLE_LAYOUT,
   });
   const [showArchived, setShowArchived] = useState(false);
   const [now, setNow] = useState(() => Date.now());
@@ -661,6 +718,11 @@ export function App() {
         const host = siteKeyForUrl(tab.url);
         const allowlisted =
           host !== null && hostMatchesAllowlist(host, state.blocking.allowlist);
+        const zoomFactor =
+          tab.id === state.activeTabId && host !== null
+            ? (state.zoom.byHost[host] ?? 1.0)
+            : 1.0;
+        const paneSide = paneOf(state.layout, tab.id);
         children.push(
           <TabRow
             key={tab.id}
@@ -668,10 +730,13 @@ export function App() {
             isActive={tab.id === state.activeTabId}
             pinned={section === "pinned"}
             dragging={tab.id === draggingId}
+            paneSide={paneSide}
+            paneFocused={paneSide !== null && tab.id === state.activeTabId}
             blockedCount={state.blocking.blockedByTab[tab.id] ?? 0}
             blockingEnabled={state.blocking.enabled}
             allowlisted={allowlisted}
             host={host}
+            zoomFactor={zoomFactor}
             onPointerDown={(event) =>
               onRowPointerDown(event, tab, section === "pinned")
             }
@@ -692,6 +757,30 @@ export function App() {
 
   const showPinned = pinned.length > 0 || isDragging;
   const showUnpinned = unpinned.length > 0 || isDragging;
+
+  // Sidebar footer downloads indicator — reads the broadcast `downloads` slice
+  // only (no forked state). "Active" is progressing-or-paused; aggregate progress
+  // is sum(receivedBytes) / sum(totalBytes) across active downloads, shown as a
+  // percentage. When every active download has an unknown total (totalBytes 0)
+  // the sum is 0 and the indicator goes indeterminate; the percentage is clamped
+  // to 100 since an unknown-total item can still contribute received bytes.
+  const downloadItems = state.downloads.items;
+  const activeDownloads = downloadItems.filter(
+    (d) => d.state === "progressing" || d.state === "paused",
+  );
+  const downloadsReceived = activeDownloads.reduce(
+    (sum, d) => sum + d.receivedBytes,
+    0,
+  );
+  const downloadsTotal = activeDownloads.reduce(
+    (sum, d) => sum + d.totalBytes,
+    0,
+  );
+  const downloadsIndeterminate = downloadsTotal === 0;
+  const downloadsPercent =
+    downloadsTotal > 0
+      ? Math.min(100, Math.round((downloadsReceived / downloadsTotal) * 100))
+      : 0;
 
   return (
     <aside
@@ -800,6 +889,24 @@ export function App() {
       )}
 
       <footer className="sidebar__footer">
+        {downloadItems.length > 0 && (
+          <button
+            type="button"
+            className={`sidebar__footer-button downloads-indicator${
+              activeDownloads.length > 0 ? " downloads-indicator--active" : ""
+            }`}
+            data-testid="downloads-indicator"
+            onClick={() =>
+              void window.zeo?.commands.run("downloads.open").catch(() => {})
+            }
+          >
+            {activeDownloads.length > 0
+              ? downloadsIndeterminate
+                ? `Downloading ${activeDownloads.length}…`
+                : `Downloading ${activeDownloads.length} · ${downloadsPercent}%`
+              : `Downloads (${downloadItems.length})`}
+          </button>
+        )}
         <button
           type="button"
           className="sidebar__footer-button"

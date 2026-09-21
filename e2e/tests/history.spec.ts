@@ -7,6 +7,8 @@ import { join } from "node:path";
 import { createServer } from "node:http";
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
+// PRD 9.1 — shared view-URL poll helper (VIEW_POLL_TIMEOUT_MS-bounded).
+import { waitForViewUrl } from "./helpers/view";
 
 // Absolute path to the built Electron main entry, resolved from this test file
 // (e2e is ESM, so no __dirname). Layout mirrors persistence.spec.ts / app.spec.ts:
@@ -315,24 +317,11 @@ async function freshHistory(app: ElectronApplication, sidebar: Page): Promise<st
   // commits) and the stored url is set optimistically, so neither confirms the
   // commit; the seeded https://example.com load could otherwise fire
   // did-navigate AFTER the clear and leave a stray visit. A recent()===0 poll
-  // cannot fix this because it can pass before that delayed event runs. The tab
-  // view surfaces as its own Playwright Page and only the seeded tab is ever
-  // sent to about:blank (the app renderers are file://), so poll app.windows()
-  // for a window whose committed url is exactly about:blank.
-  await expect
-    .poll(() => {
-      for (const w of app.windows()) {
-        try {
-          if (w.url() === "about:blank") {
-            return true;
-          }
-        } catch {
-          // A navigating WebContentsView can momentarily lose its context.
-        }
-      }
-      return false;
-    })
-    .toBe(true);
+  // cannot fix this because it can pass before that delayed event runs. The app
+  // renderers are file://, so only the seeded tab is ever about:blank;
+  // waitForViewUrl polls the main process (bounded by VIEW_POLL_TIMEOUT_MS) until
+  // a live view's getURL() reports it.
+  await waitForViewUrl(app, "about:blank");
   await clearHistory(sidebar);
   expect(await recent(sidebar)).toEqual([]);
   return id;
