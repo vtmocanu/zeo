@@ -1,5 +1,7 @@
 import { test, expect, _electron as electron } from "@playwright/test";
 import type { ElectronApplication, Page } from "@playwright/test";
+// PRD 9.1 — shared view-URL poll helper (VIEW_POLL_TIMEOUT_MS-bounded).
+import { waitForViewUrl } from "./helpers/view";
 import { fileURLToPath } from "node:url";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -385,11 +387,6 @@ function commandBarState(sidebar: Page): Promise<CommandBarStateShape> {
   });
 }
 
-/** Every live WebContents URL in the main process (renderer + tab/page views). */
-function allWebContentsUrls(app: ElectronApplication): Promise<string[]> {
-  return app.evaluate(({ webContents }) => webContents.getAllWebContents().map((wc) => wc.getURL()));
-}
-
 /** The observed <img> load/error probes for a blocking-fixture page. */
 interface ImageProbes {
   allowed: string | null;
@@ -489,11 +486,9 @@ test.describe("PRD 7.2 quick-browse window (offline)", () => {
       // as a Page with the fixture url).
       const pageView = await tabWindow(app, "probe=qb-open");
       expect(pageView.url()).toContain("probe=qb-open");
-      await expect
-        .poll(async () => (await allWebContentsUrls(app)).includes(fixtureA), {
-          message: "expected the untrusted page view's live url to equal fixtureA",
-        })
-        .toBe(true);
+      // waitForViewUrl polls the main process for the untrusted page view's live
+      // url, bounded by the shared VIEW_POLL_TIMEOUT_MS (PRD 9.1).
+      await waitForViewUrl(app, fixtureA);
 
       // The chrome renders the untrusted url as plain text (never an href/sink).
       await expect(chrome.getByTestId("quick-browse-url")).toHaveText(fixtureA, {

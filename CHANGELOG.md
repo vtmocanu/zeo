@@ -9,7 +9,7 @@ milestone, a minor bump only for very large breakthroughs.
 
 ## [Unreleased]
 
-## [0.0.20] - 2026-09-14
+## [0.0.21] - 2026-09-21
 
 ### Added
 
@@ -25,7 +25,25 @@ milestone, a minor bump only for very large breakthroughs.
   quick-browse", on by default) routes external links to a normal new tab
   instead when turned off, and a "Set zeo as default browser" button in the same
   section registers zeo for `http`/`https`. The persisted toggle bumps the
-  database to schema version 7.
+  database to schema version 8.
+
+## [0.0.20] - 2026-09-14
+
+### Added
+
+- Downloads: files a page initiates are saved to the downloads folder with no
+  save dialog, tracked with live progress and persisted across launches (SQLite
+  schema version 7). A download's URL is stripped of embedded credentials before
+  it is stored or shown, and a suggested filename is sanitized to a safe basename
+  and de-duplicated (`name (1).ext`) so it always stays inside the downloads
+  directory. `Cmd+Shift+J` (or the sidebar footer indicator, or "Show Downloads"
+  in the command bar) opens the command bar filtered to downloads, where Enter
+  opens a completed file, `Cmd+Enter` reveals it in Finder, and `Cmd+Backspace`
+  removes it from the list without deleting the file on disk; "Open Downloads
+  Folder" and "Clear Finished Downloads" round out the commands. The sidebar
+  footer shows the active download count and aggregate progress. A download
+  interrupted by a crash, quit, or a deleted profile shows as interrupted rather
+  than in progress.
 
 ## [0.0.19] - 2026-09-07
 
