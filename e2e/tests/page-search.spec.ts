@@ -8,6 +8,8 @@ import { createServer } from "node:http";
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { CommandBarMode, CommandBarState, FindState, Tab, ZeoApi } from "@zeo/core";
+// PRD 9.1 — shared view-URL poll helper (VIEW_POLL_TIMEOUT_MS-bounded).
+import { waitForViewUrl } from "./helpers/view";
 
 // Absolute path to the built Electron main entry, resolved from this test file
 // (e2e is ESM, so no __dirname). Layout mirrors blocking.spec.ts / app.spec.ts:
@@ -233,17 +235,7 @@ function activateTab(sidebar: Page, id: string): Promise<void> {
  * loaded page rather than assuming the navigation finished.
  */
 async function waitForFixtureCommit(app: ElectronApplication, port: number): Promise<void> {
-  await expect
-    .poll(
-      () =>
-        app.evaluate(
-          ({ webContents }, p) =>
-            webContents.getAllWebContents().some((w) => w.getURL().includes(p)),
-          String(port),
-        ),
-      { message: "expected the fixture tab's view to commit the loopback page" },
-    )
-    .toBe(true);
+  await waitForViewUrl(app, String(port));
 }
 
 // A single Electron launch shared across the cases (cold start under xvfb/docker
