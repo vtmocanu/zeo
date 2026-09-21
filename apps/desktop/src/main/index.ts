@@ -9,6 +9,19 @@ import {
   IPC,
   titleForUrl,
   SIDEBAR_WIDTH,
+  DIVIDER_WIDTH,
+  splitPaneBounds,
+  SINGLE_LAYOUT,
+  DEFAULT_SPLIT_RATIO,
+  clampRatio,
+  enterSplit,
+  unsplit,
+  swapPanes,
+  setRatio,
+  focusOtherPane,
+  reconcileLayout,
+  focusedPaneTab,
+  paneOf,
   buildSpaceContextMenu,
   defaultSpaceName,
   commandBarBounds,
@@ -59,11 +72,13 @@ import type {
   CommandContext,
   CommandDescriptor,
   CommandId,
+  DividerGeometry,
   Download,
   DownloadsState,
   FindState,
   HistoryEntry,
   HistoryVisit,
+  PaneSide,
   Profile,
   SearchEngineId,
   Settings,
@@ -76,6 +91,7 @@ import type {
   Tab,
   TabContextMenuResult,
   TabsState,
+  WindowLayout,
   ZoomState,
 } from "@zeo/core";
 import { createBlocker, createBlockerFromFilters } from "@zeo/adblock";
@@ -102,6 +118,8 @@ import {
   readSiteZoom,
   upsertSiteZoom,
   deleteSiteZoom,
+  readWindowLayout,
+  writeWindowLayout,
   insertDownload,
   updateDownload,
   deleteDownload,
@@ -176,6 +194,30 @@ let win: BrowserWindow | null = null;
  * new tab view, hidden except while the bar is open, and nulled on window close.
  */
 let overlay: WebContentsView | null = null;
+/**
+ * The active space's window {@link WindowLayout} (single pane or a two-pane
+ * split). Main is the single source of truth for it: it is attached to every
+ * broadcast snapshot as `TabsState.layout`, reconciled against the live tabs, and
+ * NEVER forked to a renderer. Seeded single here and restored from
+ * {@link readWindowLayout} on window (re)create.
+ */
+let layout: WindowLayout = SINGLE_LAYOUT;
+/**
+ * The draggable divider gutter view drawn between the two split panes. A single
+ * {@link WebContentsView} layered above the tab views (below the settings view
+ * and the command-bar overlay), showing the renderer bundle loaded with
+ * `?view=divider`. Created lazily on first entry into a split, hidden in single
+ * mode, and nulled on window close, mirroring {@link overlay}.
+ */
+let dividerView: WebContentsView | null = null;
+/**
+ * Pending debounced layout-save timer for a ratio drag, or `null` when none is
+ * scheduled. A discrete split op persists immediately; a ratio drag coalesces
+ * onto one write after it settles (see {@link scheduleLayoutSave}).
+ */
+let layoutSaveTimer: ReturnType<typeof setTimeout> | null = null;
+/** Debounce window for {@link scheduleLayoutSave}, in milliseconds. */
+const LAYOUT_SAVE_DEBOUNCE_MS = 300;
 /**
  * The command bar's current state, mirrored to the overlay renderer over
  * {@link IPC.commandBarChange}. Toggled by {@link openCommandBar} /
@@ -456,6 +498,7 @@ function fullSnapshot(): TabsState {
     settingsSectionNonce,
     downloads,
     find,
+    layout,
   };
 }
 
@@ -1248,16 +1291,11 @@ function createViewFor(tab: Tab, spaceId: string, urlOverride?: string): void {
       console.error(`tab ${tab.id} failed to load ${urlOverride ?? tab.url}:`, err);
     });
 
-  // Keep the z-order tab views < settings view < command-bar overlay: re-adding a
-  // child raises it to the top over the view just added. Re-raise the open
-  // settings view first, then the overlay. Null-guarded so the first createViewFor
-  // (which may run before either is created) is safe.
-  if (settingsOpen && settingsView !== null) {
-    win.contentView.addChildView(settingsView);
-  }
-  if (overlay !== null) {
-    win.contentView.addChildView(overlay);
-  }
+  // Keep the z-order tab views < divider view < settings view < command-bar
+  // overlay: re-adding a child raises it over the view just added. Re-raise the
+  // divider, then the open settings view, then the overlay. Null-guarded so the
+  // first createViewFor (which may run before any of them exist) is safe.
+  raiseOverlays();
 }
 
 /**
@@ -1337,7 +1375,10 @@ function createTab(url?: string): Tab {
   const u = url ?? DEFAULT_URL;
   const tab = store.create({ url: u, title: titleForUrl(u) });
   createViewFor(tab, store.activeSpaceId);
-  setActive(tab.id);
+  // store.create makes the new tab active; it is not a split pane, so a live split
+  // collapses to single (reconcile) and applyLayout shows the new view + hides the
+  // divider. In single mode this is the same show-active-hide-rest transition.
+  reconcileAndApply();
   broadcast();
   return tab;
 }
@@ -1416,6 +1457,8 @@ function commandContextOf(): CommandContext {
       settingsOpen,
       hasFinishedDownload,
       find: { open: find.open, hasQuery: find.query.trim().length > 0 },
+      layoutMode: layout.mode,
+      openTabCount: store.list().length,
     };
   }
   const tab = store.list().find((t) => t.id === activeTabId);
@@ -1440,6 +1483,8 @@ function commandContextOf(): CommandContext {
     settingsOpen,
     hasFinishedDownload,
     find: { open: find.open, hasQuery: find.query.trim().length > 0 },
+    layoutMode: layout.mode,
+    openTabCount: store.list().length,
   };
 }
 
@@ -1466,6 +1511,427 @@ function zoomActiveTab(direction: "in" | "out" | "reset"): Promise<void> {
   return Promise.resolve();
 }
 
+// --- Split view (PRD 7.1) -----------------------------------------------------
+
+/**
+ * Re-raises the fixed overlay views to the top of the z-order after a tab or
+ * divider view has been (re-)added, keeping the invariant tab views < divider
+ * view < settings view < command-bar overlay. Re-adding a child raises it over
+ * the views added before it, so re-adding the divider, then the settings view,
+ * then the overlay lands each above the previous. Null-guarded so an early call
+ * (before any of them exist) is safe. Shared by {@link createViewFor} and
+ * {@link applyLayout}.
+ */
+function raiseOverlays(): void {
+  if (win === null) {
+    return;
+  }
+  if (dividerView !== null && !dividerView.webContents.isDestroyed()) {
+    win.contentView.addChildView(dividerView);
+  }
+  if (settingsOpen && settingsView !== null) {
+    win.contentView.addChildView(settingsView);
+  }
+  if (overlay !== null) {
+    win.contentView.addChildView(overlay);
+  }
+}
+
+/**
+ * The usable page width a split `ratio` applies to: the content width minus the
+ * sidebar and the divider gutter. Zero when there is no window.
+ */
+function dividableWidth(): number {
+  if (win === null) {
+    return 0;
+  }
+  const [contentWidth] = win.getContentSize();
+  return contentWidth - SIDEBAR_WIDTH - DIVIDER_WIDTH;
+}
+
+/**
+ * Creates the divider gutter view lazily on first entry into a split, mirroring
+ * the command-bar overlay: same preload/webPreferences (default session), parented
+ * to the window, started hidden, loading the shared renderer bundle with a
+ * `?view=divider` marker (dev URL, or the prod `loadFile` query fallback). A no-op
+ * when the window is gone or the view already exists.
+ */
+function ensureDividerView(): void {
+  if (win === null || dividerView !== null) {
+    return;
+  }
+  dividerView = new WebContentsView({
+    webPreferences: {
+      preload: join(moduleDir, "../preload/index.cjs"),
+      contextIsolation: true,
+      sandbox: false,
+      nodeIntegration: false,
+    },
+  });
+  win.contentView.addChildView(dividerView);
+  dividerView.setVisible(false);
+  const rendererUrl = process.env.ELECTRON_RENDERER_URL;
+  if (rendererUrl !== undefined && rendererUrl !== "") {
+    dividerView.webContents.loadURL(rendererUrl + "?view=divider").catch(() => {
+      // Dev-server races are retried by the window's loadDev loop; the divider
+      // view shares the same bundle, so a transient failure here is non-fatal.
+    });
+  } else {
+    void dividerView.webContents.loadFile(join(moduleDir, "../renderer/index.html"), {
+      query: { view: "divider" },
+    });
+  }
+}
+
+/**
+ * Reconciles the on-screen views to the current {@link layout} and
+ * `store.activeTabId`. In single mode it hides the divider (if it exists) and runs
+ * the existing single-view logic via {@link ensureActiveView} (materialize + show
+ * the active view, hide the rest). In split mode it materializes each pane view if
+ * missing, bounds the two panes and the divider via {@link splitPaneBounds}, shows
+ * them, hides every other tracked view, re-raises the z-order, and focuses the
+ * focused pane's view. Every op is guarded so a pane view destroyed mid-reconcile
+ * is skipped, not fatal. Called everywhere the layout or the active view can
+ * change.
+ */
+function applyLayout(): void {
+  if (win === null) {
+    return;
+  }
+  if (layout.mode === "single") {
+    if (dividerView !== null && !dividerView.webContents.isDestroyed()) {
+      dividerView.setVisible(false);
+    }
+    ensureActiveView();
+    return;
+  }
+  // Split: materialize each pane's view if it has none yet (mirroring
+  // ensureActiveView's lazy create), then lay both panes + the divider out.
+  const paneIds: readonly [string, string] = [layout.left, layout.right];
+  for (const paneTabId of paneIds) {
+    if (!views.has(paneTabId)) {
+      const tab = store.list().find((t) => t.id === paneTabId);
+      if (tab !== undefined) {
+        createViewFor(tab, store.activeSpaceId);
+      }
+    }
+  }
+  const [contentWidth, contentHeight] = win.getContentSize();
+  const b = splitPaneBounds(contentWidth, contentHeight, layout.ratio);
+  for (const [tabId, tracked] of views) {
+    const view = tracked.view;
+    if (view.webContents.isDestroyed()) {
+      continue;
+    }
+    if (tabId === layout.left) {
+      view.setBounds(b.left);
+      view.setVisible(true);
+    } else if (tabId === layout.right) {
+      view.setBounds(b.right);
+      view.setVisible(true);
+    } else {
+      view.setVisible(false);
+    }
+  }
+  ensureDividerView();
+  // A freshly created divider sits on top of everything; re-raise the overlays so
+  // the divider is above the panes and the settings view / command bar above it.
+  raiseOverlays();
+  if (dividerView !== null && !dividerView.webContents.isDestroyed()) {
+    dividerView.setBounds(b.divider);
+    dividerView.setVisible(true);
+  }
+  const focusedTabId = focusedPaneTab(layout);
+  if (focusedTabId !== null) {
+    const focusedView = views.get(focusedTabId)?.view;
+    if (focusedView !== undefined && !focusedView.webContents.isDestroyed()) {
+      focusedView.webContents.focus();
+    }
+  }
+}
+
+/**
+ * Reconciles {@link layout} against the active space's live open tabs and active
+ * tab, then materializes the result with {@link applyLayout}. The single
+ * idempotent view-reconcile entry point: in single mode it behaves like
+ * {@link ensureActiveView}; in split mode it re-lays the panes + divider or
+ * collapses to single when the split can no longer be honored.
+ */
+function reconcileAndApply(): void {
+  layout = reconcileLayout(layout, store.list().map((t) => t.id), store.activeTabId);
+  applyLayout();
+}
+
+/**
+ * When `closedId` was a split pane, activates the SURVIVING pane's tab (if still
+ * open) so it becomes the single active view after the split collapses, rather
+ * than an arbitrary MRU tab the store may have re-pointed to. Reads {@link layout}
+ * (unchanged by the store mutation) so it must be called AFTER the store op but
+ * BEFORE reconciling. A no-op when `closedId` was not a pane.
+ */
+function preserveSurvivingPane(closedId: string): void {
+  const side = paneOf(layout, closedId);
+  if (side !== null && layout.mode === "split") {
+    const survivor = side === "left" ? layout.right : layout.left;
+    if (store.list().some((t) => t.id === survivor)) {
+      store.activate(survivor);
+    }
+  }
+}
+
+/**
+ * Persists the current {@link layout} immediately, swallowing (logging) a write
+ * failure so a persistence outage (e.g. running without a db this session) never
+ * breaks the in-memory split. Discrete split ops call this directly; ratio drags
+ * coalesce onto {@link scheduleLayoutSave}.
+ */
+function persistLayout(): void {
+  try {
+    writeWindowLayout(layout);
+  } catch (err) {
+    console.error("[split] failed to persist layout:", err);
+  }
+}
+
+/**
+ * Schedules a debounced persist of {@link layout} (~{@link LAYOUT_SAVE_DEBOUNCE_MS}),
+ * replacing any pending one, so a ratio drag collapses into a single write after
+ * it settles. Used only by {@link doSetRatio}.
+ */
+function scheduleLayoutSave(): void {
+  if (layoutSaveTimer !== null) {
+    clearTimeout(layoutSaveTimer);
+  }
+  layoutSaveTimer = setTimeout(() => {
+    layoutSaveTimer = null;
+    persistLayout();
+  }, LAYOUT_SAVE_DEBOUNCE_MS);
+}
+
+/**
+ * Flushes a pending debounced layout save SYNCHRONOUSLY, cancelling the timer
+ * first. Called at quit alongside {@link flush} so a divider drag that settled
+ * within {@link LAYOUT_SAVE_DEBOUNCE_MS} of Cmd+Q is still persisted — the layout
+ * lives outside the store snapshot, so the store flush does not cover it.
+ */
+function flushLayoutSave(): void {
+  if (layoutSaveTimer === null) {
+    return;
+  }
+  clearTimeout(layoutSaveTimer);
+  layoutSaveTimer = null;
+  persistLayout();
+}
+
+/**
+ * Sends the divider view its current geometry (the left-pane `ratio` and the
+ * usable `dividableWidth` the ratio applies to) over
+ * {@link IPC.splitViewDividerLayout}, so the gutter can translate a pixel drag
+ * back into a ratio. A no-op unless in split with a live divider view. Called
+ * after entering split, after {@link doSetRatio}, and on resize.
+ */
+function sendDividerGeometry(): void {
+  if (layout.mode !== "split") {
+    return;
+  }
+  if (dividerView === null || dividerView.webContents.isDestroyed()) {
+    return;
+  }
+  dividerView.webContents.send(IPC.splitViewDividerLayout, {
+    ratio: layout.ratio,
+    dividableWidth: dividableWidth(),
+  });
+}
+
+/**
+ * The {@link DividerGeometry} seed the renderer reads on demand: the live `ratio`
+ * and `dividableWidth` in split, or {@link DEFAULT_SPLIT_RATIO} + `dividableWidth`
+ * in single. Changes no state.
+ */
+function dividerGeometrySeed(): DividerGeometry {
+  return {
+    ratio: layout.mode === "split" ? layout.ratio : DEFAULT_SPLIT_RATIO,
+    dividableWidth: dividableWidth(),
+  };
+}
+
+/**
+ * The most-recently-active OTHER open tab of the active space: from `store.list()`
+ * (the active space's open tabs) excluding the active tab, the one with the
+ * greatest `lastActiveAt`, ties broken by ascending order in `store.list()`.
+ * `null` when there is no other open tab.
+ */
+function mostRecentOtherTabId(): string | null {
+  const activeId = store.activeTabId;
+  let best: Tab | null = null;
+  for (const t of store.list()) {
+    if (t.id === activeId) {
+      continue;
+    }
+    if (best === null || t.lastActiveAt > best.lastActiveAt) {
+      best = t;
+    }
+  }
+  return best?.id ?? null;
+}
+
+/**
+ * Enters a split of the active tab (left, focused) with the most recent other
+ * open tab (PRD §6). REJECTS (changing nothing) when there is no active tab, the
+ * layout is already split, or the active space has fewer than two open tabs. On
+ * success it updates + persists the layout, re-lays the views, sends the divider
+ * geometry, and broadcasts.
+ */
+function doSplit(): Promise<void> {
+  const activeId = store.activeTabId;
+  if (activeId === null) {
+    return Promise.reject(new Error("split: no active tab"));
+  }
+  if (layout.mode === "split") {
+    return Promise.reject(new Error("split: layout is already split"));
+  }
+  if (store.list().length < 2) {
+    return Promise.reject(new Error("split: need at least two open tabs"));
+  }
+  const otherId = mostRecentOtherTabId();
+  if (otherId === null) {
+    return Promise.reject(new Error("split: no other open tab to split against"));
+  }
+  layout = enterSplit(activeId, otherId);
+  persistLayout();
+  applyLayout();
+  sendDividerGeometry();
+  broadcast();
+  return Promise.resolve();
+}
+
+/**
+ * Enters a split of the active tab (left, focused) with the chosen `tabId` (PRD
+ * §6). REJECTS (changing nothing) when there is no active tab, the layout is
+ * already split, `tabId` is the active tab, or `tabId` is not an open tab of the
+ * active space. On success it updates + persists the layout, re-lays the views,
+ * sends the divider geometry, and broadcasts.
+ */
+function doSplitWith(tabId: string): Promise<void> {
+  const activeId = store.activeTabId;
+  if (activeId === null) {
+    return Promise.reject(new Error("splitWith: no active tab"));
+  }
+  if (layout.mode === "split") {
+    return Promise.reject(new Error("splitWith: layout is already split"));
+  }
+  if (tabId === activeId) {
+    return Promise.reject(new Error("splitWith: cannot split a tab with itself"));
+  }
+  if (!store.list().some((t) => t.id === tabId)) {
+    return Promise.reject(new Error("splitWith: not an open tab of the active space"));
+  }
+  layout = enterSplit(activeId, tabId);
+  persistLayout();
+  applyLayout();
+  sendDividerGeometry();
+  broadcast();
+  return Promise.resolve();
+}
+
+/**
+ * Collapses a split back to a single pane (PRD §6), keeping the focused pane's tab
+ * active. A no-op when already single. Persists, re-lays the views (hiding the
+ * divider), and broadcasts.
+ */
+function doUnsplit(): void {
+  if (layout.mode === "single") {
+    return;
+  }
+  const focusedTabId = focusedPaneTab(layout);
+  if (focusedTabId !== null) {
+    store.activate(focusedTabId);
+  }
+  layout = unsplit(layout);
+  persistLayout();
+  applyLayout();
+  broadcast();
+}
+
+/**
+ * Swaps the two panes (PRD §6): the same tab stays active and focused, so no
+ * store re-activation is needed. A no-op when single. Persists, re-lays the views,
+ * sends the divider geometry, and broadcasts.
+ */
+function doSwap(): void {
+  if (layout.mode === "single") {
+    return;
+  }
+  layout = swapPanes(layout);
+  persistLayout();
+  applyLayout();
+  sendDividerGeometry();
+  broadcast();
+}
+
+/**
+ * Focuses a specific pane (PRD §6). Throws a `TypeError` (rejecting before any
+ * change) when `pane` is not exactly `"left"` or `"right"` — a runtime guard on
+ * the untrusted IPC payload. A no-op when single or the pane is already focused.
+ * Otherwise it points focus + the active tab at that pane (keeping the §2
+ * invariant), reconciles to confirm, persists, re-lays, and broadcasts.
+ */
+function doFocusPane(pane: PaneSide): void {
+  if (pane !== "left" && pane !== "right") {
+    throw new TypeError("splitView.focusPane expects 'left' or 'right'");
+  }
+  if (layout.mode === "single" || layout.focused === pane) {
+    return;
+  }
+  const paneTabId = pane === "left" ? layout.left : layout.right;
+  layout = { ...layout, focused: pane };
+  store.activate(paneTabId);
+  layout = reconcileLayout(layout, store.list().map((t) => t.id), store.activeTabId);
+  persistLayout();
+  applyLayout();
+  broadcast();
+}
+
+/**
+ * Toggles focus to the other pane (PRD §6), pointing the active tab at the newly
+ * focused pane so `store.activeTabId` tracks focus (§2). The only caller of
+ * {@link focusOtherPane}. A no-op when single. Persists, re-lays, and broadcasts.
+ */
+function doFocusOther(): void {
+  if (layout.mode === "single") {
+    return;
+  }
+  layout = focusOtherPane(layout);
+  const focusedTabId = focusedPaneTab(layout);
+  if (focusedTabId !== null) {
+    store.activate(focusedTabId);
+  }
+  persistLayout();
+  applyLayout();
+  broadcast();
+}
+
+/**
+ * Sets the left-pane width fraction to `clampRatio(ratio)` (PRD §6). A no-op when
+ * single OR when the clamped ratio equals the current one (no broadcast). Else it
+ * updates the layout, re-bounds both panes + the divider, sends the divider
+ * geometry, broadcasts, and schedules a DEBOUNCED persist (a drag writes once
+ * after it settles).
+ */
+function doSetRatio(ratio: number): void {
+  if (layout.mode === "single") {
+    return;
+  }
+  if (clampRatio(ratio) === layout.ratio) {
+    return;
+  }
+  layout = setRatio(layout, ratio);
+  applyLayout();
+  sendDividerGeometry();
+  broadcast();
+  scheduleLayoutSave();
+}
+
 /**
  * The one handler per {@link CommandId}, called only by {@link executeCommand}
  * (which gates enablement first, so the `!`/no-op guards here never run on a
@@ -1490,7 +1956,10 @@ const commandHandlers: Record<CommandId, () => void> = {
   "space.new": () => {
     const space = store.createSpace(defaultSpaceName(store.spaces()));
     store.setActiveSpace(space.id);
-    setActive(store.activeTabId);
+    // Switching to the new space invalidates any split of the old space's tabs, so
+    // reconcile (→ single) and re-lay the new space's active view (hiding the
+    // divider).
+    reconcileAndApply();
     broadcast();
   },
   "space.rename": () =>
@@ -1600,6 +2069,16 @@ const commandHandlers: Record<CommandId, () => void> = {
   "find.next": () => findNext(),
   "find.previous": () => findPrevious(),
   "find.close": () => closeFindSession(),
+  "view.split": () => {
+    // doSplit may reject (no active tab, already split, or < 2 open tabs);
+    // executeCommand gates enablement first, but swallow-log any residual
+    // rejection like the zoom handlers rather than crash the dispatch.
+    doSplit().catch((err) => console.error("[split] view.split failed:", err));
+  },
+  "view.splitChoose": () => openCommandBar("split"),
+  "view.unsplit": () => doUnsplit(),
+  "view.focusOtherPane": () => doFocusOther(),
+  "view.swapPanes": () => doSwap(),
 };
 
 /**
@@ -1940,8 +2419,10 @@ function findPrevious(): void {
  */
 function submitCommandBar(text: string, mode?: CommandBarMode): void {
   const requestedMode: CommandBarMode = mode ?? (commandBar.open ? commandBar.mode : "navigate");
-  if (requestedMode === "commands") {
-    throw new Error("submit is not valid in commands mode");
+  if (requestedMode === "commands" || requestedMode === "split") {
+    // Neither commands mode nor split mode has a text action: commands runs the
+    // highlighted command, split fills the second pane from a chosen tab row.
+    throw new Error(`submit is not valid in ${requestedMode} mode`);
   }
   const target = resolveInput(text, settings.searchEngine);
   if (target === null) {
@@ -2008,12 +2489,22 @@ function moveSelectionCommandBar(delta: 1 | -1): void {
 function performSuggestion(s: Suggestion): void {
   switch (s.kind) {
     case "tab": {
+      // Split mode: the bar is picking the second pane. The split suggest branch
+      // only offers active-space tabs, so there is no space switch — fill the
+      // second pane against the chosen tab. doSplitWith may reject (e.g. already
+      // split, or the tab is the active one); swallow-log it like view.split.
+      if (commandBar.mode === "split") {
+        doSplitWith(s.tabId).catch((err) =>
+          console.error("[split] splitWith from bar failed:", err),
+        );
+        return;
+      }
       if (s.spaceId !== store.activeSpaceId) {
         store.setActiveSpace(s.spaceId);
       }
-      // activateTab does store.activate + view reconcile + setActive (the
-      // cross-space hide/show transition, since setActive hides every other
-      // space's views) + broadcast.
+      // activateTab does store.activate + view reconcile (the cross-space
+      // hide/show transition, and a split collapse when the tab is not a pane) +
+      // broadcast.
       activateTab(s.tabId);
       return;
     }
@@ -2036,7 +2527,9 @@ function performSuggestion(s: Suggestion): void {
     }
     case "space": {
       store.setActiveSpace(s.spaceId);
-      ensureActiveView();
+      // A space switch invalidates any split of the outgoing space's tabs, so
+      // reconcile (→ single) and re-lay the incoming space's active view.
+      reconcileAndApply();
       broadcast();
       return;
     }
@@ -2102,9 +2595,15 @@ function acceptCommandBar(index?: number, revision?: number): void {
   }
   const idx = index ?? commandBar.selectedIndex;
   if (idx === -1) {
-    // Commands and downloads modes have no text action: a no-match query simply
-    // leaves the bar open rather than routing to submit (which rejects anyway).
-    if (commandBar.mode === "commands" || commandBar.mode === "downloads") {
+    // Commands, split, and downloads modes have no text action: a no-match
+    // query simply leaves the bar open rather than routing to submit (which
+    // rejects in these modes) — split can only fill the second pane from an
+    // existing tab row.
+    if (
+      commandBar.mode === "commands" ||
+      commandBar.mode === "split" ||
+      commandBar.mode === "downloads"
+    ) {
       return;
     }
     submitCommandBar(commandBar.query);
@@ -2155,9 +2654,11 @@ function closeTab(id: string): void {
   lastVisitId.delete(id);
   hasRealTitle.delete(id);
   destroyView(id);
-  // MRU re-activation may land on a not-yet-materialized restored sibling tab,
-  // so ensure its view exists before showing it (lazy restore).
-  ensureActiveView();
+  // If the closed tab was a split pane, keep the surviving pane active before the
+  // split collapses; then reconcile (→ single) and re-lay the view. Lazy restore
+  // still applies: reconcileAndApply materializes the active view if missing.
+  preserveSurvivingPane(id);
+  reconcileAndApply();
   broadcast();
 }
 
@@ -2179,9 +2680,11 @@ function removeTab(id: string): void {
   lastVisitId.delete(id);
   hasRealTitle.delete(id);
   destroyView(id);
-  // MRU re-activation may land on a not-yet-materialized restored sibling tab,
-  // so ensure its view exists before showing it (lazy restore).
-  ensureActiveView();
+  // If the removed tab was a split pane, keep the surviving pane active before the
+  // split collapses; then reconcile (→ single) and re-lay the view (lazy restore
+  // materializes the active view if missing).
+  preserveSurvivingPane(id);
+  reconcileAndApply();
   broadcast();
 }
 
@@ -2232,9 +2735,11 @@ function unpinTab(id: string): void {
 
 function archiveTab(id: string): void {
   store.archive(id);
-  // Archiving the active tab re-points active to an MRU sibling that may be a
-  // not-yet-materialized restored tab, so ensure its view exists (lazy restore).
-  ensureActiveView();
+  // If the archived tab was a split pane, keep the surviving pane active before
+  // the split collapses; then reconcile (→ single, since an archived tab is no
+  // longer open) and re-lay the view (lazy restore materializes it if missing).
+  preserveSurvivingPane(id);
+  reconcileAndApply();
   broadcast();
 }
 
@@ -2283,9 +2788,10 @@ function deleteSpace(id: string): void {
   }
 
   if (wasActive) {
-    // The store activated a surviving space; materialize its active tab's view
-    // if the lazy restore never created one, then show it and hide the rest.
-    ensureActiveView();
+    // The store activated a surviving space; reconcile the layout (a split of the
+    // deleted space's tabs collapses to single) and materialize + show its active
+    // tab's view (hiding the divider), creating it if the lazy restore never did.
+    reconcileAndApply();
   }
   broadcast();
 }
@@ -2347,9 +2853,10 @@ function remapSpaceProfile(spaceId: string, profileId: string): void {
     }
   }
 
-  // Global active tab: hides an inactive space's recreated views, shows the
-  // active one.
-  setActive(store.activeTabId);
+  // Global active tab: hides an inactive space's recreated views and shows the
+  // active one — or, when the remapped space is active and split, re-lays both
+  // recreated pane views and the divider.
+  reconcileAndApply();
   broadcast();
 }
 
@@ -2382,8 +2889,13 @@ function setActive(id: string | null): void {
  * progress tick never triggers a full-state serialization (download rows persist
  * through their own throttled update helper); every other caller keeps the default
  * and save behavior is unchanged.
+ *
+ * Also keeps `layout` consistent with the live open tabs and active tab before
+ * every snapshot (idempotent guard), so a broadcast always carries a layout that
+ * matches the store even on a path that mutated the store without reconciling.
  */
 function broadcast({ persist = true }: { persist?: boolean } = {}): void {
+  layout = reconcileLayout(layout, store.list().map((t) => t.id), store.activeTabId);
   const snapshot = fullSnapshot();
   win?.webContents.send(IPC.stateChange, snapshot);
   // The settings view mirrors the same snapshot while it exists (even when
@@ -2445,7 +2957,10 @@ function activateTab(id: string): void {
       createViewFor(tab, tracked.spaceId);
     }
   }
-  setActive(id);
+  // Layout-aware reconcile: activating a pane tab re-focuses that pane; activating
+  // a non-pane tab collapses the split to single (reconcile drops the split when
+  // the active tab is neither pane), and applyLayout materializes the view.
+  reconcileAndApply();
   broadcast();
 }
 
@@ -2459,9 +2974,10 @@ function sweepIdle(): void {
   const archived = store.archiveIdleAll(IDLE_THRESHOLD_MS);
   if (archived.length > 0) {
     // Only the active space's active tab is ever visible; archived tabs in
-    // inactive spaces are already hidden, so re-pointing the active view covers
-    // the visible side of the sweep.
-    setActive(store.activeTabId);
+    // inactive spaces are already hidden, so re-laying the active view covers the
+    // visible side of the sweep. A sweep that archived a non-focused split pane
+    // collapses the split (reconcile) and hides the divider.
+    reconcileAndApply();
     broadcast();
   }
 }
@@ -2698,6 +3214,13 @@ function createWindow(seed: boolean): void {
         overlay?.webContents.focus();
       }
     }
+    // In split, re-bound both panes + the divider to the new content size and push
+    // the fresh divider geometry (the single-mode active-view bound above is a
+    // harmless no-op, immediately overwritten by applyLayout).
+    if (layout.mode === "split") {
+      applyLayout();
+      sendDividerGeometry();
+    }
   });
 
   // Window lost OS focus → dismiss the command bar.
@@ -2732,6 +3255,13 @@ function createWindow(seed: boolean): void {
     }
     settingsView = null;
     settingsOpen = false;
+    // Drop the divider view with the window too; a later split recreates it
+    // lazily. The layout itself is re-derived from the persisted value on the
+    // next createWindow, so it is left as-is here.
+    if (dividerView !== null && !dividerView.webContents.isDestroyed()) {
+      dividerView.webContents.close();
+    }
+    dividerView = null;
     win = null;
   });
 
@@ -2742,7 +3272,19 @@ function createWindow(seed: boolean): void {
   if (seed && store.allOpenTabs().length === 0) {
     store.create({ url: DEFAULT_URL, title: titleForUrl(DEFAULT_URL) });
   }
-  ensureActiveView();
+  // Restore the persisted window layout, reconciled against the live open tabs and
+  // active tab (a fresh/seeded store, or a persisted split whose panes are gone,
+  // collapses to single — which is correct). applyLayout then materializes the
+  // pane views lazily and, in split, the divider gets its geometry pushed.
+  let persistedLayout: WindowLayout = SINGLE_LAYOUT;
+  try {
+    persistedLayout = readWindowLayout();
+  } catch (err) {
+    console.error("[split] failed to read persisted layout; defaulting to single:", err);
+  }
+  layout = reconcileLayout(persistedLayout, store.list().map((t) => t.id), store.activeTabId);
+  applyLayout();
+  sendDividerGeometry();
   broadcast();
 }
 
@@ -2790,7 +3332,10 @@ ipcMain.handle(IPC.tabsRestore, (_event, id: string): void => {
       createViewFor(tab, store.activeSpaceId);
     }
   }
-  setActive(store.activeTabId);
+  // Restoring does not change the active tab, so a live split is preserved; the
+  // restored (non-pane) view is materialized hidden. reconcileAndApply re-lays the
+  // current layout (single or split).
+  reconcileAndApply();
   broadcast();
 });
 
@@ -3064,9 +3609,10 @@ ipcMain.handle(IPC.spacesRename, (_event, id: string, name: string): void => {
 
 ipcMain.handle(IPC.spacesActivate, (_event, id: string): void => {
   store.setActiveSpace(id);
-  // Hide the outgoing space's views and show the incoming space's active tab,
+  // A space switch invalidates any split of the outgoing space's tabs: reconcile
+  // (→ single, hiding the divider) and show the incoming space's active tab,
   // materializing that tab's view if the restored space never had one.
-  ensureActiveView();
+  reconcileAndApply();
   broadcast();
 });
 
@@ -3145,6 +3691,45 @@ ipcMain.handle(
 
 ipcMain.handle(IPC.spacesList, (): SpacesState => store.spacesSnapshot());
 
+// --- Split view (PRD 7.1) -----------------------------------------------------
+// split/splitWith run the internal ops and let a rejection (no active tab,
+// already split, bad tab, < 2 open tabs) propagate to the renderer's invoke;
+// unsplit/swap/focusOther/setRatio are always-valid no-op-or-apply void ops;
+// focusPane throws a TypeError on a bad pane payload (rejecting over the bridge);
+// dividerGeometry/state read the current geometry/layout back synchronously. The
+// layout rides the existing stateChange broadcast on TabsState.layout.
+ipcMain.handle(IPC.splitViewSplit, async (): Promise<void> => {
+  await doSplit();
+});
+
+ipcMain.handle(IPC.splitViewSplitWith, async (_event, tabId: string): Promise<void> => {
+  await doSplitWith(tabId);
+});
+
+ipcMain.handle(IPC.splitViewUnsplit, (): void => {
+  doUnsplit();
+});
+
+ipcMain.handle(IPC.splitViewSwap, (): void => {
+  doSwap();
+});
+
+ipcMain.handle(IPC.splitViewFocusPane, (_event, pane: PaneSide): void => {
+  doFocusPane(pane);
+});
+
+ipcMain.handle(IPC.splitViewFocusOther, (): void => {
+  doFocusOther();
+});
+
+ipcMain.handle(IPC.splitViewSetRatio, (_event, ratio: number): void => {
+  doSetRatio(ratio);
+});
+
+ipcMain.handle(IPC.splitViewDividerGeometry, (): DividerGeometry => dividerGeometrySeed());
+
+ipcMain.handle(IPC.splitViewState, (): WindowLayout => layout);
+
 /**
  * Builds and installs the application menu. Accelerators here are
  * application-level, so they fire whether focus is in the sidebar renderer or
@@ -3200,7 +3785,9 @@ function buildMenu(): void {
         const target = store.spaces()[i];
         if (target !== undefined) {
           store.setActiveSpace(target.id);
-          ensureActiveView();
+          // A space switch invalidates any split of the outgoing space's tabs, so
+          // reconcile (→ single) and re-lay the incoming space's active view.
+          reconcileAndApply();
           broadcast();
         }
       },
@@ -3464,4 +4051,5 @@ app.on("window-all-closed", () => {
 // never broadcast (e.g. the window-focus lastActiveAt re-stamp) is still saved.
 app.on("before-quit", () => {
   flush(store);
+  flushLayoutSave();
 });

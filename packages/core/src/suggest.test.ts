@@ -631,6 +631,60 @@ describe("suggest — history mode", () => {
   });
 });
 
+describe("suggest — split mode", () => {
+  test("empty query returns the active space's other open tabs, MRU-first, active and archived excluded", () => {
+    const rows = suggest(
+      "  ",
+      catalog({
+        spaces: [{ id: "s1", name: "Personal", active: true }],
+        tabs: [
+          tab({ tabId: "a", title: "A", spaceId: "s1", lastActiveAt: 3 }),
+          tab({ tabId: "active", title: "Active", spaceId: "s1", lastActiveAt: 100 }),
+          tab({ tabId: "b", title: "B", spaceId: "s1", lastActiveAt: 7 }),
+        ],
+        // Archived tabs are never offered as a split target.
+        archived: [archivedTab({ tabId: "arch", title: "Arch", spaceId: "s1" })],
+      }),
+      options({ mode: "split", activeTabId: "active" }),
+    );
+    expect(rows.every((r) => r.kind === "tab")).toBe(true);
+    expect(rows.map((r) => (r.kind === "tab" ? r.tabId : ""))).toEqual(["b", "a"]);
+  });
+
+  test("only the active space's tabs are offered", () => {
+    const rows = suggest(
+      "",
+      catalog({
+        spaces: [
+          { id: "s1", name: "Personal", active: true },
+          { id: "s2", name: "Work", active: false },
+        ],
+        tabs: [
+          tab({ tabId: "here", title: "Here", spaceId: "s1", lastActiveAt: 1 }),
+          tab({ tabId: "there", title: "There", spaceId: "s2", lastActiveAt: 9 }),
+        ],
+      }),
+      options({ mode: "split", activeTabId: null }),
+    );
+    expect(rows.map((r) => (r.kind === "tab" ? r.tabId : ""))).toEqual(["here"]);
+  });
+
+  test("a non-empty query filters by title or url substring", () => {
+    const rows = suggest(
+      "docs",
+      catalog({
+        spaces: [{ id: "s1", name: "Personal", active: true }],
+        tabs: [
+          tab({ tabId: "match", title: "Docs", url: "https://d.test/", spaceId: "s1", lastActiveAt: 1 }),
+          tab({ tabId: "miss", title: "Other", url: "https://o.test/", spaceId: "s1", lastActiveAt: 2 }),
+        ],
+      }),
+      options({ mode: "split", activeTabId: null }),
+    );
+    expect(rows.map((r) => (r.kind === "tab" ? r.tabId : ""))).toEqual(["match"]);
+  });
+});
+
 describe("suggest — downloads mode", () => {
   test("an empty query lists every download in catalog (newest-first) order", () => {
     const rows = suggest(

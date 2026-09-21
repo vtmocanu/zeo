@@ -3126,6 +3126,12 @@ test.describe("zeo desktop app", () => {
     // closes out the commands-mode list. find.next/find.previous are disabled
     // while find is closed (which it is here), so they do NOT appear.
     "find.open",
+    // PRD 7.1 — view.split / view.splitChoose are the last registry rows and are
+    // enabled in single layout with >=2 open tabs (this host context seeds a
+    // loopback tab alongside the initial tab, so >=2). view.unsplit /
+    // view.focusOtherPane / view.swapPanes need split mode, so they do NOT appear.
+    "view.split",
+    "view.splitChoose",
   ];
 
   // §5 bullet 1 — commands mode opens empty, lists only enabled command rows in
