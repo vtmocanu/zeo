@@ -40,7 +40,16 @@ import {
   clearHistory,
   historyStats,
   pruneHistory,
+  insertDownload,
+  updateDownload,
+  deleteDownload,
+  clearFinishedDownloadRows,
+  listDownloads,
+  markInterruptedDownloadsOnLaunch,
+  scheduleSave,
+  flush,
 } from "./db.js";
+import type { Download } from "@zeo/core";
 
 /** The pre-migration (schema v1) DDL: the four tables WITHOUT `meta.enabled`. */
 const V1_DDL = `
@@ -118,14 +127,21 @@ const V5_DDL =
   V4_DDL +
   "ALTER TABLE meta ADD COLUMN searchEngine TEXT NOT NULL DEFAULT 'duckduckgo';";
 
-/** The schema v6 DDL: v5 plus the site_zoom table. */
+/** The schema v6 DDL: v5 plus the site_zoom table. A historical fixture
+ *  predating BOTH the downloads table and the meta layout columns. */
 const V6_DDL =
   V5_DDL +
   "CREATE TABLE site_zoom (host TEXT PRIMARY KEY, factor REAL NOT NULL, updatedAt INTEGER NOT NULL);";
 
-/** The current (schema v7) DDL: v6 plus the five meta layout columns. */
+/** The schema v7 DDL: v6 plus the downloads table. A historical fixture
+ *  predating the meta layout columns. */
 const V7_DDL =
   V6_DDL +
+  "CREATE TABLE downloads (id TEXT PRIMARY KEY, url TEXT NOT NULL, filename TEXT NOT NULL, path TEXT NOT NULL, totalBytes INTEGER NOT NULL, receivedBytes INTEGER NOT NULL, state TEXT NOT NULL, startedAt INTEGER NOT NULL, completedAt INTEGER, spaceId TEXT);";
+
+/** The current (schema v8) DDL: v7 plus the five meta layout columns. */
+const V8_DDL =
+  V7_DDL +
   "ALTER TABLE meta ADD COLUMN layoutMode TEXT NOT NULL DEFAULT 'single';" +
   "ALTER TABLE meta ADD COLUMN layoutLeftTabId TEXT;" +
   "ALTER TABLE meta ADD COLUMN layoutRightTabId TEXT;" +
@@ -164,6 +180,17 @@ function hasLayoutColumns(db: Database.Database): boolean {
     names.has("layoutRightTabId") &&
     names.has("layoutRatio") &&
     names.has("layoutFocused")
+  );
+}
+
+/** True when the `downloads` table exists in the database. */
+function hasDownloadsTable(db: Database.Database): boolean {
+  return (
+    db
+      .prepare(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='downloads'",
+      )
+      .get() !== undefined
   );
 }
 
@@ -220,7 +247,7 @@ afterEach(() => {
 });
 
 describe("migrate", () => {
-  test("upgrades a v1 database to the current version, adding enabled, the allowlist, history, the search engine, and site_zoom and preserving rows", () => {
+  test("upgrades a v1 database to the current version, adding enabled, the allowlist, history, the search engine, site_zoom, and downloads and preserving rows", () => {
     const path = join(tempDir, "v1.db");
     const db = new Database(path);
     db.exec(V1_DDL);
@@ -233,6 +260,7 @@ describe("migrate", () => {
     expect(hasHistoryTable(db)).toBe(false);
     expect(hasSiteZoomTable(db)).toBe(false);
     expect(hasSearchEngineColumn(db)).toBe(false);
+    expect(hasDownloadsTable(db)).toBe(false);
 
     migrate(db);
 
@@ -246,7 +274,7 @@ describe("migrate", () => {
       enabled: number;
       searchEngine: string;
     };
-    expect(meta.schemaVersion).toBe(7);
+    expect(meta.schemaVersion).toBe(8);
     expect(hasEnabledColumn(db)).toBe(true);
     expect(hasAllowlistTable(db)).toBe(true);
     expect(meta.enabled).toBe(1);
@@ -255,6 +283,7 @@ describe("migrate", () => {
     expect(meta.searchEngine).toBe("duckduckgo");
     expect(hasSiteZoomTable(db)).toBe(true);
     expect(hasLayoutColumns(db)).toBe(true);
+    expect(hasDownloadsTable(db)).toBe(true);
     // Pre-existing rows preserved.
     expect(meta.activeSpaceId).toBe("space-1");
     expect(db.prepare("SELECT id FROM profiles").get()).toEqual({ id: "p1" });
@@ -263,7 +292,7 @@ describe("migrate", () => {
     db.close();
   });
 
-  test("upgrades a v2 database to the current version, adding the allowlist, history, the search engine, and site_zoom and preserving rows", () => {
+  test("upgrades a v2 database to the current version, adding the allowlist, history, the search engine, site_zoom, and downloads and preserving rows", () => {
     const path = join(tempDir, "v2.db");
     const db = new Database(path);
     db.exec(V2_DDL);
@@ -276,18 +305,20 @@ describe("migrate", () => {
     expect(hasAllowlistTable(db)).toBe(false);
     expect(hasHistoryTable(db)).toBe(false);
     expect(hasSiteZoomTable(db)).toBe(false);
+    expect(hasDownloadsTable(db)).toBe(false);
 
     migrate(db);
 
     const meta = db
       .prepare("SELECT schemaVersion, activeSpaceId, enabled FROM meta WHERE id=0")
       .get() as { schemaVersion: number; activeSpaceId: string; enabled: number };
-    expect(meta.schemaVersion).toBe(7);
+    expect(meta.schemaVersion).toBe(8);
     expect(hasAllowlistTable(db)).toBe(true);
     expect(hasHistoryTable(db)).toBe(true);
     expect(hasSearchEngineColumn(db)).toBe(true);
     expect(hasSiteZoomTable(db)).toBe(true);
     expect(hasLayoutColumns(db)).toBe(true);
+    expect(hasDownloadsTable(db)).toBe(true);
     expect(
       db
         .prepare(
@@ -304,7 +335,7 @@ describe("migrate", () => {
     db.close();
   });
 
-  test("upgrades a v3 database to the current version, adding the history tables, the search engine, and site_zoom and preserving the allowlist and rows", () => {
+  test("upgrades a v3 database to the current version, adding the history tables, the search engine, site_zoom, and downloads and preserving the allowlist and rows", () => {
     const path = join(tempDir, "v3-to-current.db");
     const db = new Database(path);
     db.exec(V3_DDL);
@@ -319,17 +350,19 @@ describe("migrate", () => {
 
     expect(hasHistoryTable(db)).toBe(false);
     expect(hasSiteZoomTable(db)).toBe(false);
+    expect(hasDownloadsTable(db)).toBe(false);
 
     migrate(db);
 
     const meta = db
       .prepare("SELECT schemaVersion, activeSpaceId, enabled FROM meta WHERE id=0")
       .get() as { schemaVersion: number; activeSpaceId: string; enabled: number };
-    expect(meta.schemaVersion).toBe(7);
+    expect(meta.schemaVersion).toBe(8);
     expect(hasHistoryTable(db)).toBe(true);
     expect(hasSearchEngineColumn(db)).toBe(true);
     expect(hasSiteZoomTable(db)).toBe(true);
     expect(hasLayoutColumns(db)).toBe(true);
+    expect(hasDownloadsTable(db)).toBe(true);
     // Pre-existing allowlist, rows, and the enabled flag preserved.
     expect(hasAllowlistTable(db)).toBe(true);
     expect(db.prepare("SELECT host FROM blocking_allowlist").get()).toEqual({
@@ -341,7 +374,7 @@ describe("migrate", () => {
     db.close();
   });
 
-  test("upgrades a v4 database to the current version, adding the searchEngine column and site_zoom table and preserving rows", () => {
+  test("upgrades a v4 database to the current version, adding the searchEngine column, site_zoom table, and downloads table and preserving rows", () => {
     const path = join(tempDir, "v4-to-current.db");
     const db = new Database(path);
     db.exec(V4_DDL);
@@ -353,6 +386,7 @@ describe("migrate", () => {
 
     expect(hasSearchEngineColumn(db)).toBe(false);
     expect(hasSiteZoomTable(db)).toBe(false);
+    expect(hasDownloadsTable(db)).toBe(false);
 
     migrate(db);
 
@@ -366,12 +400,13 @@ describe("migrate", () => {
       enabled: number;
       searchEngine: string;
     };
-    expect(meta.schemaVersion).toBe(7);
+    expect(meta.schemaVersion).toBe(8);
     expect(hasSearchEngineColumn(db)).toBe(true);
     // The new column defaults to duckduckgo on the existing row.
     expect(meta.searchEngine).toBe("duckduckgo");
     expect(hasSiteZoomTable(db)).toBe(true);
     expect(hasLayoutColumns(db)).toBe(true);
+    expect(hasDownloadsTable(db)).toBe(true);
     // Pre-existing rows and the enabled flag preserved.
     expect(meta.activeSpaceId).toBe("space-1");
     expect(meta.enabled).toBe(0);
@@ -381,7 +416,7 @@ describe("migrate", () => {
     db.close();
   });
 
-  test("upgrades a v5 database to the current version, adding an empty site_zoom table and the layout columns and preserving the search engine and other state", () => {
+  test("upgrades a v5 database to the current version, adding an empty site_zoom table, the downloads table, and the layout columns and preserving the search engine and other state", () => {
     const path = join(tempDir, "v5-to-current.db");
     const db = new Database(path);
     db.exec(V5_DDL);
@@ -392,6 +427,7 @@ describe("migrate", () => {
     ).run();
 
     expect(hasSiteZoomTable(db)).toBe(false);
+    expect(hasDownloadsTable(db)).toBe(false);
     expect(hasSearchEngineColumn(db)).toBe(true);
 
     migrate(db);
@@ -406,14 +442,19 @@ describe("migrate", () => {
       enabled: number;
       searchEngine: string;
     };
-    expect(meta.schemaVersion).toBe(7);
+    expect(meta.schemaVersion).toBe(8);
     expect(hasSiteZoomTable(db)).toBe(true);
     expect(hasLayoutColumns(db)).toBe(true);
-    // The freshly-created table starts with no rows.
-    const count = db
+    expect(hasDownloadsTable(db)).toBe(true);
+    // The freshly-created tables start with no rows.
+    const zoomCount = db
       .prepare("SELECT COUNT(*) AS n FROM site_zoom")
       .get() as { n: number };
-    expect(count.n).toBe(0);
+    expect(zoomCount.n).toBe(0);
+    const downloadCount = db
+      .prepare("SELECT COUNT(*) AS n FROM downloads")
+      .get() as { n: number };
+    expect(downloadCount.n).toBe(0);
     // The search engine is preserved (not reset) and other seeded state survives.
     expect(meta.searchEngine).toBe("google");
     expect(meta.activeSpaceId).toBe("space-9");
@@ -421,18 +462,32 @@ describe("migrate", () => {
     db.close();
   });
 
-  test("creates a fresh v7 schema with enabled=1, the allowlist, history, and site_zoom tables, the search engine, and the layout columns on an empty database", () => {
-    const path = join(tempDir, "fresh.db");
+  test("upgrades a v6 database to the current version (v8), adding the downloads table and the layout columns and preserving rows", () => {
+    const path = join(tempDir, "v6-to-current.db");
     const db = new Database(path);
+    db.exec(V6_DDL);
+    // Seed enabled=0, a non-default searchEngine, seeded tab rows, and a site_zoom
+    // row so a spurious re-create (which would wipe them) is detectable.
+    db.prepare(
+      "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled,searchEngine) VALUES (0, 6, 'space-1', 0, 'google')",
+    ).run();
+    seedRows(db, "space-1");
+    db.prepare(
+      "INSERT INTO site_zoom(host,factor,updatedAt) VALUES ('example.com', 1.5, 42)",
+    ).run();
+
+    expect(hasDownloadsTable(db)).toBe(false);
+    expect(hasLayoutColumns(db)).toBe(false);
 
     migrate(db);
 
     const meta = db
       .prepare(
-        "SELECT schemaVersion, enabled, searchEngine, layoutMode, layoutLeftTabId, layoutRightTabId, layoutRatio, layoutFocused FROM meta WHERE id=0",
+        "SELECT schemaVersion, activeSpaceId, enabled, searchEngine, layoutMode, layoutLeftTabId, layoutRightTabId, layoutRatio, layoutFocused FROM meta WHERE id=0",
       )
       .get() as {
       schemaVersion: number;
+      activeSpaceId: string;
       enabled: number;
       searchEngine: string;
       layoutMode: string;
@@ -441,36 +496,43 @@ describe("migrate", () => {
       layoutRatio: number;
       layoutFocused: string;
     };
-    expect(meta.schemaVersion).toBe(7);
-    expect(hasEnabledColumn(db)).toBe(true);
-    expect(hasAllowlistTable(db)).toBe(true);
-    expect(meta.enabled).toBe(1);
-    expect(hasHistoryTable(db)).toBe(true);
-    expect(hasSearchEngineColumn(db)).toBe(true);
-    expect(meta.searchEngine).toBe("duckduckgo");
-    expect(hasSiteZoomTable(db)).toBe(true);
-    // The layout columns exist and carry their DDL defaults on the seeded row.
+    expect(meta.schemaVersion).toBe(8);
+    // The downloads table is present and empty.
+    expect(hasDownloadsTable(db)).toBe(true);
+    const downloadCount = db
+      .prepare("SELECT COUNT(*) AS n FROM downloads")
+      .get() as { n: number };
+    expect(downloadCount.n).toBe(0);
+    // The five layout columns are present with their defaults on the existing row.
     expect(hasLayoutColumns(db)).toBe(true);
     expect(meta.layoutMode).toBe("single");
     expect(meta.layoutLeftTabId).toBe(null);
     expect(meta.layoutRightTabId).toBe(null);
     expect(meta.layoutRatio).toBe(0.5);
     expect(meta.layoutFocused).toBe("left");
+    // Pre-existing state preserved (no re-create wiped it).
+    expect(meta.activeSpaceId).toBe("space-1");
+    expect(meta.enabled).toBe(0);
+    expect(meta.searchEngine).toBe("google");
+    expect(db.prepare("SELECT id FROM tabs").get()).toEqual({ id: "t1" });
+    expect(
+      db.prepare("SELECT host, factor, updatedAt FROM site_zoom").get(),
+    ).toEqual({ host: "example.com", factor: 1.5, updatedAt: 42 });
     db.close();
   });
 
-  test("upgrades a v6 database to v7, adding the layout columns with their defaults and preserving rows", () => {
-    const path = join(tempDir, "v6-to-current.db");
+  test("upgrades a v7 database to v8, adding the layout columns and preserving a seeded downloads row", () => {
+    const path = join(tempDir, "v7-to-v8.db");
     const db = new Database(path);
-    db.exec(V6_DDL);
-    // Seed enabled=0, a non-default searchEngine, and a site_zoom row so a
-    // spurious re-create (which would wipe them) is detectable.
+    db.exec(V7_DDL);
+    // Seed enabled=0, a non-default searchEngine, and a downloads row so a spurious
+    // re-create (which would wipe them) is detectable.
     db.prepare(
-      "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled,searchEngine) VALUES (0, 6, 'space-1', 0, 'google')",
+      "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled,searchEngine) VALUES (0, 7, 'space-9', 0, 'google')",
     ).run();
-    seedRows(db, "space-1");
     db.prepare(
-      "INSERT INTO site_zoom(host,factor,updatedAt) VALUES ('example.com', 1.5, 42)",
+      "INSERT INTO downloads(id,url,filename,path,totalBytes,receivedBytes,state,startedAt,completedAt,spaceId) " +
+        "VALUES ('d1','https://example.com/f.bin','f.bin','/dl/f.bin',100,100,'completed',1000,2000,'space-9')",
     ).run();
 
     expect(hasLayoutColumns(db)).toBe(false);
@@ -492,7 +554,7 @@ describe("migrate", () => {
       layoutRatio: number;
       layoutFocused: string;
     };
-    expect(meta.schemaVersion).toBe(7);
+    expect(meta.schemaVersion).toBe(8);
     // The five layout columns are present with their defaults on the existing row.
     expect(hasLayoutColumns(db)).toBe(true);
     expect(meta.layoutMode).toBe("single");
@@ -500,30 +562,75 @@ describe("migrate", () => {
     expect(meta.layoutRightTabId).toBe(null);
     expect(meta.layoutRatio).toBe(0.5);
     expect(meta.layoutFocused).toBe("left");
-    // Pre-existing state preserved (no re-create wiped it).
-    expect(meta.activeSpaceId).toBe("space-1");
+    // Pre-existing state and the downloads row are preserved (no re-create wiped them).
+    expect(meta.activeSpaceId).toBe("space-9");
     expect(meta.enabled).toBe(0);
     expect(meta.searchEngine).toBe("google");
-    expect(db.prepare("SELECT id FROM tabs").get()).toEqual({ id: "t1" });
     expect(
-      db.prepare("SELECT host, factor, updatedAt FROM site_zoom").get(),
-    ).toEqual({ host: "example.com", factor: 1.5, updatedAt: 42 });
+      db
+        .prepare("SELECT id, state, receivedBytes, completedAt FROM downloads")
+        .get(),
+    ).toEqual({ id: "d1", state: "completed", receivedBytes: 100, completedAt: 2000 });
     db.close();
   });
 
-  test("is a no-op on a database already at the current version (v7) with non-default layout values", () => {
-    const path = join(tempDir, "v7.db");
+  test("creates a fresh v8 schema with enabled=1, the allowlist, history, site_zoom, and downloads tables, the search engine, and the layout columns on an empty database", () => {
+    const path = join(tempDir, "fresh.db");
     const db = new Database(path);
-    db.exec(V7_DDL);
+
+    migrate(db);
+
+    const meta = db
+      .prepare(
+        "SELECT schemaVersion, enabled, searchEngine, layoutMode, layoutLeftTabId, layoutRightTabId, layoutRatio, layoutFocused FROM meta WHERE id=0",
+      )
+      .get() as {
+      schemaVersion: number;
+      enabled: number;
+      searchEngine: string;
+      layoutMode: string;
+      layoutLeftTabId: string | null;
+      layoutRightTabId: string | null;
+      layoutRatio: number;
+      layoutFocused: string;
+    };
+    expect(meta.schemaVersion).toBe(8);
+    expect(hasEnabledColumn(db)).toBe(true);
+    expect(hasAllowlistTable(db)).toBe(true);
+    expect(meta.enabled).toBe(1);
+    expect(hasHistoryTable(db)).toBe(true);
+    expect(hasSearchEngineColumn(db)).toBe(true);
+    expect(meta.searchEngine).toBe("duckduckgo");
+    expect(hasSiteZoomTable(db)).toBe(true);
+    // The layout columns exist and carry their DDL defaults on the seeded row.
+    expect(hasLayoutColumns(db)).toBe(true);
+    expect(meta.layoutMode).toBe("single");
+    expect(meta.layoutLeftTabId).toBe(null);
+    expect(meta.layoutRightTabId).toBe(null);
+    expect(meta.layoutRatio).toBe(0.5);
+    expect(meta.layoutFocused).toBe("left");
+    // The downloads table exists.
+    expect(hasDownloadsTable(db)).toBe(true);
+    db.close();
+  });
+
+  test("is a no-op on a database already at the current version (v8) with non-default layout values and a seeded downloads row", () => {
+    const path = join(tempDir, "v8.db");
+    const db = new Database(path);
+    db.exec(V8_DDL);
     // Seed enabled=0, a non-default searchEngine, and NON-default layout values so
     // a spurious re-create/migrate (which would reset them to their defaults) is
-    // detectable, plus a site_zoom row so a re-create would be observable.
+    // detectable, plus site_zoom and downloads rows so a re-create would be observable.
     db.prepare(
       "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled,searchEngine,layoutMode,layoutLeftTabId,layoutRightTabId,layoutRatio,layoutFocused) " +
-        "VALUES (0, 7, 'space-9', 0, 'google', 'split', 'tL', 'tR', 0.35, 'right')",
+        "VALUES (0, 8, 'space-9', 0, 'google', 'split', 'tL', 'tR', 0.35, 'right')",
     ).run();
     db.prepare(
       "INSERT INTO site_zoom(host,factor,updatedAt) VALUES ('example.com', 1.5, 42)",
+    ).run();
+    db.prepare(
+      "INSERT INTO downloads(id,url,filename,path,totalBytes,receivedBytes,state,startedAt,completedAt,spaceId) " +
+        "VALUES ('d1','https://example.com/f.bin','f.bin','/dl/f.bin',100,100,'completed',1000,2000,'space-9')",
     ).run();
 
     migrate(db);
@@ -543,11 +650,11 @@ describe("migrate", () => {
       layoutRatio: number;
       layoutFocused: string;
     };
-    expect(meta.schemaVersion).toBe(7);
+    expect(meta.schemaVersion).toBe(8);
     expect(meta.activeSpaceId).toBe("space-9");
     expect(meta.enabled).toBe(0);
     expect(meta.searchEngine).toBe("google");
-    // The non-default layout values are left untouched (no re-run of step 7).
+    // The non-default layout values are left untouched (no re-run of step 8).
     expect(meta.layoutMode).toBe("split");
     expect(meta.layoutLeftTabId).toBe("tL");
     expect(meta.layoutRightTabId).toBe("tR");
@@ -557,18 +664,24 @@ describe("migrate", () => {
     expect(
       db.prepare("SELECT host, factor, updatedAt FROM site_zoom").get(),
     ).toEqual({ host: "example.com", factor: 1.5, updatedAt: 42 });
+    // The seeded downloads row is left untouched.
+    expect(
+      db
+        .prepare("SELECT id, state, receivedBytes, completedAt FROM downloads")
+        .get(),
+    ).toEqual({ id: "d1", state: "completed", receivedBytes: 100, completedAt: 2000 });
     db.close();
   });
 });
 
 describe("readAllowlist / insertAllowlistHost / deleteAllowlistHost", () => {
   test("round-trip: insert (ordered), INSERT OR IGNORE on a dup is a no-op, delete removes one", () => {
-    // Hand-build a valid current (v7) database at the path loadStore will open.
+    // Hand-build a valid current (v8) database at the path loadStore will open.
     const path = join(tempDir, "zeo.db");
     const seed = new Database(path);
-    seed.exec(V7_DDL);
+    seed.exec(V8_DDL);
     seed.prepare(
-      "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled) VALUES (0, 7, 'space-x', 1)",
+      "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled) VALUES (0, 8, 'space-x', 1)",
     ).run();
     seedRows(seed, "space-x");
     seed.close();
@@ -600,7 +713,7 @@ describe("readAllowlist / insertAllowlistHost / deleteAllowlistHost", () => {
 });
 
 describe("readSiteZoom / upsertSiteZoom / deleteSiteZoom", () => {
-  // Each test opens the module-level handle on a fresh, migrated (v6) database
+  // Each test opens the module-level handle on a fresh, migrated (v8) database
   // via loadStore(), so the helpers act on the same handle production uses.
   beforeEach(() => {
     loadStore();
@@ -647,7 +760,7 @@ describe("readSiteZoom / upsertSiteZoom / deleteSiteZoom", () => {
 });
 
 describe("readWindowLayout / writeWindowLayout", () => {
-  // Each test opens the module-level handle on a fresh, migrated (v7) database
+  // Each test opens the module-level handle on a fresh, migrated (v8) database
   // via loadStore(), so the helpers act on the same handle production uses.
   beforeEach(() => {
     loadStore();
@@ -743,12 +856,12 @@ describe("readWindowLayout / writeWindowLayout", () => {
 
 describe("readBlockingEnabled / writeBlockingEnabled", () => {
   test("writeBlockingEnabled(false) round-trips and leaves schemaVersion/activeSpaceId intact", () => {
-    // Hand-build a valid current (v7) database at the path loadStore will open.
+    // Hand-build a valid current (v8) database at the path loadStore will open.
     const path = join(tempDir, "zeo.db");
     const seed = new Database(path);
-    seed.exec(V7_DDL);
+    seed.exec(V8_DDL);
     seed.prepare(
-      "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled) VALUES (0, 7, 'space-x', 1)",
+      "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled) VALUES (0, 8, 'space-x', 1)",
     ).run();
     seedRows(seed, "space-x");
     seed.close();
@@ -765,7 +878,7 @@ describe("readBlockingEnabled / writeBlockingEnabled", () => {
     const meta = inspect
       .prepare("SELECT schemaVersion, activeSpaceId, enabled FROM meta WHERE id=0")
       .get() as { schemaVersion: number; activeSpaceId: string; enabled: number };
-    expect(meta.schemaVersion).toBe(7);
+    expect(meta.schemaVersion).toBe(8);
     expect(meta.activeSpaceId).toBe("space-x");
     expect(meta.enabled).toBe(0);
     inspect.close();
@@ -773,14 +886,14 @@ describe("readBlockingEnabled / writeBlockingEnabled", () => {
 });
 
 describe("readSearchEngine / writeSearchEngine", () => {
-  /** Hand-builds a valid current (v7) database at the loadStore path, opens the
+  /** Hand-builds a valid current (v8) database at the loadStore path, opens the
    *  module-level handle the accessors use, and returns the db file path. */
   function seedAndLoad(): string {
     const path = join(tempDir, "zeo.db");
     const seed = new Database(path);
-    seed.exec(V7_DDL);
+    seed.exec(V8_DDL);
     seed.prepare(
-      "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled) VALUES (0, 7, 'space-x', 1)",
+      "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled) VALUES (0, 8, 'space-x', 1)",
     ).run();
     seedRows(seed, "space-x");
     seed.close();
@@ -1097,5 +1210,148 @@ describe("history helpers", () => {
       clearHistory();
       expect(historyStats()).toEqual({ entries: 0, visits: 0 });
     });
+  });
+});
+
+describe("downloads helpers", () => {
+  /** Builds a {@link Download} with defaults, overridable per field. */
+  function makeDownload(overrides: Partial<Download> = {}): Download {
+    return {
+      id: "d1",
+      url: "https://example.com/file.bin",
+      filename: "file.bin",
+      path: "/downloads/file.bin",
+      totalBytes: 1000,
+      receivedBytes: 0,
+      state: "progressing",
+      startedAt: 1000,
+      completedAt: null,
+      spaceId: null,
+      ...overrides,
+    };
+  }
+
+  describe("insert / update / delete / list / prune / interrupted sweep", () => {
+    // Each test opens the module-level handle on a fresh, migrated (v8) database
+    // via loadStore(); the downloads table exists after the migration.
+    beforeEach(() => {
+      loadStore();
+    });
+
+    test("insert, update, and delete round-trip a download row", () => {
+      const d = makeDownload({ id: "d1" });
+      insertDownload(d);
+      expect(listDownloads()).toEqual([d]);
+
+      const updated: Download = {
+        ...d,
+        state: "completed",
+        receivedBytes: 1000,
+        completedAt: 5000,
+      };
+      updateDownload(updated);
+      expect(listDownloads()).toEqual([updated]);
+
+      // updateDownload on an absent id affects zero rows: a silent no-op.
+      updateDownload(makeDownload({ id: "missing", state: "completed" }));
+      expect(listDownloads()).toEqual([updated]);
+
+      deleteDownload("d1");
+      expect(listDownloads()).toEqual([]);
+      // deleting an absent id is a no-op.
+      expect(() => deleteDownload("missing")).not.toThrow();
+    });
+
+    test("list returns rows newest-first by startedAt DESC then id DESC", () => {
+      insertDownload(makeDownload({ id: "a", startedAt: 1000 }));
+      insertDownload(makeDownload({ id: "b", startedAt: 2000 }));
+      // Equal startedAt as "b"; the higher id ("c") sorts first.
+      insertDownload(makeDownload({ id: "c", startedAt: 2000 }));
+      expect(listDownloads().map((d) => d.id)).toEqual(["c", "b", "a"]);
+    });
+
+    test("inserting a 101st row prunes the oldest so exactly 100 remain", () => {
+      for (let i = 1; i <= 101; i++) {
+        insertDownload(
+          makeDownload({ id: `d${String(i).padStart(3, "0")}`, startedAt: i }),
+        );
+      }
+      const rows = listDownloads();
+      expect(rows.length).toBe(100);
+      // The oldest (startedAt 1) was pruned; the smallest remaining startedAt is 2.
+      expect(rows.some((d) => d.startedAt === 1)).toBe(false);
+      expect(Math.min(...rows.map((d) => d.startedAt))).toBe(2);
+    });
+
+    test("clearFinishedDownloadRows deletes every finished row and keeps active ones", () => {
+      insertDownload(makeDownload({ id: "prog", state: "progressing", startedAt: 5000 }));
+      insertDownload(makeDownload({ id: "paused", state: "paused", startedAt: 4000 }));
+      insertDownload(makeDownload({ id: "done", state: "completed", startedAt: 3000, completedAt: 3500 }));
+      insertDownload(makeDownload({ id: "cancelled", state: "cancelled", startedAt: 2000, completedAt: 2500 }));
+      insertDownload(makeDownload({ id: "interrupted", state: "interrupted", startedAt: 1000, completedAt: 1500 }));
+
+      clearFinishedDownloadRows();
+
+      // Only the two active rows survive, newest-first.
+      expect(listDownloads().map((d) => d.id)).toEqual(["prog", "paused"]);
+    });
+
+    test("markInterruptedDownloadsOnLaunch rewrites progressing and paused rows to interrupted with completedAt, leaving finished rows untouched", () => {
+      insertDownload(
+        makeDownload({ id: "prog", state: "progressing", startedAt: 3000, receivedBytes: 50 }),
+      );
+      insertDownload(
+        makeDownload({ id: "paused", state: "paused", startedAt: 2000, receivedBytes: 20 }),
+      );
+      insertDownload(
+        makeDownload({ id: "done", state: "completed", startedAt: 1000, completedAt: 1500, receivedBytes: 1000 }),
+      );
+
+      markInterruptedDownloadsOnLaunch(9999);
+
+      const byId = new Map(listDownloads().map((d) => [d.id, d]));
+      expect(byId.get("prog")!.state).toBe("interrupted");
+      expect(byId.get("prog")!.completedAt).toBe(9999);
+      expect(byId.get("paused")!.state).toBe("interrupted");
+      expect(byId.get("paused")!.completedAt).toBe(9999);
+      // The already-finished row is untouched.
+      expect(byId.get("done")!.state).toBe("completed");
+      expect(byId.get("done")!.completedAt).toBe(1500);
+    });
+  });
+
+  test("a full-state flush does not delete or alter download rows (writeState isolation)", () => {
+    // Hand-build a seeded current (v8) database so loadStore returns a real store.
+    const path = join(tempDir, "zeo.db");
+    const seed = new Database(path);
+    seed.exec(V8_DDL);
+    seed.prepare(
+      "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled) VALUES (0, 8, 'space-x', 1)",
+    ).run();
+    seedRows(seed, "space-x");
+    seed.close();
+
+    const store = loadStore();
+    expect(store).not.toBeNull();
+
+    const d1 = makeDownload({
+      id: "d1",
+      state: "completed",
+      startedAt: 2000,
+      completedAt: 2500,
+      receivedBytes: 1000,
+    });
+    const d2 = makeDownload({ id: "d2", state: "progressing", startedAt: 1000, receivedBytes: 10 });
+    insertDownload(d1);
+    insertDownload(d2);
+
+    // Mutate the store (add a tab) and drive a full-state save + synchronous flush.
+    store!.create({ url: "https://added.example", title: "Added" });
+    scheduleSave(store!);
+    flush(store!);
+
+    // writeState covers profiles/spaces/tabs/meta only; download rows are intact
+    // and unchanged (newest first by startedAt: d1 then d2).
+    expect(listDownloads()).toEqual([d1, d2]);
   });
 });

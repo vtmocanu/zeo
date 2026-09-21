@@ -4,6 +4,8 @@ import { fileURLToPath } from "node:url";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+// PRD 9.1 — shared view-URL poll helpers (VIEW_POLL_TIMEOUT_MS-bounded).
+import { waitForViewGone, waitForViewUrl } from "./helpers/view";
 
 // Absolute path to the built Electron main entry, resolved from this test file
 // (e2e is ESM, so no __dirname). Layout mirrors app.spec.ts: e2e/tests -> repo
@@ -235,19 +237,15 @@ test.describe("PRD 3.4 relaunch persistence", () => {
       // --- Lazy-view assertion (transition form, not a bare negative). ---
       // With Personal active, TA's view materializes; poll until its token is
       // present in the live WebContents URLs.
-      await expect
-        .poll(
-          async () => (await allWebContentsUrls(second.app)).some((u) => u.includes(tokenActive)),
-          { message: "expected TA's restored view to materialize (active tab, lazy restore)" },
-        )
-        .toBe(true);
+      await waitForViewUrl(second.app, tokenActive);
 
       // Exactly ONE tab view is materialized: only TA. TB and TW are restored
       // but not yet materialized (TB inactive in Personal; TW in inactive Work).
       const urlsAfterRestore = await allWebContentsUrls(second.app);
       expect(urlsAfterRestore.filter((u) => u.includes("ZEOPERSIST_")).length).toBe(1);
-      // Belt and braces: TB's token is absent before we activate it.
-      expect(urlsAfterRestore.some((u) => u.includes(tokenOther))).toBe(false);
+      // Belt and braces: TB's token is absent before we activate it — poll to
+      // absence (a view can linger a tick), mirroring the migration stale check.
+      await waitForViewGone(second.app, tokenOther);
 
       // Activate TB (its id persisted from launch #1): its view must materialize
       // ONLY now, on activation — the lazy-restore transition.
@@ -255,12 +253,7 @@ test.describe("PRD 3.4 relaunch persistence", () => {
         const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
         await zeo.tabs.activate(id);
       }, ids.tb);
-      await expect
-        .poll(
-          async () => (await allWebContentsUrls(second.app)).some((u) => u.includes(tokenOther)),
-          { message: "expected TB's view to materialize only upon activation (lazy restore)" },
-        )
-        .toBe(true);
+      await waitForViewUrl(second.app, tokenOther);
 
       // Switch to Work: it shows only its own tab TW, active is TW.
       const work = await second.sidebar.evaluate(async (id) => {
