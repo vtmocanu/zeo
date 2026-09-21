@@ -404,17 +404,19 @@ function TabRow({
           {formatZoomPercent(zoomFactor)}
         </button>
       ) : null}
-      <button
-        type="button"
-        className="tab-item__close"
-        aria-label={`Close ${tab.title}`}
-        onClick={(event) => {
-          event.stopPropagation();
-          void window.zeo?.tabs.close(tab.id).catch(() => {});
-        }}
-      >
-        ×
-      </button>
+      {!pinned && (
+        <button
+          type="button"
+          className="tab-item__close"
+          aria-label={`Close ${tab.title}`}
+          onClick={(event) => {
+            event.stopPropagation();
+            void window.zeo?.tabs.close(tab.id).catch(() => {});
+          }}
+        >
+          ×
+        </button>
+      )}
     </li>
   );
 }
@@ -523,7 +525,10 @@ export function App() {
     activeTabId: null,
     archived: [],
     settingsOpen: false,
-    settings: { searchEngine: DEFAULT_SEARCH_ENGINE_ID },
+    settings: {
+      searchEngine: DEFAULT_SEARCH_ENGINE_ID,
+      quickBrowseExternal: true,
+    },
     settingsSection: "general",
     settingsSectionNonce: 0,
     blocking: {
@@ -543,6 +548,8 @@ export function App() {
       tabId: null,
       activeRequestId: null,
     },
+    quickBrowse: null,
+    isDefaultBrowser: false,
     layout: SINGLE_LAYOUT,
   });
   const [showArchived, setShowArchived] = useState(false);

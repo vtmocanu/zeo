@@ -1,4 +1,4 @@
-import { app, BrowserWindow, WebContentsView, clipboard, ipcMain, Menu, session, shell } from "electron";
+import { app, BrowserWindow, WebContentsView, clipboard, ipcMain, Menu, screen, session, shell } from "electron";
 import type { MenuItemConstructorOptions } from "electron";
 import { basename, dirname, join } from "node:path";
 import { existsSync, readFileSync } from "node:fs";
@@ -65,6 +65,15 @@ import {
   clearFindResults,
   closeFind,
   findBarBounds,
+  openQuickBrowse,
+  replaceQuickBrowseUrl,
+  setQuickBrowseUrl,
+  setQuickBrowseTitle,
+  promoteQuickBrowse,
+  dismissQuickBrowse,
+  quickBrowsePageBounds,
+  QUICK_BROWSE_WIDTH,
+  QUICK_BROWSE_HEIGHT,
 } from "@zeo/core";
 import type {
   BlockingState,
@@ -81,6 +90,8 @@ import type {
   HistoryVisit,
   PaneSide,
   Profile,
+  QuickBrowse,
+  QuickBrowseState,
   SearchEngineId,
   Settings,
   SettingsSectionId,
@@ -105,6 +116,8 @@ import {
   writeBlockingEnabled,
   readSearchEngine,
   writeSearchEngine,
+  readQuickBrowseExternal,
+  writeQuickBrowseExternal,
   readAllowlist,
   insertAllowlistHost,
   deleteAllowlistHost,
@@ -349,7 +362,7 @@ let settingsOpen = false;
  * {@link readSearchEngine}. Main is the sole holder of the current search-engine
  * choice, threaded into {@link resolveInput} and {@link suggest}.
  */
-let settings: Settings = { searchEngine: "duckduckgo" };
+let settings: Settings = { searchEngine: "duckduckgo", quickBrowseExternal: true };
 /**
  * The currently-targeted settings section main pushes to the settings view (the
  * PRD's `section`). The section-open commands set it via {@link openSettingsAt};
@@ -391,6 +404,39 @@ let blockingBroadcastTimer: ReturnType<typeof setTimeout> | null = null;
 
 /** Coalescing window for {@link scheduleBlockingBroadcast}, in milliseconds. */
 const BLOCKING_BROADCAST_MS = 250;
+
+// --- Quick-browse (PRD 7.2) singleton state -----------------------------------
+// The transient quick-browse window shows one external link in a frameless chrome
+// window (a renderer surface main pushes state to, like the settings view) over an
+// untrusted page view on an EPHEMERAL in-memory session (like a tab view). Exactly
+// one is open at a time; `quickBrowse` is the pure entry, `null` when closed.
+/** The pure singleton quick-browse entry, `null` when no window is open. */
+let quickBrowse: QuickBrowseState = null;
+/** Cached OS-default-browser flag; seeded at startup, re-read after browser.setDefault. */
+let isDefaultBrowser = false;
+/** The singleton frameless chrome window, or `null` when no quick-browse is open. */
+let quickBrowseWindow: BrowserWindow | null = null;
+/** The untrusted external page view hosted in {@link quickBrowseWindow}. */
+let quickBrowsePageView: WebContentsView | null = null;
+/** This lifecycle's ephemeral session (blocker attach + teardown clear), or `null`. */
+let quickBrowseSession: Electron.Session | null = null;
+/** Monotonic; each open gets a unique in-memory partition (`quick-browse-<n>`). */
+let quickBrowseSessionSeq = 0;
+/**
+ * `true` from the moment a PROGRAMMATIC load is issued (openQuickBrowseWindow /
+ * replaceQuickBrowseLink) until that load's top-level `did-navigate` commits.
+ * While it is `true`, same-document (`did-navigate-in-page`) events are dropped:
+ * they are stragglers from the superseded document, not the page the user is now
+ * on. Read in {@link onQuickBrowseNavigateInPage}; cleared in
+ * {@link onQuickBrowseNavigate} when the top-level commit lands.
+ */
+let quickBrowseLoadPending = false;
+/** Single-flight teardown guard: {@link BrowserWindow.close} re-fires `closed`. */
+let quickBrowseTearingDown = false;
+/** Gates open-url dispatch until {@link app.whenReady} has drained. */
+let appReady = false;
+/** open-url urls that arrived before {@link appReady}, drained in arrival order. */
+const pendingExternalLinks: string[] = [];
 
 /**
  * The downloads slice main owns and attaches to every broadcast snapshot. Seeded
@@ -499,6 +545,11 @@ function fullSnapshot(): TabsState {
     settingsSectionNonce,
     downloads,
     find,
+    // Cached module vars: fullSnapshot runs on every broadcast, so it must never
+    // call app.isDefaultProtocolClient here (isDefaultBrowser is re-read only at
+    // startup and after browser.setDefault).
+    quickBrowse,
+    isDefaultBrowser,
     layout,
   };
 }
@@ -576,6 +627,11 @@ function scheduleBlockingBroadcast(): void {
     // hidden — a stale slice on the next open is harmless but avoidable).
     if (settingsView !== null) {
       settingsView.webContents.send(IPC.stateChange, snapshot);
+    }
+    // The quick-browse chrome renderer follows the snapshot too, so its url/title
+    // track every change (same pattern as the settings view).
+    if (quickBrowseWindow !== null && !quickBrowseWindow.webContents.isDestroyed()) {
+      quickBrowseWindow.webContents.send(IPC.stateChange, snapshot);
     }
   }, BLOCKING_BROADCAST_MS);
 }
@@ -815,7 +871,14 @@ async function setBlockingEnabled(enabled: boolean): Promise<void> {
     throw new Error("content blocking is unavailable: no filter engine is loaded");
   }
   writeBlockingEnabled(enabled);
+  // Cover the transient quick-browse window's ephemeral session too while one is
+  // open, alongside every profile session — the toggle must reach the untrusted
+  // quick-browse page view, not just persisted-profile tabs. It rides the same
+  // idempotent attach/detach loop and revert-on-error path below.
   const sessions = profileSessions();
+  if (quickBrowseSession !== null) {
+    sessions.push(quickBrowseSession);
+  }
   const done: Electron.Session[] = [];
   try {
     for (const s of sessions) {
@@ -864,7 +927,43 @@ async function setSearchEngine(id: SearchEngineId): Promise<void> {
     throw new TypeError(`unknown search engine: ${id}`);
   }
   writeSearchEngine(id);
-  settings = { searchEngine: id };
+  settings = { ...settings, searchEngine: id };
+  broadcast();
+}
+
+/**
+ * Sets whether external links open in the quick-browse window, mirroring
+ * {@link setSearchEngine}'s ordered contract exactly: (1) reject with a
+ * `TypeError` (changing nothing) when `enabled` is not a boolean; (2) resolve
+ * with no side effect when it already matches the current value; (3) persist with
+ * {@link writeQuickBrowseExternal} synchronously — a throw rejects and stops
+ * before the in-memory state changes and no broadcast occurs; (4) update the
+ * in-memory `settings` and broadcast. Reachable from the renderer over
+ * IPC.settingsSetQuickBrowseExternal with an untrusted payload; the IPC handler
+ * returns this promise, so a rejection surfaces to the renderer's invoke.
+ */
+async function setQuickBrowseExternal(enabled: boolean): Promise<void> {
+  if (typeof enabled !== "boolean") {
+    throw new TypeError("settings.setQuickBrowseExternal expects a boolean");
+  }
+  if (enabled === settings.quickBrowseExternal) {
+    return;
+  }
+  writeQuickBrowseExternal(enabled);
+  settings = { ...settings, quickBrowseExternal: enabled };
+  broadcast();
+}
+
+/**
+ * Registers zeo as the OS default handler for http(s) and refreshes the cached
+ * {@link isDefaultBrowser} flag, then broadcasts so the set-default affordance
+ * updates. Only ever invoked by the `browser.setDefault` command — never at
+ * startup or unprompted (PRD 7.2 §6).
+ */
+function setAsDefaultBrowser(): void {
+  app.setAsDefaultProtocolClient("http");
+  app.setAsDefaultProtocolClient("https");
+  isDefaultBrowser = app.isDefaultProtocolClient("http");
   broadcast();
 }
 
@@ -1096,6 +1195,368 @@ function closeSettings(): void {
     win.webContents.focus();
   }
   broadcast();
+}
+
+/**
+ * The page view's `did-navigate` handler (the top-level document commit): mirrors
+ * the committed url into the pure {@link quickBrowse} entry (which the chrome
+ * renderer follows over the broadcast) and clears {@link quickBrowseLoadPending}.
+ * Early-returns after teardown, when the entry is gone, or when the page view is
+ * gone, so a straggler event after dismissal mutates no state. A top-level commit
+ * — whether the pending programmatic load committing (possibly after a redirect or
+ * url normalization) or a user-initiated top-level navigation — is always the real
+ * current page, so the live url is applied unconditionally.
+ *
+ * The required property (a promote/openInTab fired during an in-flight replace
+ * captures the replaced url, not the old one) holds because
+ * {@link replaceQuickBrowseUrl} updates the pure `quickBrowse.url` synchronously.
+ * {@link quickBrowseLoadPending} additionally prevents a same-document straggler
+ * from the old document (see {@link onQuickBrowseNavigateInPage}) from reverting
+ * the url before the new top-level load commits here.
+ */
+function onQuickBrowseNavigate(): void {
+  if (
+    quickBrowseTearingDown ||
+    quickBrowse === null ||
+    quickBrowsePageView === null ||
+    quickBrowsePageView.webContents.isDestroyed()
+  ) {
+    return;
+  }
+  const current = quickBrowsePageView.webContents.getURL(); // read live, never a captured value
+  if (current === "") {
+    return;
+  }
+  quickBrowse = setQuickBrowseUrl(quickBrowse, current);
+  quickBrowseLoadPending = false; // this top-level commit is the current page
+  broadcast();
+}
+
+/**
+ * The page view's `did-navigate-in-page` handler (a same-document navigation, e.g.
+ * a fragment or a history.pushState). While {@link quickBrowseLoadPending} is
+ * `true` a top-level programmatic load is in flight, so any same-document event is
+ * a straggler from the superseded document — drop it, or it would revert the live
+ * url to the old page before the new top-level load commits. Otherwise the page is
+ * free-navigating within its document and the live url is tracked. Shares the
+ * teardown/gone early-returns with {@link onQuickBrowseNavigate}.
+ */
+function onQuickBrowseNavigateInPage(): void {
+  if (
+    quickBrowseTearingDown ||
+    quickBrowse === null ||
+    quickBrowsePageView === null ||
+    quickBrowsePageView.webContents.isDestroyed()
+  ) {
+    return;
+  }
+  if (quickBrowseLoadPending) {
+    return; // straggler from the superseded document during a programmatic load
+  }
+  const current = quickBrowsePageView.webContents.getURL(); // read live, never a captured value
+  if (current === "") {
+    return;
+  }
+  quickBrowse = setQuickBrowseUrl(quickBrowse, current);
+  broadcast();
+}
+
+/**
+ * The page view's `page-title-updated` handler. {@link setQuickBrowseTitle} is a
+ * no-op on a url mismatch, so a title racing a navigation to a different url is
+ * dropped; the early-returns keep it robust after teardown.
+ */
+function onQuickBrowseTitle(_event: Electron.Event, title: string): void {
+  if (
+    quickBrowseTearingDown ||
+    quickBrowse === null ||
+    quickBrowsePageView === null ||
+    quickBrowsePageView.webContents.isDestroyed()
+  ) {
+    return;
+  }
+  quickBrowse = setQuickBrowseTitle(quickBrowse, quickBrowsePageView.webContents.getURL(), title);
+  broadcast();
+}
+
+/** Wires the quick-browse page view's url/title tracking (see {@link onQuickBrowseNavigate}). */
+function wireQuickBrowsePageEvents(view: WebContentsView): void {
+  view.webContents.on("did-navigate", onQuickBrowseNavigate);
+  view.webContents.on("did-navigate-in-page", onQuickBrowseNavigateInPage);
+  view.webContents.on("page-title-updated", onQuickBrowseTitle);
+}
+
+/**
+ * The window-local key handler wired onto BOTH the quick-browse chrome window and
+ * its page view (PRD 7.2 §5, the sanctioned exception to the menu-accelerator
+ * convention — scoped to these two webContents, never a global accelerator). Maps
+ * keyDown to the quick-browse commands and dispatches through {@link executeCommand};
+ * `preventDefault` keeps a handled key off the page. The commands are enabled only
+ * while the window is open, so the try/catch just defends executeCommand's
+ * disabled-command throw (e.g. a key delivered mid-teardown).
+ */
+function handleQuickBrowseKey(event: Electron.Event, input: Electron.Input): void {
+  if (input.type !== "keyDown") {
+    return;
+  }
+  const mod = input.meta || input.control; // Cmd (darwin) or Ctrl (win/linux)
+  let commandId: CommandId | null = null;
+  if (input.key === "Escape") {
+    commandId = "quickBrowse.dismiss";
+  } else if (input.key === "Enter") {
+    if (mod && input.shift) {
+      commandId = "quickBrowse.openInTab";
+    } else if (mod) {
+      commandId = "quickBrowse.promoteToSpace";
+    } else if (!input.shift) {
+      commandId = "quickBrowse.promote";
+    }
+  }
+  if (commandId === null) {
+    return;
+  }
+  event.preventDefault();
+  try {
+    executeCommand(commandId);
+  } catch (err) {
+    console.error("[quick-browse] key command failed:", err);
+  }
+}
+
+/**
+ * Opens the singleton quick-browse window for `url`: a frameless chrome window (a
+ * renderer surface main pushes state to, mirroring the settings view) hosting an
+ * untrusted page view (mirroring a tab view) on a fresh EPHEMERAL in-memory
+ * session. Called only when no quick-browse window is open; a second external
+ * link while one is open routes to {@link replaceQuickBrowseLink}.
+ */
+function openQuickBrowseWindow(url: string): void {
+  if (quickBrowseWindow !== null) {
+    return; // a window is already open; callers route to replaceQuickBrowseLink
+  }
+  // 1. Allocate this lifecycle's unique in-memory partition — NO `persist:` prefix,
+  //    so it shares nothing with a profile and is discarded on teardown.
+  const partition = "quick-browse-" + ++quickBrowseSessionSeq;
+  quickBrowseSession = session.fromPartition(partition);
+
+  // 2. Frameless chrome window centered on the primary display's work area.
+  const primary = screen.getPrimaryDisplay();
+  quickBrowseWindow = new BrowserWindow({
+    width: QUICK_BROWSE_WIDTH,
+    height: QUICK_BROWSE_HEIGHT,
+    x: Math.round(primary.workArea.x + (primary.workArea.width - QUICK_BROWSE_WIDTH) / 2),
+    y: Math.round(primary.workArea.y + (primary.workArea.height - QUICK_BROWSE_HEIGHT) / 2),
+    frame: false,
+    show: false,
+    webPreferences: {
+      preload: join(moduleDir, "../preload/index.cjs"),
+      contextIsolation: true,
+      sandbox: false,
+      nodeIntegration: false,
+    },
+  });
+
+  // 3. Load the shared renderer bundle with ?view=quick-browse for the chrome,
+  //    mirroring the settings/overlay dev/prod branch.
+  const rendererUrl = process.env.ELECTRON_RENDERER_URL;
+  if (rendererUrl !== undefined && rendererUrl !== "") {
+    quickBrowseWindow.webContents.loadURL(rendererUrl + "?view=quick-browse").catch(() => {
+      // Dev-server races are retried by the window's loadDev loop; the quick-browse
+      // chrome shares the same bundle, so a transient failure here is non-fatal.
+    });
+  } else {
+    void quickBrowseWindow.webContents.loadFile(join(moduleDir, "../renderer/index.html"), {
+      query: { view: "quick-browse" },
+    });
+  }
+
+  // 4. Untrusted page view on the ephemeral partition, SAME secure prefs as a tab
+  //    view: no preload, contextIsolation/sandbox at their secure defaults,
+  //    nodeIntegration off, subframe cosmetic preload allowed.
+  const pageView = new WebContentsView({
+    webPreferences: {
+      partition,
+      nodeIntegrationInSubFrames: true,
+    },
+  });
+  quickBrowsePageView = pageView;
+  quickBrowseWindow.contentView.addChildView(pageView);
+  const layoutPageView = (): void => {
+    if (quickBrowseWindow === null || pageView.webContents.isDestroyed()) {
+      return;
+    }
+    const [w, h] = quickBrowseWindow.getContentSize();
+    pageView.setBounds(quickBrowsePageBounds(w, h));
+  };
+  layoutPageView();
+  quickBrowseWindow.on("resize", layoutPageView);
+
+  // 5. Deny every window.open / target=_blank; the current page does NOT navigate.
+  pageView.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+
+  // 6. Filter the ephemeral session when blocking is enabled and the engine has
+  //    loaded (same condition as the profile-session attach).
+  if (blocking.enabled && blocker) {
+    try {
+      blocker.attach(quickBrowseSession);
+    } catch (err) {
+      teardownQuickBrowse();
+      throw err;
+    }
+  }
+
+  // 7. Seed the pure state.
+  quickBrowse = openQuickBrowse(url);
+  quickBrowseTearingDown = false;
+
+  // 8. Wire url/title tracking before navigating so no first commit is missed.
+  wireQuickBrowsePageEvents(pageView);
+
+  // 9. Programmatic navigation; flag the in-flight load so same-document stragglers
+  //    from the superseded (blank) document are dropped until the top-level commit.
+  quickBrowseLoadPending = true;
+  void pageView.webContents.loadURL(url);
+
+  // 10. Show + focus the window.
+  quickBrowseWindow.show();
+  quickBrowseWindow.focus();
+
+  // 11. Route an OS/user close through the single-flight teardown.
+  quickBrowseWindow.on("closed", () => {
+    teardownQuickBrowse();
+  });
+
+  // 12. Window-local keys on BOTH webContents (scoped exception, never global).
+  quickBrowseWindow.webContents.on("before-input-event", handleQuickBrowseKey);
+  pageView.webContents.on("before-input-event", handleQuickBrowseKey);
+
+  // 13. Broadcast so TabsState.quickBrowse populates and the quickBrowse.* commands
+  //     enable.
+  broadcast();
+}
+
+/**
+ * Handles a second external link while a quick-browse window is already open:
+ * replaces the pure entry's url (resetting the derived title), programmatically
+ * navigates the existing page view (flagging the in-flight load so same-document
+ * stragglers from the superseded document are dropped), and brings the window to
+ * the front. A no-op if the window vanished between the caller's check and here.
+ */
+function replaceQuickBrowseLink(url: string): void {
+  if (quickBrowse === null || quickBrowsePageView === null) {
+    return;
+  }
+  quickBrowse = replaceQuickBrowseUrl(quickBrowse, url);
+  quickBrowseLoadPending = true;
+  void quickBrowsePageView.webContents.loadURL(url);
+  quickBrowseWindow?.moveTop();
+  quickBrowseWindow?.focus();
+  broadcast();
+}
+
+/**
+ * Tears the quick-browse window down (single-flight, best-effort). Steps 1-2 close
+ * the page view and window synchronously; step 3 nulls the singleton state and
+ * broadcasts (so TabsState.quickBrowse clears and the quickBrowse.* commands
+ * disable) and returns focus to the main window; step 4 fire-and-forget clears the
+ * ephemeral session's storage + cache so teardown never blocks. The
+ * {@link quickBrowseTearingDown} guard absorbs the synchronous `closed` re-entry
+ * that {@link BrowserWindow.close} triggers, and the "already torn down" guard
+ * absorbs a later async `closed` (e.g. at app quit) after the state was nulled.
+ */
+function teardownQuickBrowse(): void {
+  if (quickBrowseTearingDown) {
+    return; // single-flight: BrowserWindow.close() below can re-fire 'closed'
+  }
+  if (
+    quickBrowseWindow === null &&
+    quickBrowsePageView === null &&
+    quickBrowseSession === null &&
+    quickBrowse === null
+  ) {
+    return; // already torn down (e.g. a late 'closed' after teardown completed)
+  }
+  quickBrowseTearingDown = true;
+  const closingWindow = quickBrowseWindow;
+  const closingView = quickBrowsePageView;
+  const closingSession = quickBrowseSession;
+
+  // 1. Remove + close the page view (guard isDestroyed), matching settings-view teardown.
+  if (closingView !== null) {
+    if (closingWindow !== null && !closingWindow.isDestroyed()) {
+      closingWindow.contentView.removeChildView(closingView);
+    }
+    if (!closingView.webContents.isDestroyed()) {
+      closingView.webContents.close();
+    }
+  }
+  // 2. Close the chrome window (app-quit can deliver 'closed' on an already-destroyed window).
+  if (closingWindow !== null && !closingWindow.isDestroyed()) {
+    closingWindow.close();
+  }
+
+  // 3. Reset the singleton state synchronously and broadcast.
+  quickBrowse = dismissQuickBrowse(quickBrowse);
+  quickBrowseWindow = null;
+  quickBrowsePageView = null;
+  quickBrowseSession = null;
+  quickBrowseLoadPending = false;
+  broadcast();
+
+  // Return focus to the main window (its active tab view when present, else the window).
+  if (win !== null && !win.isDestroyed()) {
+    const activeTabId = store.activeTabId;
+    if (activeTabId !== null && views.has(activeTabId)) {
+      views.get(activeTabId)?.view.webContents.focus();
+    } else {
+      win.webContents.focus();
+    }
+  }
+
+  // 4. Best-effort clear the ephemeral session storage + cache; fire-and-forget so
+  //    teardown never blocks, matching the deleted-profile cleanup.
+  if (closingSession !== null) {
+    closingSession
+      .clearStorageData()
+      .then(() => closingSession.clearCache())
+      .catch((err: unknown) => {
+        console.error("[quick-browse] failed to clear ephemeral session data:", err);
+      });
+  }
+
+  quickBrowseTearingDown = false;
+}
+
+/**
+ * Dispatches an external web link (PRD 7.2). A non-http(s) target is ignored (the
+ * handoff is web-only). Ensures a fallback main window exists first (darwin keeps
+ * the process alive with no window after window-all-closed). With
+ * `settings.quickBrowseExternal` on it opens (or, if a window is already open,
+ * replaces the link in) the quick-browse window; otherwise it opens the url as a
+ * normal new tab in the active space and activates it, bringing the main window
+ * forward.
+ */
+function handleExternalLink(url: string): void {
+  if (siteKeyForUrl(url) === null) {
+    console.warn("[quick-browse] ignoring non-http(s) external link:", JSON.stringify(url));
+    return;
+  }
+  if (win === null) {
+    createWindow(false);
+  }
+  if (settings.quickBrowseExternal) {
+    if (quickBrowseWindow === null) {
+      openQuickBrowseWindow(url);
+    } else {
+      replaceQuickBrowseLink(url);
+    }
+    return;
+  }
+  createTab(url);
+  if (win !== null && !win.isDestroyed()) {
+    win.show();
+    win.focus();
+  }
 }
 
 /**
@@ -1456,6 +1917,7 @@ function commandContextOf(): CommandContext {
       activeTab: null,
       spaceCount,
       settingsOpen,
+      quickBrowseOpen: quickBrowseWindow !== null,
       hasFinishedDownload,
       find: { open: find.open, hasQuery: find.query.trim().length > 0 },
       layoutMode: layout.mode,
@@ -1482,6 +1944,7 @@ function commandContextOf(): CommandContext {
     },
     spaceCount,
     settingsOpen,
+    quickBrowseOpen: quickBrowseWindow !== null,
     hasFinishedDownload,
     find: { open: find.open, hasQuery: find.query.trim().length > 0 },
     layoutMode: layout.mode,
@@ -1981,6 +2444,9 @@ const commandHandlers: Record<CommandId, () => void> = {
     reconcileAndApply();
     broadcast();
   },
+  // From the macOS menu bar with no window, ensureWindow recreates one but this
+  // first send reaches an unloaded renderer and is dropped (a second invocation
+  // works); space.rename has no accelerator, so this is an obscure, benign edge.
   "space.rename": () =>
     win?.webContents.send(IPC.spaceMenuAction, { action: "rename", spaceId: store.activeSpaceId }),
   "space.delete": () => deleteSpace(store.activeSpaceId),
@@ -2088,6 +2554,40 @@ const commandHandlers: Record<CommandId, () => void> = {
   "find.next": () => findNext(),
   "find.previous": () => findPrevious(),
   "find.close": () => closeFindSession(),
+  "quickBrowse.promote": () => {
+    // Keep the link: a new tab loading its url in the ACTIVE space, activated. The
+    // teardown returns focus to the main window on that new active tab.
+    const entry = promoteQuickBrowse(quickBrowse);
+    createTab(entry.url);
+    teardownQuickBrowse();
+  },
+  "quickBrowse.promoteToSpace": () => {
+    // Bring the main window forward so its command-bar overlay (which openCommandBar
+    // shows + focuses) is visible while the user picks a target space; the
+    // quick-browse window stays open until a space is accepted (see performSuggestion).
+    if (win !== null && !win.isDestroyed()) {
+      win.show();
+      win.focus();
+    }
+    openCommandBar("promote");
+  },
+  "quickBrowse.dismiss": () => teardownQuickBrowse(),
+  "quickBrowse.openInTab": () => {
+    // Background tab: keep the link on a new tab in the active space WITHOUT
+    // activating it or moving focus, leaving the quick-browse window open. store's
+    // create always makes the new tab active, so re-activate the previous active
+    // tab and keep the visible view pointed at it.
+    const entry = promoteQuickBrowse(quickBrowse);
+    const previousActive = store.activeTabId;
+    const tab = store.create({ url: entry.url, title: titleForUrl(entry.url) });
+    createViewFor(tab, store.activeSpaceId);
+    if (previousActive !== null && previousActive !== tab.id) {
+      store.activate(previousActive);
+    }
+    setActive(store.activeTabId);
+    broadcast();
+  },
+  "browser.setDefault": () => setAsDefaultBrowser(),
   "view.split": () => {
     // doSplit may reject (no active tab, already split, or < 2 open tabs);
     // executeCommand gates enablement first, but swallow-log any residual
@@ -2438,9 +2938,10 @@ function findPrevious(): void {
  */
 function submitCommandBar(text: string, mode?: CommandBarMode): void {
   const requestedMode: CommandBarMode = mode ?? (commandBar.open ? commandBar.mode : "navigate");
-  if (requestedMode === "commands" || requestedMode === "split") {
-    // Neither commands mode nor split mode has a text action: commands runs the
-    // highlighted command, split fills the second pane from a chosen tab row.
+  if (requestedMode === "commands" || requestedMode === "promote" || requestedMode === "split") {
+    // None of these modes has a free-text action: commands runs the highlighted
+    // command, promote picks a target space from the rows, and split fills the
+    // second pane from a chosen tab row. A raw submit is not valid.
     throw new Error(`submit is not valid in ${requestedMode} mode`);
   }
   const target = resolveInput(text, settings.searchEngine);
@@ -2545,6 +3046,25 @@ function performSuggestion(s: Suggestion): void {
       return;
     }
     case "space": {
+      if (commandBar.mode === "promote") {
+        // Promote the quick-browse link into the chosen space (PRD 7.2 §6).
+        // Failure paths (acceptCommandBar closes the bar after this returns):
+        //   - the window was dismissed while the picker was open (quickBrowse null)
+        //     → no-op, the bar just closes;
+        //   - the picked space no longer exists → no-op that leaves the quick-browse
+        //     window open (its url stays promotable).
+        if (quickBrowse === null) {
+          return;
+        }
+        if (!store.spaces().some((sp) => sp.id === s.spaceId)) {
+          return;
+        }
+        const entry = promoteQuickBrowse(quickBrowse);
+        store.setActiveSpace(s.spaceId);
+        createTab(entry.url); // create + activate in the now-active target space
+        teardownQuickBrowse();
+        return;
+      }
       store.setActiveSpace(s.spaceId);
       // A space switch invalidates any split of the outgoing space's tabs, so
       // reconcile (→ single) and re-lay the incoming space's active view.
@@ -2614,12 +3134,13 @@ function acceptCommandBar(index?: number, revision?: number): void {
   }
   const idx = index ?? commandBar.selectedIndex;
   if (idx === -1) {
-    // Commands, split, and downloads modes have no text action: a no-match
-    // query simply leaves the bar open rather than routing to submit (which
-    // rejects in these modes) — split can only fill the second pane from an
-    // existing tab row.
+    // Commands, promote, split, and downloads modes have no text action: a
+    // no-match query simply leaves the bar open rather than routing to submit
+    // (which rejects in these modes) — split can only fill the second pane from
+    // an existing tab row.
     if (
       commandBar.mode === "commands" ||
+      commandBar.mode === "promote" ||
       commandBar.mode === "split" ||
       commandBar.mode === "downloads"
     ) {
@@ -2662,6 +3183,19 @@ function acceptCommandBar(index?: number, revision?: number): void {
 
 /** Full close lifecycle: store removal, view teardown, re-activation, broadcast. */
 function closeTab(id: string): void {
+  // A pinned tab cannot be closed (issue #33). Mirror the store's pinned no-op
+  // HERE, before any view/state teardown: `store.close` alone leaves the record
+  // in place but does NOT undo the destroyView/ensureActiveView/dropBlockedTab
+  // work below, so a direct `tabs.close(pinnedId)` IPC would still tear down and
+  // reload a pinned tab's view and reset its blocked-count/history. Guarding the
+  // main-process close path here keeps a pinned tab's view fully intact. An
+  // unknown or archived id is NOT in `list()` (open, non-archived tabs only), so
+  // it falls through to `store.close` and throws exactly as before. Unpin first
+  // to close.
+  const target = store.list().find((t) => t.id === id);
+  if (target?.pinned) {
+    return;
+  }
   // A thrown Error (e.g. unknown id) propagates out to the caller.
   store.close(id);
   // Real tab removal: drop the blocked count and the origin marker for good.
@@ -2930,6 +3464,11 @@ function broadcast({ persist = true }: { persist?: boolean } = {}): void {
   // counter from TabsState.find — so it needs the full snapshot too (the surface
   // selector still travels separately on commandBarChange).
   overlay?.webContents.send(IPC.stateChange, snapshot);
+  // The quick-browse chrome renderer mirrors the same snapshot while it exists, so
+  // its url/title follow every change (same pattern as the settings view).
+  if (quickBrowseWindow !== null && !quickBrowseWindow.webContents.isDestroyed()) {
+    quickBrowseWindow.webContents.send(IPC.stateChange, snapshot);
+  }
   if (persist) {
     scheduleSave(store);
   }
@@ -3027,7 +3566,7 @@ function showTabContextMenu(id: string, x: number, y: number): TabContextMenuRes
     {
       id: "close",
       label: "Close",
-      enabled: true,
+      enabled: !tab.pinned,
       click: () => closeTab(id),
     },
     {
@@ -3153,6 +3692,19 @@ function showSpaceContextMenu(id: string, x: number, y: number): SpaceContextMen
 }
 
 /**
+ * Ensures a window exists before a menu-driven command runs. On darwin the app
+ * survives `window-all-closed` and the application menu stays live, so an
+ * accelerator can fire with no window; recreating one first (never seeding — the
+ * in-memory store already reflects the user's state) is the macOS-native
+ * behavior and mirrors {@link app.on}("activate").
+ */
+function ensureWindow(): void {
+  if (win === null) {
+    createWindow(false);
+  }
+}
+
+/**
  * Creates the main window and its renderer. When `seed` is true and no open tab
  * exists, seeds the default first tab (a fresh launch); a restored launch and a
  * macOS re-activate pass `seed: false`. Restored tabs are NOT eagerly given
@@ -3270,7 +3822,20 @@ function createWindow(seed: boolean): void {
     views.clear();
     overlay = null;
     find = closeFind(find);
-    commandBar = { ...commandBar, surface: "bar" };
+    // Fully close the command bar (not just reset its surface): win.on("closed"
+    // previously preserved commandBar.open, so a bar open at close resurrected as
+    // a phantom overlay on the next window recreation (broadcast → refreshCommandState
+    // → layoutOverlay when open). commandBarRevision bumps so a raced click is rejected.
+    commandBar = {
+      open: false,
+      mode: commandBar.mode,
+      initialText: "",
+      query: "",
+      suggestions: [],
+      selectedIndex: -1,
+      revision: ++commandBarRevision,
+      surface: "bar",
+    };
     // Drop the settings view with the window it was parented to; a later
     // createWindow + settings.open recreates it lazily.
     if (settingsView !== null && !settingsView.webContents.isDestroyed()) {
@@ -3286,13 +3851,26 @@ function createWindow(seed: boolean): void {
     }
     dividerView = null;
     win = null;
+    // Rebuild the menu so its enabled flags reflect the no-window/no-live-view
+    // context: with views cleared, commandContextOf() yields canGoBack/canGoForward
+    // === false and siteHost === null, so tab.back/tab.forward/zoom.* are disabled
+    // (their accelerators would otherwise fire and throw after recreation) while
+    // tab.new/tab.close/tab.reload/space.new stay enabled.
+    buildMenu();
   });
 
-  // Seed the first tab into the active (seeded "Personal") space only on a fresh
-  // launch with no open tab. A restored or re-activated launch keeps its state
-  // and does not seed. Views are created lazily: only the active tab's view is
-  // materialized now; every other tab gets its view on first activation.
-  if (seed && store.allOpenTabs().length === 0) {
+  // Seed the first tab into the active (seeded "Personal") space only on a truly
+  // empty store — no open AND no archived tabs. A restored or re-activated launch
+  // keeps its state and does not seed (the persisted-DB check drives `seed`, and
+  // `hasData()` already counts archived rows), so an archived-only session shows
+  // the empty-with-archive state rather than a fresh tab seeded over the archive.
+  // Views are created lazily: only the active tab's view is materialized now;
+  // every other tab gets its view on first activation.
+  if (
+    seed &&
+    store.allOpenTabs().length === 0 &&
+    store.allArchivedTabs().length === 0
+  ) {
     store.create({ url: DEFAULT_URL, title: titleForUrl(DEFAULT_URL) });
   }
   // Restore the persisted window layout, reconciled against the live open tabs and
@@ -3507,6 +4085,30 @@ ipcMain.handle(IPC.settingsGet, (): Settings => settings);
 ipcMain.handle(IPC.settingsSetSearchEngine, (_event, id: SearchEngineId): Promise<void> =>
   setSearchEngine(id),
 );
+
+ipcMain.handle(IPC.settingsSetQuickBrowseExternal, (_event, enabled: boolean): Promise<void> =>
+  setQuickBrowseExternal(enabled),
+);
+
+// --- Quick-browse -------------------------------------------------------------
+// state() reads back the current entry (null when closed). promote()/dismiss()
+// resolve gracefully as no-ops when no window is open — the underlying commands
+// are enabled only while the window exists, so the handlers guard on
+// quickBrowseWindow before dispatch rather than reject the renderer's invoke.
+ipcMain.handle(IPC.quickBrowseState, (): QuickBrowse | null => quickBrowse);
+
+ipcMain.handle(IPC.quickBrowsePromote, (): void => {
+  if (quickBrowseWindow === null) {
+    return;
+  }
+  executeCommand("quickBrowse.promote");
+});
+
+ipcMain.handle(IPC.quickBrowseDismiss, (): void => {
+  if (quickBrowseWindow !== null) {
+    teardownQuickBrowse();
+  }
+});
 
 // --- History ------------------------------------------------------------------
 // search/recent read the SQLite history tables on demand (history is never part
@@ -3767,6 +4369,7 @@ function buildMenu(): void {
       accelerator: `CmdOrCtrl+Alt+${i + 1}`,
       visible: false,
       click: () => {
+        ensureWindow();
         const tabs = store.list();
         const target = tabs[i];
         if (target !== undefined) {
@@ -3789,7 +4392,18 @@ function buildMenu(): void {
       label: entry.label,
       accelerator: entry.accelerator ?? undefined,
       enabled: entry.enabled,
-      click: () => executeCommand(entry.id),
+      click: () => {
+        ensureWindow();
+        try {
+          executeCommand(entry.id);
+        } catch (err: unknown) {
+          // A stale-enabled menu item (e.g. a frozen menu's Go Back after the
+          // window was closed and a fresh view has no history) is rejected by
+          // executeCommand's enablement check; log rather than throw out of the
+          // native menu dispatcher, matching the context-menu closures.
+          console.error(`menu command "${entry.id}" failed:`, err);
+        }
+      },
     }));
 
   const tabsSubmenu: MenuItemConstructorOptions[] = [
@@ -3805,6 +4419,7 @@ function buildMenu(): void {
       accelerator: `CmdOrCtrl+${i + 1}`,
       visible: false,
       click: () => {
+        ensureWindow();
         const target = store.spaces()[i];
         if (target !== undefined) {
           store.setActiveSpace(target.id);
@@ -3841,6 +4456,18 @@ function buildMenu(): void {
 
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
+
+// External-link handoff (PRD 7.2). macOS delivers deep links via open-url; a link
+// that arrives before whenReady has drained is queued and dispatched by the
+// cold-launch drain below, in arrival order, through the same handoff path.
+app.on("open-url", (event, url) => {
+  event.preventDefault();
+  if (!appReady) {
+    pendingExternalLinks.push(url);
+    return;
+  }
+  handleExternalLink(url);
+});
 
 app.whenReady().then(async () => {
   // Restore from disk if a prior session was persisted; otherwise start empty and
@@ -3896,9 +4523,13 @@ app.whenReady().then(async () => {
     // Read the persisted enabled flag (needs the store's open db handle) and seed
     // the blocking slice before any window or tab view exists.
     const enabled = readBlockingEnabled();
-    // Seed the settings slice from the persisted search-engine choice; main is
-    // the sole holder threaded into resolveInput/suggest.
-    settings = { searchEngine: readSearchEngine() };
+    // Seed the settings slice from the persisted search-engine choice and the
+    // quick-browse-external toggle; main is the sole holder threaded into
+    // resolveInput/suggest.
+    settings = { searchEngine: readSearchEngine(), quickBrowseExternal: readQuickBrowseExternal() };
+    // Cache the OS-default-browser flag once at startup; it is re-read only after
+    // browser.setDefault, never in fullSnapshot (which runs on every broadcast).
+    isDefaultBrowser = app.isDefaultProtocolClient("http");
     // Load the persisted allowlist into the live set BEFORE the blocker is created,
     // so the bypass predicate (which reads the set) is correct from the first
     // request. Seed the broadcast slice from the same set, sorted for stable order.
@@ -3963,6 +4594,15 @@ app.whenReady().then(async () => {
             blocker = b;
             if (blocking.enabled) {
               attachBlockerToAllSessions(b);
+              // Cover the transient quick-browse window's ephemeral session too if
+              // one is open when the deferred engine arrives.
+              if (quickBrowseSession !== null) {
+                try {
+                  b.attach(quickBrowseSession);
+                } catch {
+                  teardownQuickBrowse();
+                }
+              }
             }
             wireOnBlocked(b);
             installBypass(b);
@@ -4054,6 +4694,21 @@ app.whenReady().then(async () => {
     sweepIdle();
   }
   setInterval(sweepIdle, SWEEP_INTERVAL_MS);
+
+  // Cold-launch drain (PRD 7.2): the window and settings now exist, so dispatch any
+  // links that arrived before appReady, in arrival order, through the handoff path.
+  // The e2e hook injects a single link deterministically through the SAME queue,
+  // gated strictly on ZEO_E2E === "1".
+  if (process.env.ZEO_E2E === "1") {
+    const coldLaunchUrl = process.env.ZEO_QUICK_BROWSE_URL;
+    if (typeof coldLaunchUrl === "string" && coldLaunchUrl !== "") {
+      pendingExternalLinks.push(coldLaunchUrl);
+    }
+  }
+  appReady = true;
+  for (const queued of pendingExternalLinks.splice(0)) {
+    handleExternalLink(queued);
+  }
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {

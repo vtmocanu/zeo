@@ -15,6 +15,9 @@ import type { Suggestion } from "./suggest.js";
  *   reads "Search history", the typed text filters recent/matching visits, there
  *   is no text (navigate/search) action row, and accepting a row navigates the
  *   active tab to that url.
+ * - `"promote"` opens the bar to pick a target SPACE for the quick-browse link:
+ *   the typed text filters spaces by name, there is no text (navigate/search)
+ *   action row, and every row is a `"space"` suggestion.
  * - `"split"` opens the bar to pick the second pane for a split: the typed text
  *   filters the active space's OTHER open tabs (the active tab excluded), there is
  *   no text (navigate/search) action row, and accepting a tab row fills the
@@ -30,6 +33,7 @@ export type CommandBarMode =
   | "new-tab"
   | "commands"
   | "history"
+  | "promote"
   | "split"
   | "downloads";
 
