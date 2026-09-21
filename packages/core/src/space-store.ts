@@ -305,6 +305,14 @@ export class SpaceStore {
     this.active().reorder(id, toIndex);
   }
 
+  moveToTop(id: string): void {
+    this.active().moveToTop(id);
+  }
+
+  moveToBottom(id: string): void {
+    this.active().moveToBottom(id);
+  }
+
   archive(id: string): void {
     this.active().archive(id);
   }

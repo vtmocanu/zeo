@@ -1477,6 +1477,8 @@ const commandHandlers: Record<CommandId, () => void> = {
   "tab.close": () => closeTab(store.activeTabId!),
   "tab.pin": () => pinTab(store.activeTabId!),
   "tab.unpin": () => unpinTab(store.activeTabId!),
+  "tab.moveToTop": () => moveTabToTop(store.activeTabId!),
+  "tab.moveToBottom": () => moveTabToBottom(store.activeTabId!),
   "tab.archive": () => archiveTab(store.activeTabId!),
   "tab.copy-url": () => {
     const tab = store.list().find((t) => t.id === store.activeTabId);
@@ -2230,6 +2232,20 @@ function unpinTab(id: string): void {
   broadcast();
 }
 
+// Ordering-only ops: move a tab to the first/last slot of its own pinned or
+// unpinned group. Like pin/unpin/reorder they change no view and no active
+// pointer, so broadcast() alone suffices. The store throws on an unknown or
+// archived id, which propagates out to reject the caller.
+function moveTabToTop(id: string): void {
+  store.moveToTop(id);
+  broadcast();
+}
+
+function moveTabToBottom(id: string): void {
+  store.moveToBottom(id);
+  broadcast();
+}
+
 function archiveTab(id: string): void {
   store.archive(id);
   // Archiving the active tab re-points active to an MRU sibling that may be a
@@ -2472,12 +2488,27 @@ function showTabContextMenu(id: string, x: number, y: number): TabContextMenuRes
     return { tabId: id, items: [] };
   }
 
+  const group = store.list().filter((t) => t.pinned === tab.pinned);
+  const indexInGroup = group.findIndex((t) => t.id === id);
+
   const actions: { id: string; label: string; enabled: boolean; click: () => void }[] = [
     {
       id: tab.pinned ? "unpin" : "pin",
       label: tab.pinned ? "Unpin" : "Pin",
       enabled: true,
       click: () => (tab.pinned ? unpinTab(id) : pinTab(id)),
+    },
+    {
+      id: "moveToTop",
+      label: "Move to Top",
+      enabled: indexInGroup > 0,
+      click: () => moveTabToTop(id),
+    },
+    {
+      id: "moveToBottom",
+      label: "Move to Bottom",
+      enabled: indexInGroup >= 0 && indexInGroup < group.length - 1,
+      click: () => moveTabToBottom(id),
     },
     {
       id: "archive",
