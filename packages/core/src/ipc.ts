@@ -90,6 +90,14 @@ export interface TabsState extends StoreSnapshot {
   /** Whether zeo is currently the OS default browser (drives the set-default affordance). */
   isDefaultBrowser: boolean;
   layout: WindowLayout;
+  /**
+   * The ids of the ACTIVE space's open tabs that currently have NO live view —
+   * unloaded by the space-switch or idle policy, or not yet lazily materialized
+   * — in `tabs` order. Main attaches it in `fullSnapshot()` on every broadcast,
+   * so it is never absent; it is derived, never persisted. Renderers dim these
+   * rows.
+   */
+  unloadedTabIds: string[];
 }
 
 /**

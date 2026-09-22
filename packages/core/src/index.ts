@@ -170,3 +170,9 @@ export {
   layoutsEqual,
 } from "./split-view.js";
 export type { PaneSide, SingleLayout, SplitLayout, WindowLayout } from "./split-view.js";
+export {
+  VIEW_UNLOAD_AFTER_MS,
+  VIEW_UNLOAD_INTERVAL_MS,
+  selectViewsToUnload,
+} from "./view-unload.js";
+export type { UnloadCandidate } from "./view-unload.js";

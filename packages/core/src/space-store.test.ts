@@ -691,6 +691,59 @@ describe("SpaceStore.tabsOfSpace", () => {
   });
 });
 
+describe("SpaceStore.createInSpace", () => {
+  test("creates a tab in an INACTIVE space without disturbing the active space", () => {
+    const store = makeStore();
+    const personalId = store.activeSpaceId;
+    const a = store.create({ url: "https://a.test" }); // into Personal (active)
+
+    const work = store.createSpace("Work"); // not active
+    const w1 = store.createInSpace(work.id, { url: "https://w1.test" });
+
+    // The new tab is THAT space's active tab.
+    expect(store.activeTabIdOf(work.id)).toBe(w1.id);
+    // The active space and its tab list are untouched.
+    expect(store.activeSpaceId).toBe(personalId);
+    expect(store.list().map((t) => t.id)).toEqual([a.id]);
+  });
+
+  test("throws on an unknown space id", () => {
+    const store = makeStore();
+    expect(() =>
+      store.createInSpace("nope", { url: "https://x.test" }),
+    ).toThrow(/Unknown space/);
+  });
+});
+
+describe("SpaceStore.activeTabIdOf", () => {
+  test("mirrors each space's own active-tab pointer", () => {
+    const store = makeStore();
+    const personalId = store.activeSpaceId;
+    const p1 = store.create({ url: "https://p1.test" });
+    store.create({ url: "https://p2.test" });
+    store.activate(p1.id);
+
+    const work = store.createSpace("Work");
+    const w1 = store.createInSpace(work.id, { url: "https://w1.test" });
+
+    // Each space reports its own active tab, independent of the active space.
+    expect(store.activeTabIdOf(personalId)).toBe(p1.id);
+    expect(store.activeTabIdOf(work.id)).toBe(w1.id);
+    expect(store.activeSpaceId).toBe(personalId);
+  });
+
+  test("returns null for a space with no tabs", () => {
+    const store = makeStore();
+    const work = store.createSpace("Work");
+    expect(store.activeTabIdOf(work.id)).toBeNull();
+  });
+
+  test("throws on an unknown space id", () => {
+    const store = makeStore();
+    expect(() => store.activeTabIdOf("nope")).toThrow(/Unknown space/);
+  });
+});
+
 describe("SpaceStore profile snapshots", () => {
   test("spacesSnapshot carries the profile list and each space's profileId", () => {
     const store = makeStore();

@@ -18,11 +18,12 @@ import type {
 } from "@zeo/core";
 import { searchHistory } from "./db.js";
 import { runtime, HISTORY_CANDIDATES } from "./state.js";
-import { broadcast, pushCommandBar } from "./broadcast.js";
+import { pushCommandBar } from "./broadcast.js";
 import { layoutOverlay } from "./overlay.js";
 import { createTab, navigateTab } from "./tabs.js";
 import { createViewFor } from "./views.js";
-import { activateTab, doSplitWith, reconcileAndApply } from "./layout.js";
+import { switchSpace } from "./spaces.js";
+import { activateTab, doSplitWith } from "./layout.js";
 import { teardownQuickBrowse } from "./quick-browse.js";
 import { openDownloadById } from "./downloads.js";
 import { logHistoryError } from "./history.js";
@@ -289,9 +290,7 @@ export function performSuggestion(s: Suggestion): void {
         );
         return;
       }
-      if (s.spaceId !== runtime.store.activeSpaceId) {
-        runtime.store.setActiveSpace(s.spaceId);
-      }
+      switchSpace(s.spaceId);
       // activateTab does store.activate + view reconcile (the cross-space
       // hide/show transition, and a split collapse when the tab is not a pane) +
       // broadcast.
@@ -299,9 +298,7 @@ export function performSuggestion(s: Suggestion): void {
       return;
     }
     case "archived-tab": {
-      if (s.spaceId !== runtime.store.activeSpaceId) {
-        runtime.store.setActiveSpace(s.spaceId);
-      }
+      switchSpace(s.spaceId);
       // After the space switch, store.list()/store.restore act on the now-active
       // owning space. Restore and materialize the view like the tabsRestore
       // handler before activating it.
@@ -335,11 +332,7 @@ export function performSuggestion(s: Suggestion): void {
         teardownQuickBrowse();
         return;
       }
-      runtime.store.setActiveSpace(s.spaceId);
-      // A space switch invalidates any split of the outgoing space's tabs, so
-      // reconcile (→ single) and re-lay the incoming space's active view.
-      reconcileAndApply();
-      broadcast();
+      switchSpace(s.spaceId);
       return;
     }
     case "history": {
