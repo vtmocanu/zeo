@@ -82,9 +82,9 @@ export function navigateTab(id: string, url: string): void {
   runtime.store.updateMeta(id, { url, title: titleForUrl(url) });
   broadcast();
 
-  const tracked = runtime.views.get(id);
-  if (tracked !== undefined) {
-    tracked.view.webContents
+  const view = runtime.views.get(id);
+  if (view !== undefined) {
+    view.webContents
       .loadURL(url)
       .then(() => {
         if (runtime.navSeq.get(id) === seq) {
@@ -97,7 +97,7 @@ export function navigateTab(id: string, url: string): void {
           // ERR_ABORTED; ignore it (no failedLoads, no log).
           return;
         }
-        if (runtime.views.get(id)?.view !== tracked.view) {
+        if (runtime.views.get(id) !== view) {
           return;
         }
         runtime.failedLoads.add(id);
@@ -210,6 +210,33 @@ export function archiveTab(id: string): void {
   // the split collapses; then reconcile (→ single, since an archived tab is no
   // longer open) and re-lay the view (lazy restore materializes it if missing).
   preserveSurvivingPane(id);
+  reconcileAndApply();
+  broadcast();
+}
+
+/**
+ * Full restore lifecycle: un-archive `id`, materialize its view if missing, then
+ * reconcile + broadcast. A tab owned by ANOTHER space is a cross-space restore, so
+ * the owning space is switched to FIRST (via the runtime hook, so tabs.ts keeps no
+ * import edge to spaces.ts) — otherwise the store's active-space `list()` would not
+ * see the restored tab and the view could never materialize. Shared by the
+ * tabsRestore IPC handler and the command bar's archived-tab suggestion.
+ */
+export function restoreTab(id: string): void {
+  const owner = runtime.store.spaceOfTab(id);
+  if (owner !== null && owner !== runtime.store.activeSpaceId) {
+    runtime.switchSpace?.(owner);
+  }
+  runtime.store.restore(id);
+  if (!runtime.views.has(id)) {
+    const tab = runtime.store.list().find((t) => t.id === id);
+    if (tab !== undefined) {
+      createViewFor(tab, runtime.store.activeSpaceId);
+    }
+  }
+  // Restoring does not change the active tab, so a live split is preserved; the
+  // restored (non-pane) view is materialized hidden. reconcileAndApply re-lays the
+  // current layout (single or split).
   reconcileAndApply();
   broadcast();
 }
@@ -369,20 +396,7 @@ ipcMain.handle(IPC.tabsArchive, (_event, id: string): void => {
 });
 
 ipcMain.handle(IPC.tabsRestore, (_event, id: string): void => {
-  withResync(() => {
-    runtime.store.restore(id);
-    if (!runtime.views.has(id)) {
-      const tab = runtime.store.list().find((t) => t.id === id);
-      if (tab !== undefined) {
-        createViewFor(tab, runtime.store.activeSpaceId);
-      }
-    }
-    // Restoring does not change the active tab, so a live split is preserved; the
-    // restored (non-pane) view is materialized hidden. reconcileAndApply re-lays the
-    // current layout (single or split).
-    reconcileAndApply();
-    broadcast();
-  });
+  withResync(() => restoreTab(id));
 });
 
 // Permanent delete: drop the tab from the store and tear down its view. A thrown

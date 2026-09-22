@@ -13,44 +13,37 @@ import { installDownloadHandler, logDownloadError } from "./downloads.js";
 import { attachBlockerToProfileSession } from "./blocking.js";
 
 /**
- * Full space-delete lifecycle. Validates deletability FIRST (unknown id or the
- * last remaining space → throw, so a rejected delete tears down no views), then
- * destroys EVERY view owned by the space (open and archived alike), then removes
- * the space from the store, then — only when the deleted space was active — runs
- * the same hide/show transition as a space activate for the newly active space,
- * then broadcasts. No orphaned views survive a delete.
+ * Full space-delete lifecycle. `store.deleteSpace` validates FIRST (unknown id or
+ * the last remaining space → throw BEFORE any mutation, so a rejected delete tears
+ * down no views) and returns the ids of every tab it removed (open and archived).
+ * Each removed tab's view is then destroyed and its per-tab state forgotten; then —
+ * only when the deleted space was active — the same hide/show transition as a space
+ * activate runs for the newly active space, then broadcasts. No orphaned views
+ * survive a delete.
  */
 export function deleteSpace(id: string): void {
-  // Gate teardown on the store's OWN deletability predicate, so the rule is not
-  // duplicated here. When the delete would reject (unknown id or the last
-  // remaining space), defer to store.deleteSpace to throw the specific error
-  // BEFORE any view is torn down — a rejected delete has no side effect.
-  if (!runtime.store.canDeleteSpace(id)) {
-    runtime.store.deleteSpace(id);
-    return; // unreachable: canDeleteSpace() === false means deleteSpace() throws.
-  }
-
   const wasActive = runtime.store.activeSpaceId === id;
+  // The store validates before mutating: an unknown id or the last remaining space
+  // throws here, before any view teardown. On success it returns every removed tab
+  // id (open + archived) and has already dropped them from the ownership index.
+  const removed = runtime.store.deleteSpace(id);
 
-  // Every tab id the delete will remove (open + archived) — captured BEFORE the
-  // store drops the space — so their blocked counts and origin markers can be
-  // dropped for good, mirroring closeTab/removeTab.
-  const removedTabIds = runtime.store.tabsOfSpace(id).map((t) => t.id);
-
-  // Destroy every view owned by the space (open and archived). Snapshot the
-  // entries first: destroyView mutates `views` as it goes.
-  for (const [tabId, tracked] of [...runtime.views]) {
-    if (tracked.spaceId === id) {
+  for (const tabId of removed) {
+    // Best-effort per PRD 9.4 §4: one failing teardown must not strand the
+    // other removed tabs with live views or stale per-tab state. Wrap each
+    // call separately, log once with the tab id, and continue the loop.
+    try {
       destroyView(tabId);
+    } catch (err) {
+      console.error(`failed to destroy view for removed tab ${tabId}:`, err);
     }
-  }
-
-  runtime.store.deleteSpace(id);
-
-  for (const tabId of removedTabIds) {
     // Drop the blocked count, origin marker, and history per-tab state for good,
     // mirroring closeTab/removeTab.
-    forgetTab(tabId);
+    try {
+      forgetTab(tabId);
+    } catch (err) {
+      console.error(`failed to forget removed tab ${tabId}:`, err);
+    }
   }
 
   if (wasActive) {
@@ -90,7 +83,7 @@ export function remapSpaceProfile(spaceId: string, profileId: string): void {
   // views map filtered by owning space — NOT from tabsOfSpace, which would
   // spuriously materialize views for archived tabs that currently have none.
   const tabIds = [...runtime.views]
-    .filter(([, tracked]) => tracked.spaceId === spaceId)
+    .filter(([tabId]) => runtime.store.spaceOfTab(tabId) === spaceId)
     .map(([tabId]) => tabId);
   // tabsOfSpace supplies only the id→url lookup for the captured ids.
   const tabsById = new Map(runtime.store.tabsOfSpace(spaceId).map((t) => [t.id, t]));
@@ -99,7 +92,7 @@ export function remapSpaceProfile(spaceId: string, profileId: string): void {
   // for a view that never finished loading.
   const liveUrls = new Map(
     tabIds.map((tabId) => {
-      const wc = runtime.views.get(tabId)?.view.webContents;
+      const wc = runtime.views.get(tabId)?.webContents;
       return [tabId, wc !== undefined && !wc.isDestroyed() ? wc.getURL() : ""] as const;
     }),
   );
@@ -143,7 +136,7 @@ export function showSpaceContextMenu(id: string, x: number, y: number): SpaceCon
     profiles: runtime.store.profiles(),
     tabCount: runtime.store.tabsOfSpace(id).length,
     currentProfileId: runtime.store.spaceProfileId(id),
-    canDelete: runtime.store.canDeleteSpace(id),
+    canDelete: runtime.store.spaces().length > 1 && runtime.store.spaces().some((s) => s.id === id),
   });
 
   // Gate the native popup so headless e2e never blocks on it. win is non-null in
@@ -230,6 +223,85 @@ export function switchSpace(id: string): void {
   broadcast();
 }
 
+// Register the space-switch hook so layout.ts (activateTab) and tabs.ts
+// (restoreTab) can trigger a cross-space switch with NO import edge to spaces.ts
+// (madge --circular clean). spaces.ts imports from both of those modules, so the
+// dependency is inverted through the runtime singleton, exactly like
+// command-bar.ts registers runtime.onStateApplied.
+runtime.switchSpace = switchSpace;
+
+/**
+ * Creates a space AND makes it active, atomically from the caller's view: if the
+ * activation throws, the just-created space is rolled back (deleted) and the throw
+ * is re-raised, so `store.spaces()` AND `store.activeSpaceId` are left exactly as
+ * they were before the call. The `activate` collaborator defaults to
+ * {@link switchSpace}; the seam lets a unit test inject a throwing activate to
+ * exercise the rollback. `createSpace` throws on a blank name (nothing created)
+ * before any activation is attempted.
+ */
+export function createSpaceAndActivate(
+  name: string,
+  activate: (id: string) => void = switchSpace,
+): Space {
+  // Remember the active space so a failed switch can be fully undone: switchSpace
+  // calls store.setActiveSpace(new) before its throwable work, and deleteSpace on
+  // rollback re-points active to order[0], which may not be the pre-call one.
+  const previousActiveSpaceId = runtime.store.activeSpaceId;
+  const space = runtime.store.createSpace(name);
+  try {
+    activate(space.id);
+  } catch (err) {
+    runtime.store.deleteSpace(space.id);
+    // Restore the space that was active before the (failed) switch — deleteSpace
+    // re-points to order[0], which may not be the pre-call active space.
+    if (runtime.store.activeSpaceId !== previousActiveSpaceId) {
+      runtime.store.setActiveSpace(previousActiveSpaceId);
+    }
+    broadcast();
+    throw err;
+  }
+  return space;
+}
+
+/**
+ * Creates a profile AND assigns it to the space `spaceId`, atomically from the
+ * caller's view: `spaceProfileId(spaceId)` runs FIRST so an unknown space throws
+ * before any profile exists; `createProfile` then throws on a blank/duplicate name
+ * (nothing created); and if attaching the blocker / download handler or the
+ * assignment throws, the just-created profile is rolled back (deleted) and the
+ * throw is re-raised, so `store.profiles()` AND the space's assigned profile are
+ * left exactly as they were. The `assign` collaborator defaults to
+ * {@link remapSpaceProfile}; the seam lets a unit test inject a throwing assign to
+ * exercise the rollback.
+ */
+export function createProfileAndAssign(
+  spaceId: string,
+  name: string,
+  assign: (sid: string, pid: string) => void = remapSpaceProfile,
+): Profile {
+  // Pre-check the space FIRST (unknown space throws before any profile exists),
+  // and remember its current profile so a failed assign can be fully undone.
+  const previousProfileId = runtime.store.spaceProfileId(spaceId);
+  const profile = runtime.store.createProfile(name);
+  try {
+    attachBlockerToProfileSession(profile.id);
+    installDownloadHandler(profile.id);
+    assign(spaceId, profile.id);
+  } catch (err) {
+    // If assign already re-pointed the space at the new profile (remapSpaceProfile
+    // sets it before its throwable createViewFor/reconcile work), restore the
+    // previous one so deleteProfile — which refuses a still-referenced profile —
+    // can succeed and the store returns to exactly its pre-call state.
+    if (runtime.store.spaceProfileId(spaceId) === profile.id) {
+      runtime.store.setSpaceProfile(spaceId, previousProfileId);
+    }
+    runtime.store.deleteProfile(profile.id);
+    broadcast();
+    throw err;
+  }
+  return profile;
+}
+
 // --- Space commands -----------------------------------------------------------
 // The renderer's single UI bridge drives these; tab WebContentsViews have no
 // bridge and cannot dispatch. A thrown Error (unknown/last space) propagates out
@@ -241,6 +313,14 @@ ipcMain.handle(IPC.spacesCreate, (_event, name: string): Space => {
   broadcast();
   return space;
 });
+
+// Create + activate as one op. A throw (blank name, or a failed activation whose
+// rollback restores the pre-call spaces) rejects the invoke and leaves
+// store.spaces() at its pre-call value.
+ipcMain.handle(
+  IPC.spacesCreateAndActivate,
+  (_event, name: string): Space => createSpaceAndActivate(name),
+);
 
 ipcMain.handle(IPC.spacesRename, (_event, id: string, name: string): void => {
   runtime.store.renameSpace(id, name);
@@ -270,6 +350,14 @@ ipcMain.handle(IPC.profilesCreate, (_event, name: string): Profile => {
   broadcast();
   return profile;
 });
+
+// Create + assign as one op. A throw (unknown space, blank/duplicate name, or a
+// failed assignment whose rollback deletes the new profile) rejects the invoke and
+// leaves store.profiles() at its pre-call value.
+ipcMain.handle(
+  IPC.profilesCreateAndAssign,
+  (_event, spaceId: string, name: string): Profile => createProfileAndAssign(spaceId, name),
+);
 
 ipcMain.handle(IPC.profilesRename, (_event, id: string, name: string): void => {
   runtime.store.renameProfile(id, name);

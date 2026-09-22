@@ -3,15 +3,17 @@ import {
   useEffect,
   useRef,
   useState,
+  type MouseEventHandler,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
   type RefObject,
 } from "react";
-import type { PaneSide, Tab, TabsState } from "@zeo/core";
+import type { PaneSide, Space, Tab, TabsState } from "@zeo/core";
 import {
   SIDEBAR_WIDTH,
   DEFAULT_SEARCH_ENGINE_ID,
   SINGLE_LAYOUT,
+  SPACE_ACTIVATE_DELAY_MS,
   defaultSpaceName,
   formatRelativeArchived,
   formatZoomPercent,
@@ -494,6 +496,63 @@ function SpaceNameInput({
 }
 
 /**
+ * A single space row in the switcher. A plain click activates the space, but the
+ * activation is deferred by {@link SPACE_ACTIVATE_DELAY_MS} so a double-click
+ * (which opens the rename input) never also switches spaces: the second click
+ * and `onDoubleClick` both clear the pending timer first (PRD 9.4 §6). The timer
+ * is per-row and cleared on unmount.
+ */
+function SpaceItem({
+  space,
+  isActive,
+  onActivate,
+  onRename,
+  onContextMenu,
+}: {
+  space: Space;
+  isActive: boolean;
+  onActivate: () => void;
+  onRename: () => void;
+  onContextMenu: MouseEventHandler<HTMLButtonElement>;
+}) {
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const clear = () => {
+    if (timer.current !== null) {
+      clearTimeout(timer.current);
+      timer.current = null;
+    }
+  };
+  useEffect(() => clear, []);
+  return (
+    <button
+      type="button"
+      className={`space-item${isActive ? " space-item--active" : ""}`}
+      data-testid="space-item"
+      data-space-id={space.id}
+      aria-current={isActive ? "true" : undefined}
+      onClick={(event) => {
+        if (event.detail > 1) {
+          clear();
+          return;
+        }
+        clear();
+        timer.current = setTimeout(() => {
+          timer.current = null;
+          onActivate();
+        }, SPACE_ACTIVATE_DELAY_MS);
+      }}
+      onDoubleClick={() => {
+        clear();
+        onRename();
+      }}
+      onContextMenu={onContextMenu}
+    >
+      {space.name}
+    </button>
+  );
+}
+
+/**
  * Keyboard-first left sidebar listing open tabs. This is the renderer: it
  * reaches the main process ONLY through the injected global `window.zeo`
  * (which implements ZeoApi). No Node or Electron imports.
@@ -627,10 +686,7 @@ export function App() {
     if (current.mode === "create") {
       void (async () => {
         try {
-          const created = await window.zeo?.spaces.create(name);
-          if (created) {
-            await window.zeo?.spaces.activate(created.id);
-          }
+          await window.zeo?.spaces.createAndActivate(name);
         } catch {
           // Bridge unavailable or the store rejected the name; the buffer is
           // already discarded, so nothing to roll back.
@@ -641,10 +697,7 @@ export function App() {
     const spaceId = current.spaceId;
     void (async () => {
       try {
-        const created = await window.zeo?.profiles.create(name);
-        if (created) {
-          await window.zeo?.spaces.setProfile(spaceId, created.id);
-        }
+        await window.zeo?.profiles.createAndAssign(spaceId, name);
       } catch {
         // As above: buffer discarded, nothing to roll back.
       }
@@ -799,19 +852,12 @@ export function App() {
             );
           }
           return (
-            <button
+            <SpaceItem
               key={space.id}
-              type="button"
-              className={`space-item${isActive ? " space-item--active" : ""}`}
-              data-testid="space-item"
-              data-space-id={space.id}
-              aria-current={isActive ? "true" : undefined}
-              onClick={() =>
-                void window.zeo?.spaces.activate(space.id).catch(() => {})
-              }
-              onDoubleClick={() =>
-                openEdit({ mode: "rename", spaceId: space.id }, space.name)
-              }
+              space={space}
+              isActive={isActive}
+              onActivate={() => window.zeo?.spaces.activate(space.id).catch(() => {})}
+              onRename={() => openEdit({ mode: "rename", spaceId: space.id }, space.name)}
               onContextMenu={(event) => {
                 event.preventDefault();
                 void window.zeo?.spaces
@@ -823,9 +869,7 @@ export function App() {
                   })
                   .catch(() => {});
               }}
-            >
-              {space.name}
-            </button>
+            />
           );
         })}
         {edit?.mode === "create" || edit?.mode === "new-profile" ? (

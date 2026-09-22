@@ -344,7 +344,7 @@ export function teardownQuickBrowse(): void {
   if (runtime.win !== null && !runtime.win.isDestroyed()) {
     const activeTabId = runtime.store.activeTabId;
     if (activeTabId !== null && runtime.views.has(activeTabId)) {
-      runtime.views.get(activeTabId)?.view.webContents.focus();
+      runtime.views.get(activeTabId)?.webContents.focus();
     } else {
       runtime.win!.webContents.focus();
     }

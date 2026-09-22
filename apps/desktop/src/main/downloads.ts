@@ -126,7 +126,7 @@ export function installDownloadHandler(profileId: string): void {
       completedAt: null,
       // A download whose webContents maps to no live tab gets spaceId null; it is
       // never dropped.
-      spaceId: tabId !== undefined ? (runtime.views.get(tabId)?.spaceId ?? null) : null,
+      spaceId: tabId !== undefined ? runtime.store.spaceOfTab(tabId) : null,
     };
     // Register the live item BEFORE broadcasting so a cancel/remove arriving as
     // soon as the renderer sees the row finds it.

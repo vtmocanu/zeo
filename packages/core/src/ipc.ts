@@ -193,6 +193,9 @@ export interface TabsApi {
  */
 export interface SpacesApi {
   create(name: string): Promise<Space>;
+  /** Creates a new space with the given name AND makes it the active space,
+   *  returning the created {@link Space}. */
+  createAndActivate(name: string): Promise<Space>;
   rename(id: string, name: string): Promise<void>;
   delete(id: string): Promise<void>;
   activate(id: string): Promise<void>;
@@ -216,6 +219,9 @@ export interface SpacesApi {
  */
 export interface ProfilesApi {
   create(name: string): Promise<Profile>;
+  /** Creates a new profile with the given name AND assigns it to the space
+   *  `spaceId`, returning the created {@link Profile}. */
+  createAndAssign(spaceId: string, name: string): Promise<Profile>;
   rename(id: string, name: string): Promise<void>;
   delete(id: string): Promise<void>;
 }
@@ -511,6 +517,7 @@ export const IPC = {
   tabsRemove: "zeo:tabs:remove",
   tabsContextMenu: "zeo:tabs:context-menu",
   spacesCreate: "zeo:spaces:create",
+  spacesCreateAndActivate: "zeo:spaces:create-and-activate",
   spacesRename: "zeo:spaces:rename",
   spacesDelete: "zeo:spaces:delete",
   spacesActivate: "zeo:spaces:activate",
@@ -519,6 +526,7 @@ export const IPC = {
   spacesContextMenu: "zeo:spaces:context-menu",
   spaceMenuAction: "zeo:spaces:menu-action",
   profilesCreate: "zeo:profiles:create",
+  profilesCreateAndAssign: "zeo:profiles:create-and-assign",
   profilesRename: "zeo:profiles:rename",
   profilesDelete: "zeo:profiles:delete",
   commandBarOpen: "zeo:command-bar:open",

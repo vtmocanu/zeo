@@ -84,6 +84,18 @@ export function scheduleDownloadsBroadcast(): void {
   }, DOWNLOADS_BROADCAST_MS);
 }
 
+/**
+ * Records that an INACTIVE-space tab's metadata changed: persist and refresh the
+ * command catalog, but push no snapshot. An inactive space's tab is never on
+ * screen, so the renderer needs no new {@link fullSnapshot}; the change must still
+ * survive a restart (a debounced save) and update the command bar's ranked catalog
+ * ({@link runtime.onStateApplied}), which draws on every space's tabs.
+ */
+export function noteInactiveChange(): void {
+  scheduleSave(runtime.store);
+  runtime.onStateApplied?.();
+}
+
 /** Pushes the current command-bar state to the OVERLAY renderer (which hosts the
  *  CommandBar UI), seeding its input; the sidebar is intentionally not targeted. */
 export function pushCommandBar(): void {
