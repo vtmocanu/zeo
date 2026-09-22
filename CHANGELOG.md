@@ -23,8 +23,8 @@ milestone, a minor bump only for very large breakthroughs.
   space, on that space's profile partition; a non-http(s) target is dropped.
 
 - Upgrading now migrates cookies from the pre-profiles default browser session
-  into the default profile's partition once, then clears the old session's
-  storage — so a user upgrading from before profiles is no longer logged out
+  into the default profile's partition once, then clears those cookies from the
+  old session — so a user upgrading from before profiles is no longer logged out
   everywhere. The migration runs at most once per user-data directory, never on
   a fresh install, and retries on the next launch if any cookie fails to copy
   (a new database schema column records that it ran).

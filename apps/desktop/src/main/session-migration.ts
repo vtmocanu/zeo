@@ -7,7 +7,7 @@ import { readDefaultSessionMigratedAt, writeDefaultSessionMigratedAt } from "./d
  * `persist:default` partition (PRD 9.4 §8). Early builds ran tabs on the implicit
  * default session; spaces now always run on an explicit profile partition, the
  * default profile being `persist:default`. This copies every cookie from the old
- * default session into that partition, then clears the old session's storage.
+ * default session into that partition, then clears those cookies from the old session.
  *
  * The whole body is wrapped in a single try/catch so the function RESOLVES in
  * every case (it never rejects) — a migration failure must never block startup:
@@ -56,12 +56,12 @@ export async function migrateDefaultSession(): Promise<void> {
       );
       return;
     }
-    // "websql" (in PRD §8's list) is omitted: WebSQL was removed from Chromium and
-    // Electron's ClearStorageDataOptions.storages type no longer accepts it, so the
-    // set here is the PRD's list minus that one now-invalid key.
-    await session.defaultSession.clearStorageData({
-      storages: ["cookies", "localstorage", "indexdb", "serviceworkers", "cachestorage"],
-    });
+    // Clear only what the migration copied: cookies. The default session's other
+    // stores (localstorage, indexdb, serviceworkers, cachestorage) are left in
+    // place — the migration does not copy them, and once every view lives on a
+    // profile partition no tab can reach the default session to read them, so
+    // clearing them would only destroy data with no copy path (PRD 9.4 §7).
+    await session.defaultSession.clearStorageData({ storages: ["cookies"] });
     writeDefaultSessionMigratedAt(Date.now());
   } catch (err) {
     console.error("[session-migration] default session migration failed:", err);

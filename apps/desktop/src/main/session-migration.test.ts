@@ -72,6 +72,17 @@ describe("migrateDefaultSession", () => {
     expect(errorSpy).not.toHaveBeenCalled();
   });
 
+  test("clears only cookies from the source session, leaving other stores intact", async () => {
+    h.defaultCookiesGet.mockResolvedValue([cookie()]);
+
+    await expect(migrateDefaultSession()).resolves.toBeUndefined();
+
+    // Only cookies are copied, so only cookies are cleared; localstorage, indexdb,
+    // serviceworkers and cachestorage in the default session are left untouched.
+    expect(h.defaultClearStorageData).toHaveBeenCalledTimes(1);
+    expect(h.defaultClearStorageData).toHaveBeenCalledWith({ storages: ["cookies"] });
+  });
+
   test("skips a cookie with no addressable url and still copies its valid sibling", async () => {
     // An empty domain yields no url from cookieUrlFor, so that cookie is skipped;
     // the sibling with a real domain is still copied. Migration completes.
