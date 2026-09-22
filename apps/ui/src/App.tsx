@@ -292,6 +292,7 @@ function TabRow({
   allowlisted,
   host,
   zoomFactor,
+  unloaded,
   onPointerDown,
 }: {
   tab: Tab;
@@ -305,6 +306,7 @@ function TabRow({
   allowlisted: boolean;
   host: string | null;
   zoomFactor: number;
+  unloaded: boolean;
   onPointerDown: (event: ReactPointerEvent<HTMLLIElement>) => void;
 }) {
   const paned = paneSide !== null;
@@ -315,6 +317,7 @@ function TabRow({
     dragging ? "tab-item--dragging" : "",
     paned ? "tab-item--paned" : "",
     paneFocused ? "tab-item--pane-focused" : "",
+    unloaded ? "tab-item--unloaded" : "",
   ]
     .filter(Boolean)
     .join(" ");
@@ -325,6 +328,7 @@ function TabRow({
       data-testid={paned ? "tab-pane" : "tab-item"}
       data-tab-id={tab.id}
       data-pane={paneSide ?? undefined}
+      data-unloaded={unloaded ? "true" : undefined}
       aria-current={isActive ? "true" : undefined}
       onPointerDown={onPointerDown}
       onContextMenu={(event) => {
@@ -502,6 +506,7 @@ export function App() {
     tabs: [],
     activeTabId: null,
     archived: [],
+    unloadedTabIds: [],
     settingsOpen: false,
     settings: {
       searchEngine: DEFAULT_SEARCH_ENGINE_ID,
@@ -715,6 +720,7 @@ export function App() {
             allowlisted={allowlisted}
             host={host}
             zoomFactor={zoomFactor}
+            unloaded={state.unloadedTabIds.includes(tab.id)}
             onPointerDown={(event) =>
               onRowPointerDown(event, tab, section === "pinned")
             }

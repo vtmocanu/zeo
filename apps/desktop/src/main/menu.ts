@@ -2,9 +2,9 @@ import { Menu } from "electron";
 import type { MenuItemConstructorOptions } from "electron";
 import { COMMANDS, menuEntries } from "@zeo/core";
 import { runtime } from "./state.js";
-import { broadcast } from "./broadcast.js";
 import { commandContextOf, executeCommand } from "./commands.js";
-import { activateTab, reconcileAndApply } from "./layout.js";
+import { switchSpace } from "./spaces.js";
+import { activateTab } from "./layout.js";
 
 /**
  * Ensures a window exists before a menu-driven command runs. On darwin the app
@@ -87,11 +87,7 @@ export function buildMenu(): void {
         ensureWindow();
         const target = runtime.store.spaces()[i];
         if (target !== undefined) {
-          runtime.store.setActiveSpace(target.id);
-          // A space switch invalidates any split of the outgoing space's tabs, so
-          // reconcile (→ single) and re-lay the incoming space's active view.
-          reconcileAndApply();
-          broadcast();
+          switchSpace(target.id);
         }
       },
     }),

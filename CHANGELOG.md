@@ -9,7 +9,24 @@ milestone, a minor bump only for very large breakthroughs.
 
 ## [Unreleased]
 
+### Changed
+
+- Hidden tab views are now unloaded to reclaim memory: switching spaces frees
+  the outgoing space's views (keeping its own active tab and any audible tab),
+  and a background view left idle past a threshold is torn down by a periodic
+  sweep. The tab always stays in the sidebar and its view is transparently
+  recreated when the tab is next activated; unloaded rows are dimmed to signal
+  this.
+
+- Pages can no longer open native browser windows. `window.open` and
+  `target="_blank"` are now denied and instead open a new tab in the owning
+  space, on that space's profile partition; a non-http(s) target is dropped.
+
 ### Fixed
+
+- A tab command issued from the sidebar that the main process rejects (for
+  example, activating a tab the idle sweep just archived) now re-broadcasts
+  state so the stale sidebar row is removed instead of lingering.
 
 - Split view: a split that collapses back to a single view during a session
   (closing, removing or archiving a paned tab, activating a non-paned tab,

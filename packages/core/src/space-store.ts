@@ -360,6 +360,27 @@ export class SpaceStore {
   }
 
   /**
+   * Creates a tab in the space `spaceId` (not necessarily the active one),
+   * delegating to that space's own `TabStore.create`: the new tab becomes THAT
+   * space's active tab and lands at the end of its unpinned group. The active
+   * space is never changed. Throws `Unknown space: <id>` on an unknown id.
+   * {@link create} stays the active-space shorthand.
+   */
+  createInSpace(spaceId: string, input: { url: string; title?: string }): Tab {
+    return this.require(spaceId).tabs.create(input);
+  }
+
+  /**
+   * A space's OWN active-tab id — independent of which space is currently
+   * active — or `null` when it has none. Throws `Unknown space: <id>` on an
+   * unknown id. Used by the space-switch transition to keep the outgoing
+   * space's active view alive.
+   */
+  activeTabIdOf(spaceId: string): string | null {
+    return this.require(spaceId).tabs.activeTabId;
+  }
+
+  /**
    * Every tab of a space — open (non-archived) followed by archived. The desktop
    * main uses this to remap a space's views onto a new partition when its profile
    * changes. Throws on an unknown space id.

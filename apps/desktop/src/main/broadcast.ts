@@ -15,6 +15,10 @@ import {
 export function fullSnapshot(): TabsState {
   return {
     ...runtime.store.snapshot(),
+    unloadedTabIds: runtime.store
+      .list()
+      .filter((t) => !runtime.views.has(t.id))
+      .map((t) => t.id),
     blocking: {
       ...runtime.blocking,
       listVersion: runtime.blocker?.listVersion ?? runtime.blocking.listVersion,

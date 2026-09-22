@@ -4,7 +4,7 @@ import { IPC, titleForUrl, dropBlockedTab } from "@zeo/core";
 import type { Tab, TabsState, TabContextMenuResult } from "@zeo/core";
 import { runtime, DEFAULT_URL, IDLE_THRESHOLD_MS } from "./state.js";
 import { broadcast, fullSnapshot } from "./broadcast.js";
-import { createViewFor, destroyView } from "./views.js";
+import { createViewFor, destroyView, unloadView } from "./views.js";
 import { activateTab, preserveSurvivingPane, reconcileAndApply } from "./layout.js";
 
 /** Full new-tab lifecycle: store entry, view, activation, broadcast. */
@@ -19,6 +19,46 @@ export function createTab(url?: string): Tab {
   broadcast();
   return tab;
 }
+
+/**
+ * Routes a page-initiated popup (window.open / target="_blank", denied by
+ * createViewFor's window-open handler) into a real tab in the OWNER's space
+ * (#62). A null owner, or a url that is not http(s) (per `new URL(url).protocol`;
+ * an unparseable url included), is dropped with no effect. When the owner's
+ * space is active the tab is materialized + activated exactly like createTab;
+ * when the owner is an inactive space no view is created (the tab is now that
+ * space's active tab and materializes on the next switch) and only the catalog /
+ * tab-count change is broadcast.
+ */
+export function openPopupAsTab(ownerTabId: string, url: string): void {
+  const spaceId = runtime.store.spaceOfTab(ownerTabId);
+  if (spaceId === null) {
+    return;
+  }
+  let protocol: string;
+  try {
+    protocol = new URL(url).protocol;
+  } catch {
+    return;
+  }
+  if (protocol !== "http:" && protocol !== "https:") {
+    return;
+  }
+  const tab = runtime.store.createInSpace(spaceId, { url, title: titleForUrl(url) });
+  if (spaceId === runtime.store.activeSpaceId) {
+    // Same lifecycle as createTab: materialize on the owning space's partition,
+    // then reconcile (a new non-pane tab collapses a live split) + broadcast.
+    createViewFor(tab, spaceId);
+    reconcileAndApply();
+    broadcast();
+  } else {
+    broadcast();
+  }
+}
+
+// Register the popup hook so createViewFor's window-open handler reaches it with
+// no views.ts -> tabs.ts import edge (madge --circular clean).
+runtime.openPopupAsTab = openPopupAsTab;
 
 /**
  * Navigates the tab `id` to `url` with last-request-wins semantics. Validates
@@ -164,6 +204,8 @@ export function moveTabToBottom(id: string): void {
 
 export function archiveTab(id: string): void {
   runtime.store.archive(id);
+  // Free the archived tab's view (#40); a later restore recreates it.
+  unloadView(id);
   // If the archived tab was a split pane, keep the surviving pane active before
   // the split collapses; then reconcile (→ single, since an archived tab is no
   // longer open) and re-lay the view (lazy restore materializes it if missing).
@@ -181,6 +223,10 @@ export function archiveTab(id: string): void {
 export function sweepIdle(): void {
   const archived = runtime.store.archiveIdleAll(IDLE_THRESHOLD_MS);
   if (archived.length > 0) {
+    // Free each swept tab's view (#40) — the same teardown archiveTab does.
+    for (const id of archived) {
+      unloadView(id);
+    }
     // Only the active space's active tab is ever visible; archived tabs in
     // inactive spaces are already hidden, so re-laying the active view covers the
     // visible side of the sweep. A sweep that archived a non-focused split pane
@@ -255,6 +301,7 @@ export function showTabContextMenu(id: string, x: number, y: number): TabContext
             a.click();
           } catch (err: unknown) {
             console.error(`context-menu action "${a.id}" failed:`, err);
+            broadcast();
           }
         },
       })),
@@ -267,16 +314,32 @@ export function showTabContextMenu(id: string, x: number, y: number): TabContext
   return { tabId: id, items };
 }
 
+/**
+ * Runs `fn` and, on a throw, broadcasts the current (correct) state before
+ * rethrowing — so a tab command the sidebar sent against a now-stale row (e.g.
+ * activating/closing a tab the idle sweep just archived, #41) still triggers a
+ * stateChange that removes the stale row, even though the invoke rejects and the
+ * renderer swallows it with `.catch(() => {})`.
+ */
+function withResync<T>(fn: () => T): T {
+  try {
+    return fn();
+  } catch (err) {
+    broadcast();
+    throw err;
+  }
+}
+
 ipcMain.handle(IPC.tabsCreate, (_event, url?: string): Tab => createTab(url));
 
 ipcMain.handle(IPC.tabsClose, (_event, id: string): void => {
   // A thrown Error (e.g. unknown id) propagates out of the handler and
   // ipcMain.handle rejects the renderer's invoke instead of crashing main.
-  closeTab(id);
+  withResync(() => closeTab(id));
 });
 
 ipcMain.handle(IPC.tabsActivate, (_event, id: string): void => {
-  activateTab(id);
+  withResync(() => activateTab(id));
 });
 
 ipcMain.handle(IPC.tabsList, (): TabsState => fullSnapshot());
@@ -285,43 +348,47 @@ ipcMain.handle(IPC.tabsList, (): TabsState => fullSnapshot());
 // change, so broadcast() alone suffices. A thrown Error (unknown id, archived,
 // non-integer index, …) propagates out and rejects the renderer's invoke.
 ipcMain.handle(IPC.tabsPin, (_event, id: string): void => {
-  pinTab(id);
+  withResync(() => pinTab(id));
 });
 
 ipcMain.handle(IPC.tabsUnpin, (_event, id: string): void => {
-  unpinTab(id);
+  withResync(() => unpinTab(id));
 });
 
 ipcMain.handle(IPC.tabsReorder, (_event, id: string, toIndex: number): void => {
-  runtime.store.reorder(id, toIndex);
-  broadcast();
+  withResync(() => {
+    runtime.store.reorder(id, toIndex);
+    broadcast();
+  });
 });
 
 ipcMain.handle(IPC.tabsArchive, (_event, id: string): void => {
   // A thrown Error (e.g. archiving a pinned tab) propagates out and rejects the
   // renderer's invoke, consistent with the other handlers.
-  archiveTab(id);
+  withResync(() => archiveTab(id));
 });
 
 ipcMain.handle(IPC.tabsRestore, (_event, id: string): void => {
-  runtime.store.restore(id);
-  if (!runtime.views.has(id)) {
-    const tab = runtime.store.list().find((t) => t.id === id);
-    if (tab !== undefined) {
-      createViewFor(tab, runtime.store.activeSpaceId);
+  withResync(() => {
+    runtime.store.restore(id);
+    if (!runtime.views.has(id)) {
+      const tab = runtime.store.list().find((t) => t.id === id);
+      if (tab !== undefined) {
+        createViewFor(tab, runtime.store.activeSpaceId);
+      }
     }
-  }
-  // Restoring does not change the active tab, so a live split is preserved; the
-  // restored (non-pane) view is materialized hidden. reconcileAndApply re-lays the
-  // current layout (single or split).
-  reconcileAndApply();
-  broadcast();
+    // Restoring does not change the active tab, so a live split is preserved; the
+    // restored (non-pane) view is materialized hidden. reconcileAndApply re-lays the
+    // current layout (single or split).
+    reconcileAndApply();
+    broadcast();
+  });
 });
 
 // Permanent delete: drop the tab from the store and tear down its view. A thrown
 // Error (e.g. unknown id) propagates out and rejects the renderer's invoke.
 ipcMain.handle(IPC.tabsRemove, (_event, id: string): void => {
-  removeTab(id);
+  withResync(() => removeTab(id));
 });
 
 ipcMain.handle(
@@ -332,5 +399,5 @@ ipcMain.handle(
 // tabsNavigate throws (rejecting the invoke) on an unknown/non-active-space id,
 // like the other tab commands.
 ipcMain.handle(IPC.tabsNavigate, (_event, id: string, url: string): void => {
-  navigateTab(id, url);
+  withResync(() => navigateTab(id, url));
 });

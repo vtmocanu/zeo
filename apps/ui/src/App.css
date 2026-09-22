@@ -229,6 +229,13 @@ body {
   font-size: 12px;
 }
 
+/* An unloaded tab (no live WebContentsView) is dimmed to signal it will reload
+   on activation. PRD 9.3. */
+.tab-item--unloaded .tab-item__favicon,
+.tab-item--unloaded .tab-item__title {
+  opacity: 0.55;
+}
+
 /* Shared base for the small icon buttons in a row (the tab close button and the
    archived-row delete button): reset, size, hidden-by-default, plus the shared
    focus-reveal and hover background. Each button carries this class plus its own

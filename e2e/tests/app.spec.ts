@@ -63,6 +63,12 @@ interface BridgeState extends BridgeSpacesState {
   tabs: BridgeTab[];
   activeTabId: string | null;
   archived: BridgeTab[];
+  // PRD 9.3 — the ids of the ACTIVE space's open tabs that currently have NO
+  // live view (unloaded by the space-switch/idle policy, or not yet lazily
+  // materialized), in `tabs` order. Main derives it in fullSnapshot() on every
+  // broadcast, so it is never absent; an archived tab is never listed (it is not
+  // in `tabs`), and the visible active tab is never listed either.
+  unloadedTabIds: string[];
 }
 // The serializable context-menu descriptor main returns from showContextMenu.
 // Structurally the @zeo/core TabContextMenuResult, redeclared here so e2e stays
@@ -151,6 +157,11 @@ interface ZeoBridge {
     >;
     run(id: string): Promise<void>;
   };
+  // PRD 9.3 — the main-pushed state broadcast subscription. Registers `listener`
+  // for every stateChange main sends and returns an unsubscribe function.
+  // Mirrors @zeo/core's ZeoApi.onStateChange; the view-lifecycle re-sync test
+  // counts invocations to prove a REJECTED command still re-syncs the renderer.
+  onStateChange(listener: (state: BridgeState) => void): () => void;
 }
 // PRD 4.2 — one command-bar suggestion row, structurally the @zeo/core
 // `Suggestion` union (redeclared import-free like the rest of this file). Row 0
@@ -385,7 +396,10 @@ interface LocalPageServer {
 async function startLocalPageServer(): Promise<LocalPageServer> {
   const server: Server = createServer((req, res) => {
     const pathname = (req.url ?? "").split("?")[0];
-    if (pathname === "/page.html") {
+    // PRD 9.3 — the popup-routing test opens a child page from an owner page, so
+    // BOTH paths must commit offline. /child.html is additive: existing callers
+    // only ever request /page.html, which still serves the same 200 doc.
+    if (pathname === "/page.html" || pathname === "/child.html") {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       res.end("<!doctype html><meta charset=utf-8><title>zeo-e2e-local</title>");
       return;
@@ -3816,5 +3830,308 @@ test.describe("zeo desktop app", () => {
     } finally {
       await server.close();
     }
+  });
+
+  // PRD 9.3 §A / #40 — archiving a tab tears down its WebContentsView. The
+  // archived id never appears in `unloadedTabIds` (an archived tab left `tabs`,
+  // so it cannot be an "unloaded open row") but does appear in `archived`;
+  // restoring recreates the view at the stored url.
+  test("archiving a tab tears down its view; restoring recreates it", async () => {
+    const token = "ZEO93ARCHIVE";
+    const archivedId = await sidebar.evaluate(async (t) => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      const created = await zeo.tabs.create("data:text/html," + t);
+      return created.id;
+    }, token);
+    await waitForViewUrl(app, token);
+
+    // Archive over the bridge: its view is freed (#40).
+    await sidebar.evaluate(async (id) => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.tabs.archive(id);
+    }, archivedId);
+    await waitForViewGone(app, token);
+
+    const afterArchive = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      return zeo.tabs.list();
+    });
+    // An archived tab is not an unloaded OPEN row...
+    expect(afterArchive.unloadedTabIds).not.toContain(archivedId);
+    // ...it surfaces in the archived list instead.
+    expect(afterArchive.archived.map((tab) => tab.id)).toContain(archivedId);
+
+    // Restore recreates the view at the stored url.
+    await sidebar.evaluate(async (id) => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.tabs.restore(id);
+    }, archivedId);
+    await waitForViewUrl(app, token);
+  });
+
+  // PRD 9.3 §B / #58 — activating a different space frees the OUTGOING space's
+  // hidden, non-audible views while keeping that space's OWN active tab alive. On
+  // the switch back the freed tab shows up in `unloadedTabIds` (the ACTIVE space's
+  // open rows with no live view) until it is activated, which re-materializes it.
+  //
+  // A fresh launch seeds one tab in space A; we close it AFTER creating A1/A2 so A
+  // holds exactly [A2, A1] and the unloaded set is a single, unambiguous id. (The
+  // seeded tab is hidden and non-audible too, so leaving it in place would have it
+  // unloaded on the very same switch and break the "exactly [A2]" assertion.)
+  test("switching spaces unloads the outgoing space's non-active views", async () => {
+    const ids = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      const initial = await zeo.tabs.list();
+      const spaceAId = initial.activeSpaceId;
+      const seededId = initial.tabs[0].id;
+      // A2 first, then A1 (created last → A's active tab, kept alive on switch).
+      const a2 = await zeo.tabs.create("data:text/html,ZEO93A2");
+      const a1 = await zeo.tabs.create("data:text/html,ZEO93A1");
+      // Drop the seeded row so A = [A2, A1] and the unloaded set is unambiguous.
+      await zeo.tabs.close(seededId);
+      return { spaceAId, a1: a1.id, a2: a2.id };
+    });
+    await waitForViewUrl(app, "ZEO93A2");
+    await waitForViewUrl(app, "ZEO93A1");
+
+    // Create and activate space B: A's views except its own active tab (A1) free.
+    await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      const b = await zeo.spaces.create("B");
+      await zeo.spaces.activate(b.id);
+    });
+    // A2 (hidden, non-audible) was unloaded; A1 (A's active tab) stays alive.
+    await waitForViewGone(app, "ZEO93A2");
+    await waitForViewUrl(app, "ZEO93A1");
+
+    // Switch back to A: A2 is now an unloaded open row of the ACTIVE space, A1 not.
+    await sidebar.evaluate(async (id) => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.spaces.activate(id);
+    }, ids.spaceAId);
+    await expect
+      .poll(async () =>
+        sidebar.evaluate(async () => {
+          const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+          return (await zeo.tabs.list()).unloadedTabIds;
+        }),
+      )
+      .toEqual([ids.a2]);
+
+    // Activating A2 re-materializes its view; nothing is left unloaded.
+    await sidebar.evaluate(async (id) => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.tabs.activate(id);
+    }, ids.a2);
+    await waitForViewUrl(app, "ZEO93A2");
+    await expect
+      .poll(async () =>
+        sidebar.evaluate(async () => {
+          const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+          return (await zeo.tabs.list()).unloadedTabIds;
+        }),
+      )
+      .toEqual([]);
+  });
+
+  // PRD 9.3 §C / #62 — a page-initiated window.open is DENIED a BrowserWindow and
+  // routed into a tab in the OWNER's (active) space, materialized on the owner's
+  // partition. A non-http(s) target is dropped entirely. The loopback page server
+  // serves both the owner and child pages so they commit offline.
+  test("a page popup opens as a tab in the owner's space, never a native window", async () => {
+    const server = await startLocalPageServer();
+    try {
+      const base = server.base;
+      // Materialize the owner view in the active (seeded, profile "default") space.
+      await sidebar.evaluate(async (url) => {
+        const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+        await zeo.tabs.create(url);
+      }, `${base}/page.html?token=ZEO93POPUP`);
+      await waitForViewUrl(app, "ZEO93POPUP");
+
+      // Exactly one native window (the sidebar/main window); tab views are
+      // WebContentsViews, not BrowserWindows.
+      const before = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length);
+      expect(before).toBe(1);
+
+      // Gesture-initiated window.open from the OWNER view. A background open with
+      // no user activation is popup-blocked before the handler runs, so pass
+      // userGesture=true for a deterministic dispatch.
+      await app.evaluate(async ({ webContents }, childUrl) => {
+        const wc = webContents.getAllWebContents().find((w) => w.getURL().includes("ZEO93POPUP"));
+        if (wc === undefined) {
+          throw new Error("owner view not found");
+        }
+        await wc.executeJavaScript(`window.open(${JSON.stringify(childUrl)})`, true);
+      }, `${base}/child.html?token=ZEO93CHILD`);
+
+      // No native window was created — the popup was denied and re-routed.
+      expect(
+        await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length),
+      ).toBe(before);
+
+      // A new tab carrying the child url exists in the active space and is active.
+      await expect
+        .poll(async () =>
+          sidebar.evaluate(async () => {
+            const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+            const s = await zeo.tabs.list();
+            const child = s.tabs.find((t) => t.url.includes("ZEO93CHILD"));
+            return child !== undefined && s.activeTabId === child.id;
+          }),
+        )
+        .toBe(true);
+
+      // Its view runs on the owning space's partition (the seeded space → "default").
+      await waitForViewOnPartition(app, "ZEO93CHILD", "default");
+
+      // A non-http(s) popup target is dropped: no tab created, no native window.
+      const tabCountBefore = await sidebar.evaluate(async () => {
+        const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+        return (await zeo.tabs.list()).tabs.length;
+      });
+      await app.evaluate(async ({ webContents }) => {
+        const wc = webContents.getAllWebContents().find((w) => w.getURL().includes("ZEO93POPUP"));
+        if (wc === undefined) {
+          throw new Error("owner view not found");
+        }
+        await wc.executeJavaScript('window.open("javascript:void 0")', true);
+      });
+      const tabCountAfter = await sidebar.evaluate(async () => {
+        const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+        return (await zeo.tabs.list()).tabs.length;
+      });
+      expect(tabCountAfter).toBe(tabCountBefore);
+      expect(
+        await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length),
+      ).toBe(before);
+    } finally {
+      await server.close();
+    }
+  });
+
+  // PRD 9.3 §D / #41 — a sidebar command sent against a now-stale row (here an
+  // archived tab) REJECTS over the bridge, yet main still broadcasts the correct
+  // state so the renderer re-syncs (withResync). A state-change counter installed
+  // on the sidebar proves each rejected activate/close still bumps it.
+  test("a rejected tab command still re-syncs the renderer", async () => {
+    await sidebar.evaluate(() => {
+      const g = globalThis as unknown as { __resync: number; zeo: ZeoBridge };
+      g.__resync = 0;
+      g.zeo.onStateChange(() => {
+        g.__resync += 1;
+      });
+    });
+
+    const archivedId = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      const created = await zeo.tabs.create("data:text/html,ZEO93RESYNC");
+      await zeo.tabs.archive(created.id);
+      return created.id;
+    });
+
+    const readResync = (): Promise<number> =>
+      sidebar.evaluate(() => (globalThis as unknown as { __resync: number }).__resync);
+
+    // activate(archivedId) rejects (the store throws on an archived tab), yet
+    // withResync broadcasts before rethrowing — so the counter climbs past its
+    // pre-call value even though the invoke rejected.
+    const beforeActivate = await readResync();
+    const activateRejected = await sidebar.evaluate(async (id) => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      try {
+        await zeo.tabs.activate(id);
+        return false;
+      } catch {
+        return true;
+      }
+    }, archivedId);
+    expect(activateRejected).toBe(true);
+    await expect.poll(readResync).toBeGreaterThan(beforeActivate);
+
+    // close(archivedId) also rejects on an archived id and must re-sync too.
+    const beforeClose = await readResync();
+    const closeRejected = await sidebar.evaluate(async (id) => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      try {
+        await zeo.tabs.close(id);
+        return false;
+      } catch {
+        return true;
+      }
+    }, archivedId);
+    expect(closeRejected).toBe(true);
+    await expect.poll(readResync).toBeGreaterThan(beforeClose);
+  });
+});
+
+// PRD 9.3 §E / AC #3 — the idle-unload timer tears down hidden, silent views left
+// idle past the threshold, sparing the visible active view. This needs a short
+// threshold/interval, so it launches with ZEO_VIEW_UNLOAD_AFTER_MS /
+// ZEO_VIEW_UNLOAD_INTERVAL_MS overrides (honored ONLY under ZEO_E2E=1) — hence a
+// separate describe with its own harness mirroring the main one.
+test.describe("zeo view lifecycle — idle unload", () => {
+  let app!: ElectronApplication;
+  let sidebar!: Page;
+  let userDataDir: string | undefined;
+
+  test.beforeEach(async () => {
+    userDataDir = mkdtempSync(join(tmpdir(), "zeo-e2e-"));
+    const baseArgs = [mainPath, "--user-data-dir=" + userDataDir];
+    const launchArgs =
+      process.env.ZEO_E2E_NO_SANDBOX === "1" ? [...baseArgs, "--no-sandbox"] : baseArgs;
+    app = await electron.launch({
+      args: launchArgs,
+      // The two ZEO_VIEW_UNLOAD_* overrides shorten the idle threshold/sweep so
+      // the policy fires within a test budget; both are honored only under ZEO_E2E=1.
+      env: {
+        ...process.env,
+        ELECTRON_RENDERER_URL: "",
+        ZEO_E2E: "1",
+        ZEO_VIEW_UNLOAD_AFTER_MS: "500",
+        ZEO_VIEW_UNLOAD_INTERVAL_MS: "200",
+      },
+    });
+    sidebar = await sidebarWindow(app);
+  });
+
+  test.afterEach(async () => {
+    await app?.close();
+    if (userDataDir !== undefined) {
+      rmSync(userDataDir, { recursive: true, force: true });
+      userDataDir = undefined;
+    }
+  });
+
+  test("the idle timer unloads a hidden idle view but spares the visible active view", async () => {
+    // Fresh launch seeds one tab; create tab1 then tab2 (tab2 last → active/visible),
+    // then close the seeded tab so the only idle candidate is tab1 — a deterministic
+    // single-id unloaded set (the seeded tab is hidden+silent too and would be swept
+    // on the same pass otherwise).
+    const ids = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      const seededId = (await zeo.tabs.list()).tabs[0].id;
+      const tab1 = await zeo.tabs.create("data:text/html,ZEO93IDLE1");
+      const tab2 = await zeo.tabs.create("data:text/html,ZEO93IDLE2");
+      await zeo.tabs.close(seededId);
+      return { tab1: tab1.id, tab2: tab2.id };
+    });
+    await waitForViewUrl(app, "ZEO93IDLE1");
+    await waitForViewUrl(app, "ZEO93IDLE2");
+
+    // tab1 (hidden, silent) goes idle past 500ms and the 200ms timer frees it.
+    await waitForViewGone(app, "ZEO93IDLE1");
+    // The visible active tab2 view is never idle-unloaded.
+    await waitForViewUrl(app, "ZEO93IDLE2");
+
+    // Exactly tab1 is listed unloaded (the visible active tab is never listed).
+    await expect
+      .poll(async () =>
+        sidebar.evaluate(async () => {
+          const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+          return (await zeo.tabs.list()).unloadedTabIds;
+        }),
+      )
+      .toEqual([ids.tab1]);
   });
 });
