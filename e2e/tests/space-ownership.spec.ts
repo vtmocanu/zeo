@@ -631,4 +631,108 @@ test.describe("PRD 9.4 space ownership", () => {
       await server.close();
     }
   });
+
+  // PRD 9.4 §8 follow-up (issue #152): the one-shot legacy-default-session cookie
+  // migration copies cookies onto the DEFAULT PROFILE's partition. This proves the
+  // end-to-end path: seed a cookie in the legacy default session (as a pre-profiles
+  // user had), reset the one-shot marker so the next launch runs the migration,
+  // relaunch, and assert a tab on the default profile can read the migrated cookie.
+  test("migrates a legacy default-session cookie onto the default profile so a tab reads it", async () => {
+    // A loopback origin serving a real same-origin page, so a tab navigated here has
+    // a document whose `document.cookie` reflects the tab's cookie jar (persist:default).
+    const server: Server = createServer((_req, res) => {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      res.end("<!doctype html><meta charset=utf-8><title>zeo-cookie-echo</title>");
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (address === null || typeof address === "string") {
+      throw new Error("cookie-echo server did not bind to an inet address");
+    }
+    const base = `http://127.0.0.1:${(address as AddressInfo).port}`;
+    // Short, non-secret fake value; the assertion only cares about identity.
+    const cookieName = "zeomig";
+    const cookieValue = "migrated-v1";
+    try {
+      // Launch #1 (from beforeEach): a fresh install seeds the migration marker
+      // non-null, so the startup migration already short-circuited. Seed a cookie
+      // into the LEGACY default session exactly as a pre-profiles user would have
+      // had, flush it to disk, then reset the marker so the NEXT launch migrates.
+      await app.evaluate(
+        async ({ session }, ctx) => {
+          await session.defaultSession.cookies.set({
+            url: ctx.base + "/",
+            name: ctx.name,
+            value: ctx.value,
+            path: "/",
+            // A persistent (non-session) cookie: without an expirationDate the
+            // cookie is a session cookie and would not survive the relaunch, so
+            // there would be nothing for the migration to copy.
+            expirationDate: ctx.expires,
+          });
+          await session.defaultSession.cookies.flushStore();
+        },
+        {
+          base,
+          name: cookieName,
+          value: cookieValue,
+          expires: Math.floor(Date.now() / 1000) + 60 * 60 * 24 * 365,
+        },
+      );
+      await app.evaluate(() =>
+        (
+          globalThis as unknown as { __zeoResetDefaultSessionMigration: () => void }
+        ).__zeoResetDefaultSessionMigration(),
+      );
+      await app.close();
+
+      // Launch #2 against the SAME userData dir: startup runs the migration (marker
+      // null) BEFORE the window opens, copying the cookie onto the default profile's
+      // partition and clearing the legacy session.
+      const relaunched = await launch(userDataDir!);
+      app = relaunched.app;
+      sidebar = relaunched.sidebar;
+
+      // Deterministic check: the cookie now lives on the default profile's partition
+      // (persist:default) — the jar a default-profile tab reads from.
+      const migrated = await app.evaluate(({ session }) =>
+        session.fromPartition("persist:default").cookies.get({}),
+      );
+      expect(migrated.some((c) => c.name === cookieName && c.value === cookieValue)).toBe(true);
+
+      // "A tab on the default profile can read it": the seeded Personal space runs
+      // on the default profile, so a tab it opens uses persist:default. Navigate it
+      // to the loopback origin and read `document.cookie` from that tab — it reflects
+      // the persist:default jar, proving the migrated cookie is readable by the tab.
+      const tab = await sidebar.evaluate(async (url) => {
+        const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+        return zeo.tabs.create(url);
+      }, base + "/");
+      expect(tab.id).toBeTruthy();
+      await waitForViewUrl(app, base);
+      await expect
+        .poll(
+          () =>
+            app.evaluate(async ({ webContents }, sub) => {
+              const wc = webContents.getAllWebContents().find((w) => w.getURL().includes(sub));
+              return wc === undefined ? undefined : ((await wc.executeJavaScript("document.cookie")) as string);
+            }, base),
+          {
+            timeout: VIEW_POLL_TIMEOUT_MS,
+            message: "expected the default-profile tab to read the migrated cookie",
+          },
+        )
+        .toContain(`${cookieName}=${cookieValue}`);
+
+      // The migration cleared the migrated cookie from the legacy default session.
+      const legacyCookies = await app.evaluate(({ session }) =>
+        session.defaultSession.cookies.get({}),
+      );
+      expect(legacyCookies.some((c) => c.name === cookieName)).toBe(false);
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        server.close((err) => (err ? reject(err) : resolve())),
+      );
+    }
+  });
 });

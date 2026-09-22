@@ -1,6 +1,10 @@
 import { session } from "electron";
 import { cookieUrlFor } from "@zeo/core";
-import { readDefaultSessionMigratedAt, writeDefaultSessionMigratedAt } from "./db.js";
+import {
+  clearDefaultSessionMigratedAt,
+  readDefaultSessionMigratedAt,
+  writeDefaultSessionMigratedAt,
+} from "./db.js";
 
 /**
  * One-shot migration of the legacy default Electron session onto the default
@@ -83,4 +87,13 @@ export async function migrateDefaultSession(defaultProfileId: string): Promise<v
   } catch (err) {
     console.error("[session-migration] default session migration failed:", err);
   }
+}
+
+// e2e-only: reset the one-shot marker so the NEXT launch re-runs the migration,
+// letting a test seed a cookie in the legacy default session and prove it is
+// migrated onto the default profile. Gated strictly on ZEO_E2E === "1" (the
+// established main-process test-hook pattern); a packaged build never defines it.
+if (process.env.ZEO_E2E === "1") {
+  (globalThis as Record<string, unknown>).__zeoResetDefaultSessionMigration = (): void =>
+    clearDefaultSessionMigratedAt();
 }

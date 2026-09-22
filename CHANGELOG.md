@@ -31,6 +31,13 @@ milestone, a minor bump only for very large breakthroughs.
 
 ### Fixed
 
+- The pre-profiles default-session cookie migration now copies into the default
+  profile's actual partition read from the store (instead of a hard-coded
+  `persist:default`), so a renamed or re-seeded default profile still receives
+  the cookies; and a retry after a partial failure no longer overwrites a cookie
+  already present in the target profile — a value the user changed there between
+  launches is preserved.
+
 - A tab command issued from the sidebar that the main process rejects (for
   example, activating a tab the idle sweep just archived) now re-broadcasts
   state so the stale sidebar row is removed instead of lingering.

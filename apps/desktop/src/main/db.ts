@@ -342,6 +342,23 @@ export function writeDefaultSessionMigratedAt(at: number): void {
 }
 
 /**
+ * Resets the default-session migration marker back to `null`, so the NEXT launch
+ * re-runs {@link migrateDefaultSession}. The null-inverse of
+ * {@link writeDefaultSessionMigratedAt}; it exists ONLY to let the e2e simulate an
+ * upgraded (pre-migration) database — a fresh install seeds the marker non-null,
+ * which would otherwise short-circuit the migration. Reachable solely through the
+ * `ZEO_E2E`-gated hook in {@link migrateDefaultSession}'s module, never from
+ * production paths. Throws when the database is not open.
+ */
+export function clearDefaultSessionMigratedAt(): void {
+  const database = requireDb();
+  const info = database.prepare("UPDATE meta SET defaultSessionMigratedAt=NULL WHERE id=0").run();
+  if (info.changes === 0) {
+    throw new Error("clearDefaultSessionMigratedAt: no meta row (id=0) to update");
+  }
+}
+
+/**
  * Reads the persisted "open external links in quick-browse" flag from the meta
  * row, mapping SQLite's integer to a boolean. Returns `true` (the default) when
  * the row is absent or the value is null/undefined. Managed ONLY here and by

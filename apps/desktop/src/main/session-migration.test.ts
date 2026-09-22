@@ -197,6 +197,43 @@ describe("migrateDefaultSession", () => {
     expect(h.writeMarker).toHaveBeenCalledTimes(1);
   });
 
+  test("derives the target partition from the given default profile id, not a literal", async () => {
+    // The target is the default PROFILE's partition read from the store, so a
+    // renamed or re-seeded default (id other than "default") still receives the
+    // cookies. The migration must ask fromPartition for exactly persist:<id>.
+    h.defaultCookiesGet.mockResolvedValue([cookie()]);
+
+    await expect(migrateDefaultSession("re-seeded-id")).resolves.toBeUndefined();
+
+    expect(h.fromPartition).toHaveBeenCalledWith("persist:re-seeded-id");
+  });
+
+  test("a retry skips a cookie the target already holds (newer value preserved) and copies the rest", async () => {
+    // Models a retry after a partial failure: "a" was copied on the first pass and
+    // the user then changed it in the target partition, while "b" never made it.
+    // The non-destructive copy must skip "a" by its (name, domain, path) identity
+    // so the newer target value is preserved, and copy only the still-missing "b".
+    h.defaultCookiesGet.mockResolvedValue([
+      cookie({ name: "a", value: "stale-default" }),
+      cookie({ name: "b", value: "v1" }),
+    ]);
+    // The target already holds "a" with a NEWER value (same name/domain/path).
+    h.targetCookiesGet.mockResolvedValue([cookie({ name: "a", value: "user-updated" })]);
+
+    await expect(migrateDefaultSession("default")).resolves.toBeUndefined();
+
+    // Only "b" is written; "a" is never passed to set, so its newer value stands.
+    expect(h.targetCookiesSet).toHaveBeenCalledTimes(1);
+    expect(h.targetCookiesSet.mock.calls[0][0]).toMatchObject({ name: "b" });
+    expect(
+      h.targetCookiesSet.mock.calls.some((c) => (c[0] as { name: string }).name === "a"),
+    ).toBe(false);
+    // No cookie failed, so the source is cleared and the marker is written.
+    expect(h.defaultClearStorageData).toHaveBeenCalledTimes(1);
+    expect(h.writeMarker).toHaveBeenCalledTimes(1);
+    expect(errorSpy).not.toHaveBeenCalled();
+  });
+
   test("a cookies.get rejection leaves the marker unwritten and resolves", async () => {
     h.defaultCookiesGet.mockRejectedValue(new Error("get failed"));
 
