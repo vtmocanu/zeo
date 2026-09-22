@@ -66,6 +66,27 @@ describe("createSpaceAndActivate", () => {
     expect(runtime.store.spaces()).toEqual(before);
   });
 
+  test("rolls back BOTH the space and the active-space pointer when a realistic activate throws mid-switch", () => {
+    // Bind the test to the restore: make a NON-order[0] space active first, so a
+    // rollback that merely deletes the new space (re-pointing active to order[0])
+    // would leave the WRONG space active. Mimic switchSpace's ordering: it re-points
+    // the active space BEFORE its throwable work.
+    const second = runtime.store.createSpace("Second");
+    runtime.store.setActiveSpace(second.id);
+    const before = runtime.store.spaces();
+    const previousActive = runtime.store.activeSpaceId; // = second (not order[0])
+
+    expect(() =>
+      createSpaceAndActivate("Work", (id) => {
+        runtime.store.setActiveSpace(id);
+        throw new Error("boom");
+      }),
+    ).toThrow("boom");
+
+    expect(runtime.store.spaces()).toEqual(before);
+    expect(runtime.store.activeSpaceId).toBe(previousActive);
+  });
+
   test("throws on a blank name before anything is created", () => {
     const before = runtime.store.spaces();
 
@@ -104,6 +125,26 @@ describe("createProfileAndAssign", () => {
 
     // The just-created profile was deleted, so profiles() equals its pre-call value.
     expect(runtime.store.profiles()).toEqual(before);
+  });
+
+  test("rolls back BOTH the profile and the space reassignment when a realistic assign throws mid-remap", () => {
+    // Mimic remapSpaceProfile's ordering: it re-points the space at the new profile
+    // BEFORE its throwable createViewFor/reconcile work. The rollback must un-assign
+    // first so deleteProfile (which refuses a still-referenced profile) can succeed
+    // and the store returns to its pre-call state.
+    const spaceId = runtime.store.activeSpaceId;
+    const before = runtime.store.profiles();
+    const previousProfileId = runtime.store.spaceProfileId(spaceId);
+
+    expect(() =>
+      createProfileAndAssign(spaceId, "Work profile", (sid, pid) => {
+        runtime.store.setSpaceProfile(sid, pid);
+        throw new Error("boom");
+      }),
+    ).toThrow("boom");
+
+    expect(runtime.store.profiles()).toEqual(before);
+    expect(runtime.store.spaceProfileId(spaceId)).toBe(previousProfileId);
   });
 
   test("throws for an unknown space before any profile is created", () => {

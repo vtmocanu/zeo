@@ -72,7 +72,39 @@ describe("migrateDefaultSession", () => {
     expect(errorSpy).not.toHaveBeenCalled();
   });
 
-  test("already-migrated marker short-circuits; a later null read migrates normally", async () => {
+  test("skips a cookie with no addressable url and still copies its valid sibling", async () => {
+    // An empty domain yields no url from cookieUrlFor, so that cookie is skipped;
+    // the sibling with a real domain is still copied. Migration completes.
+    h.defaultCookiesGet.mockResolvedValue([
+      cookie({ name: "no-domain", domain: "" }),
+      cookie({ name: "ok", domain: "example.com" }),
+    ]);
+
+    await expect(migrateDefaultSession()).resolves.toBeUndefined();
+
+    // Only the valid sibling was set.
+    expect(h.targetCookiesSet).toHaveBeenCalledTimes(1);
+    expect(h.targetCookiesSet.mock.calls[0][0]).toMatchObject({ name: "ok" });
+    expect(h.defaultClearStorageData).toHaveBeenCalledTimes(1);
+    expect(h.writeMarker).toHaveBeenCalledTimes(1);
+    expect(errorSpy).not.toHaveBeenCalled();
+  });
+
+  test("a non-null marker short-circuits: nothing is read, copied, cleared, or written", async () => {
+    // A genuine already-migrated marker (distinct from the read-throws path below):
+    // the guard returns before touching any session or accessor.
+    h.readMarker.mockReturnValue(1_700_000_000_000);
+
+    await expect(migrateDefaultSession()).resolves.toBeUndefined();
+
+    expect(h.defaultCookiesGet).not.toHaveBeenCalled();
+    expect(h.targetCookiesSet).not.toHaveBeenCalled();
+    expect(h.defaultClearStorageData).not.toHaveBeenCalled();
+    expect(h.writeMarker).not.toHaveBeenCalled();
+    expect(errorSpy).not.toHaveBeenCalled();
+  });
+
+  test("a read-marker throw is logged once and skips everything; a later null read migrates normally", async () => {
     // First call: read throws → logged once, and NOTHING is read/cleared/written.
     h.readMarker.mockImplementationOnce(() => {
       throw new Error("read failed");

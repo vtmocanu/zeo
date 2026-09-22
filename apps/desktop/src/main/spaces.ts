@@ -222,20 +222,30 @@ runtime.switchSpace = switchSpace;
 /**
  * Creates a space AND makes it active, atomically from the caller's view: if the
  * activation throws, the just-created space is rolled back (deleted) and the throw
- * is re-raised, so `store.spaces()` is left exactly as it was before the call. The
- * `activate` collaborator defaults to {@link switchSpace}; the seam lets a unit
- * test inject a throwing activate to exercise the rollback. `createSpace` throws on
- * a blank name (nothing created) before any activation is attempted.
+ * is re-raised, so `store.spaces()` AND `store.activeSpaceId` are left exactly as
+ * they were before the call. The `activate` collaborator defaults to
+ * {@link switchSpace}; the seam lets a unit test inject a throwing activate to
+ * exercise the rollback. `createSpace` throws on a blank name (nothing created)
+ * before any activation is attempted.
  */
 export function createSpaceAndActivate(
   name: string,
   activate: (id: string) => void = switchSpace,
 ): Space {
+  // Remember the active space so a failed switch can be fully undone: switchSpace
+  // calls store.setActiveSpace(new) before its throwable work, and deleteSpace on
+  // rollback re-points active to order[0], which may not be the pre-call one.
+  const previousActiveSpaceId = runtime.store.activeSpaceId;
   const space = runtime.store.createSpace(name);
   try {
     activate(space.id);
   } catch (err) {
     runtime.store.deleteSpace(space.id);
+    // Restore the space that was active before the (failed) switch — deleteSpace
+    // re-points to order[0], which may not be the pre-call active space.
+    if (runtime.store.activeSpaceId !== previousActiveSpaceId) {
+      runtime.store.setActiveSpace(previousActiveSpaceId);
+    }
     broadcast();
     throw err;
   }
@@ -248,22 +258,32 @@ export function createSpaceAndActivate(
  * before any profile exists; `createProfile` then throws on a blank/duplicate name
  * (nothing created); and if attaching the blocker / download handler or the
  * assignment throws, the just-created profile is rolled back (deleted) and the
- * throw is re-raised, so `store.profiles()` is left exactly as it was. The `assign`
- * collaborator defaults to {@link remapSpaceProfile}; the seam lets a unit test
- * inject a throwing assign to exercise the rollback.
+ * throw is re-raised, so `store.profiles()` AND the space's assigned profile are
+ * left exactly as they were. The `assign` collaborator defaults to
+ * {@link remapSpaceProfile}; the seam lets a unit test inject a throwing assign to
+ * exercise the rollback.
  */
 export function createProfileAndAssign(
   spaceId: string,
   name: string,
   assign: (sid: string, pid: string) => void = remapSpaceProfile,
 ): Profile {
-  runtime.store.spaceProfileId(spaceId);
+  // Pre-check the space FIRST (unknown space throws before any profile exists),
+  // and remember its current profile so a failed assign can be fully undone.
+  const previousProfileId = runtime.store.spaceProfileId(spaceId);
   const profile = runtime.store.createProfile(name);
   try {
     attachBlockerToProfileSession(profile.id);
     installDownloadHandler(profile.id);
     assign(spaceId, profile.id);
   } catch (err) {
+    // If assign already re-pointed the space at the new profile (remapSpaceProfile
+    // sets it before its throwable createViewFor/reconcile work), restore the
+    // previous one so deleteProfile — which refuses a still-referenced profile —
+    // can succeed and the store returns to exactly its pre-call state.
+    if (runtime.store.spaceProfileId(spaceId) === profile.id) {
+      runtime.store.setSpaceProfile(spaceId, previousProfileId);
+    }
     runtime.store.deleteProfile(profile.id);
     broadcast();
     throw err;
