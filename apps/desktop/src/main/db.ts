@@ -95,7 +95,8 @@ CREATE TABLE meta (
   layoutLeftTabId TEXT,
   layoutRightTabId TEXT,
   layoutRatio REAL NOT NULL DEFAULT 0.5,
-  layoutFocused TEXT NOT NULL DEFAULT 'left'
+  layoutFocused TEXT NOT NULL DEFAULT 'left',
+  defaultSessionMigratedAt INTEGER
 );
 CREATE TABLE blocking_allowlist (host TEXT PRIMARY KEY, createdAt INTEGER NOT NULL);
 CREATE TABLE history_entries (
@@ -157,6 +158,9 @@ const MIGRATION_STEPS: Record<number, string> = {
   9:
     "ALTER TABLE meta ADD COLUMN quickBrowseExternal INTEGER NOT NULL DEFAULT 1;" +
     "UPDATE meta SET schemaVersion = 9 WHERE id = 0;",
+  10:
+    "ALTER TABLE meta ADD COLUMN defaultSessionMigratedAt INTEGER;" +
+    "UPDATE meta SET schemaVersion = 10 WHERE id = 0;",
 };
 
 /** The module-level database handle, `null` until {@link loadStore} opens it. */
@@ -205,9 +209,9 @@ export function migrate(database: DatabaseType): void {
       database.exec(DDL);
       database
         .prepare(
-          "INSERT INTO meta(id,schemaVersion,activeSpaceId) VALUES (0, ?, NULL)",
+          "INSERT INTO meta(id,schemaVersion,activeSpaceId,defaultSessionMigratedAt) VALUES (0, ?, NULL, ?)",
         )
-        .run(SCHEMA_VERSION);
+        .run(SCHEMA_VERSION, Date.now());
       break;
     case "migrate": {
       // Run each ordered step from version+1 up to SCHEMA_VERSION in one
@@ -299,6 +303,41 @@ export function writeSearchEngine(id: SearchEngineId): void {
   const info = database.prepare("UPDATE meta SET searchEngine=? WHERE id=0").run(id);
   if (info.changes === 0) {
     throw new Error("writeSearchEngine: no meta row (id=0) to update");
+  }
+}
+
+/**
+ * Reads the one-shot "default session already migrated" marker (the timestamp of
+ * the migration, or `null` when it has not run) from the meta row. A fresh install
+ * seeds it non-null (nothing to migrate); an upgraded database reads `null` until
+ * {@link writeDefaultSessionMigratedAt} records a successful run. Managed ONLY here
+ * and by that writer; like `enabled`/`searchEngine` the column is deliberately kept
+ * out of the {@link readState}/{@link writeState} round trip. Throws when the
+ * database is not open.
+ */
+export function readDefaultSessionMigratedAt(): number | null {
+  const database = requireDb();
+  // SQLite-row boundary: .get() is typed `unknown`, cast to the known shape.
+  const row = database
+    .prepare("SELECT defaultSessionMigratedAt FROM meta WHERE id=0")
+    .get() as { defaultSessionMigratedAt: number | null } | undefined;
+  return row?.defaultSessionMigratedAt ?? null;
+}
+
+/**
+ * Records that the default-session migration completed, stamping `at` into the meta
+ * row's marker column. Synchronous (better-sqlite3). Like {@link writeSearchEngine}
+ * it checks the affected row count: an UPDATE that matches no `id = 0` row throws
+ * rather than silently succeeding, so a caller never treats the migration as
+ * durably recorded when the row was absent. Managed ONLY here and by
+ * {@link readDefaultSessionMigratedAt}; kept out of the {@link writeState} flush.
+ * Throws when the database is not open.
+ */
+export function writeDefaultSessionMigratedAt(at: number): void {
+  const database = requireDb();
+  const info = database.prepare("UPDATE meta SET defaultSessionMigratedAt=? WHERE id=0").run(at);
+  if (info.changes === 0) {
+    throw new Error("writeDefaultSessionMigratedAt: no meta row (id=0) to update");
   }
 }
 

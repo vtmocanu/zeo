@@ -15,7 +15,7 @@ export function findBoundView(): WebContentsView | null {
   if (runtime.find.tabId === null) {
     return null;
   }
-  const view = runtime.views.get(runtime.find.tabId)?.view;
+  const view = runtime.views.get(runtime.find.tabId);
   if (view == null || view.webContents.isDestroyed()) {
     return null;
   }
@@ -68,7 +68,7 @@ export function closeFindSession(returnFocus = true): void {
   // page (or the window when there is none).
   const activeTabId = runtime.store.activeTabId;
   if (activeTabId !== null && runtime.views.has(activeTabId)) {
-    runtime.views.get(activeTabId)?.view.webContents.focus();
+    runtime.views.get(activeTabId)?.webContents.focus();
   } else {
     runtime.win?.webContents.focus();
   }

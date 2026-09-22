@@ -37,7 +37,7 @@ export function logHistoryError(err: unknown): void {
  * once and never breaks navigation.
  */
 export function recordNavigation(id: string): void {
-  const webContents = runtime.views.get(id)?.view.webContents;
+  const webContents = runtime.views.get(id)?.webContents;
   if (webContents === undefined) {
     return;
   }

@@ -23,7 +23,7 @@ export function applyViewZoom(view: WebContentsView, factor: number): void {
  *  host, and broadcasts. A DB write failure aborts with no state/view/broadcast
  *  change. No-op for an unknown/destroyed tab view. */
 export function applyZoom(tabId: string, factor: number): void {
-  const view = runtime.views.get(tabId)?.view;
+  const view = runtime.views.get(tabId);
   if (view === undefined || view.webContents.isDestroyed()) {
     return;
   }
@@ -49,8 +49,7 @@ export function applyZoom(tabId: string, factor: number): void {
   }
   runtime.zoom = next;
   const applied = after ?? DEFAULT_ZOOM_FACTOR;
-  for (const tracked of runtime.views.values()) {
-    const v = tracked.view;
+  for (const v of runtime.views.values()) {
     if (v.webContents.isDestroyed()) {
       continue;
     }
@@ -69,7 +68,7 @@ export function zoomActiveTab(direction: "in" | "out" | "reset"): Promise<void> 
   if (activeTabId === null) {
     return Promise.reject(new Error("no active tab"));
   }
-  const view = runtime.views.get(activeTabId)?.view;
+  const view = runtime.views.get(activeTabId);
   if (view === undefined || view.webContents.isDestroyed()) {
     return Promise.reject(new Error("no active tab view"));
   }
