@@ -83,6 +83,33 @@ describe("migrateDefaultSession", () => {
     expect(h.defaultClearStorageData).toHaveBeenCalledWith({ storages: ["cookies"] });
   });
 
+  test("a host-only cookie stays host-only: no domain is passed to cookies.set", async () => {
+    // A bare domain (no leading dot) is a host-only cookie; passing `domain`
+    // would let Electron promote it to a subdomain-wide cookie, so the copy
+    // must omit `domain` and rely on `url` alone to scope it to the host.
+    h.defaultCookiesGet.mockResolvedValue([cookie({ domain: "example.com" })]);
+
+    await expect(migrateDefaultSession()).resolves.toBeUndefined();
+
+    expect(h.targetCookiesSet).toHaveBeenCalledTimes(1);
+    const call = h.targetCookiesSet.mock.calls[0][0];
+    expect(call.url).toBeTruthy();
+    expect(call).not.toHaveProperty("domain");
+  });
+
+  test("a dot-prefixed domain cookie keeps its domain", async () => {
+    // A leading-dot domain is an explicit subdomain-wide cookie; that scope is
+    // intentional, so `domain` is preserved on the copy.
+    h.defaultCookiesGet.mockResolvedValue([cookie({ domain: ".example.com" })]);
+
+    await expect(migrateDefaultSession()).resolves.toBeUndefined();
+
+    expect(h.targetCookiesSet).toHaveBeenCalledTimes(1);
+    expect(h.targetCookiesSet.mock.calls[0][0]).toMatchObject({
+      domain: ".example.com",
+    });
+  });
+
   test("skips a cookie with no addressable url and still copies its valid sibling", async () => {
     // An empty domain yields no url from cookieUrlFor, so that cookie is skipped;
     // the sibling with a real domain is still copied. Migration completes.

@@ -35,11 +35,14 @@ export async function migrateDefaultSession(): Promise<void> {
         continue;
       }
       try {
+        const hostOnly = !(cookie.domain ?? "").startsWith(".");
         await target.cookies.set({
           url,
           name: cookie.name,
           value: cookie.value,
-          domain: cookie.domain,
+          // A host-only cookie must stay host-only: an explicit `domain` would
+          // promote it to a subdomain-wide cookie.
+          ...(hostOnly ? {} : { domain: cookie.domain }),
           path: cookie.path,
           secure: cookie.secure,
           httpOnly: cookie.httpOnly,
