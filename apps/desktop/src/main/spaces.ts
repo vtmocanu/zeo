@@ -29,10 +29,21 @@ export function deleteSpace(id: string): void {
   const removed = runtime.store.deleteSpace(id);
 
   for (const tabId of removed) {
-    destroyView(tabId);
+    // Best-effort per PRD 9.4 §4: one failing teardown must not strand the
+    // other removed tabs with live views or stale per-tab state. Wrap each
+    // call separately, log once with the tab id, and continue the loop.
+    try {
+      destroyView(tabId);
+    } catch (err) {
+      console.error(`failed to destroy view for removed tab ${tabId}:`, err);
+    }
     // Drop the blocked count, origin marker, and history per-tab state for good,
     // mirroring closeTab/removeTab.
-    forgetTab(tabId);
+    try {
+      forgetTab(tabId);
+    } catch (err) {
+      console.error(`failed to forget removed tab ${tabId}:`, err);
+    }
   }
 
   if (wasActive) {

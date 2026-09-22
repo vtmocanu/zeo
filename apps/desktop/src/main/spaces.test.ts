@@ -1,4 +1,17 @@
-import { beforeEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+
+// Hoisted fakes that the ./views, ./tabs, ./layout and ./broadcast mocks below
+// close over, so the deleteSpace tests can drive destroyView/forgetTab (throw or
+// not) and assert reconcileAndApply/broadcast still run. vi.mock factories are
+// hoisted above the imports and may only read hoisted state.
+const h = vi.hoisted(() => ({
+  destroyView: vi.fn(),
+  createViewFor: vi.fn(),
+  unloadSpaceViews: vi.fn(),
+  forgetTab: vi.fn(),
+  reconcileAndApply: vi.fn(),
+  broadcast: vi.fn(),
+}));
 
 // spaces.ts imports electron at runtime and self-registers IPC via top-level
 // ipcMain.handle at module load, exactly like tabs.test.ts. Mock electron so the
@@ -30,9 +43,23 @@ vi.mock("./downloads.js", () => ({
   logDownloadError: () => {},
 }));
 
+// deleteSpace's teardown collaborators are ES named-import bindings inside
+// spaces.ts, so they can only be observed/controlled by mocking their modules.
+// Each factory stands in for exactly the exports spaces.ts imports from that
+// module; the non-deleteSpace describes assert only store state, so these no-op
+// fakes are inert there.
+vi.mock("./views.js", () => ({
+  destroyView: h.destroyView,
+  createViewFor: h.createViewFor,
+  unloadSpaceViews: h.unloadSpaceViews,
+}));
+vi.mock("./tabs.js", () => ({ forgetTab: h.forgetTab }));
+vi.mock("./layout.js", () => ({ reconcileAndApply: h.reconcileAndApply }));
+vi.mock("./broadcast.js", () => ({ broadcast: h.broadcast }));
+
 import { SpaceStore } from "@zeo/core";
 import { runtime } from "./state.js";
-import { createProfileAndAssign, createSpaceAndActivate } from "./spaces.js";
+import { createProfileAndAssign, createSpaceAndActivate, deleteSpace } from "./spaces.js";
 
 describe("createSpaceAndActivate", () => {
   beforeEach(() => {
@@ -154,5 +181,63 @@ describe("createProfileAndAssign", () => {
 
     // spaceProfileId(spaceId) threw first, so no profile ever existed.
     expect(runtime.store.profiles()).toEqual(before);
+  });
+});
+
+describe("deleteSpace", () => {
+  let errorSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    // Clean, Electron-free baseline plus fresh teardown-collaborator spies.
+    runtime.store = new SpaceStore();
+    runtime.win = null;
+    runtime.views.clear();
+    h.destroyView.mockReset();
+    h.forgetTab.mockReset();
+    h.reconcileAndApply.mockReset();
+    h.broadcast.mockReset();
+    // Observe (and silence) the best-effort teardown diagnostics.
+    errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    errorSpy.mockRestore();
+  });
+
+  test("best-effort teardown: a destroyView throw for one removed tab still destroys+forgets the rest and completes", () => {
+    // A deletable, active space (not the last one) with three open tabs, so
+    // store.deleteSpace returns [t1, t2, t3] and wasActive is true.
+    const work = runtime.store.createSpace("Work");
+    const t1 = runtime.store.createInSpace(work.id, { url: "https://a.test" });
+    const t2 = runtime.store.createInSpace(work.id, { url: "https://b.test" });
+    const t3 = runtime.store.createInSpace(work.id, { url: "https://c.test" });
+    runtime.store.setActiveSpace(work.id);
+
+    // One removed tab's destroyView throws; the loop must not abort.
+    h.destroyView.mockImplementation((id: string) => {
+      if (id === t2.id) {
+        throw new Error("destroy boom");
+      }
+    });
+
+    expect(() => deleteSpace(work.id)).not.toThrow();
+
+    for (const id of [t1.id, t2.id, t3.id]) {
+      // destroyView attempted for every removed tab (including the thrower)...
+      expect(h.destroyView).toHaveBeenCalledWith(id);
+      // ...and forgetTab still runs for every removed tab, because the two calls
+      // are wrapped in SEPARATE try/catch blocks (t2's destroyView throw does not
+      // skip its forgetTab).
+      expect(h.forgetTab).toHaveBeenCalledWith(id);
+    }
+
+    // Logged exactly once, for the throwing tab, with its id in the message.
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    expect(String(errorSpy.mock.calls[0][0])).toContain(t2.id);
+
+    // The function ran to completion: the deleted space was active, so the layout
+    // reconcile and the state broadcast both fired.
+    expect(h.reconcileAndApply).toHaveBeenCalledTimes(1);
+    expect(h.broadcast).toHaveBeenCalledTimes(1);
   });
 });
