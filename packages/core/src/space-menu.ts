@@ -9,8 +9,9 @@ export interface SpaceContextMenuInput {
   tabCount: number;
   /** The space's current profile id: SpaceStore.spaceProfileId(id). */
   currentProfileId: string;
-  /** Whether deleting the space is allowed: SpaceStore.canDeleteSpace(id).
-   *  When false (the last remaining space) the Delete item is OMITTED entirely. */
+  /** Whether deleting the space is allowed — the caller passes `false` for the
+   *  last remaining space (there is always at least one). When false the Delete
+   *  item is OMITTED entirely. */
   canDelete: boolean;
 }
 

@@ -1064,4 +1064,45 @@ describe("TabStore.updateMeta", () => {
     expect(() => store.updateMeta("nonexistent", { url: "https://b.test" })).not.toThrow();
     expect(store.list().find((t) => t.id === "t1")?.url).toBe("https://a.test");
   });
+
+  test("returns true when a present field differs from the stored value", () => {
+    const store = makeStore();
+    store.create({ url: "https://a.test" }); // t1
+
+    expect(store.updateMeta("t1", { title: "X" })).toBe(true);
+    expect(store.updateMeta("t1", { faviconUrl: "https://e.test/f.ico" })).toBe(true);
+    expect(store.updateMeta("t1", { url: "https://b.test" })).toBe(true);
+  });
+
+  test("returns false when an identical partial update changes nothing", () => {
+    const store = makeStore();
+    store.create({ url: "https://a.test" }); // t1
+    store.updateMeta("t1", { title: "X" });
+
+    // Re-applying the same title is a no-op change.
+    expect(store.updateMeta("t1", { title: "X" })).toBe(false);
+  });
+
+  test("returns false for a null→null favicon no-op", () => {
+    const store = makeStore();
+    store.create({ url: "https://a.test" }); // t1 favicon starts null
+
+    expect(store.updateMeta("t1", { faviconUrl: null })).toBe(false);
+  });
+
+  test("returns true when at least one of several present fields differs", () => {
+    const store = makeStore();
+    store.create({ url: "https://a.test" }); // t1
+    store.updateMeta("t1", { title: "X" });
+
+    // title unchanged ("X"), but url differs → changed.
+    expect(store.updateMeta("t1", { title: "X", url: "https://b.test" })).toBe(true);
+  });
+
+  test("returns false for an unknown id", () => {
+    const store = makeStore();
+    store.create({ url: "https://a.test" }); // t1
+
+    expect(store.updateMeta("nonexistent", { title: "X" })).toBe(false);
+  });
 });

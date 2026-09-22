@@ -74,6 +74,13 @@ export class SpaceStore {
   /** Profile ids in creation order — the order `profiles()` reports. */
   private readonly profileOrder: string[] = [];
   private readonly profilesById = new Map<string, Profile>();
+  /**
+   * Ownership index: tab id → the id of the space that owns it. Maintained by
+   * every op that adds or removes a tab so {@link spaceOfTab} and the routed tab
+   * operations resolve an owner in O(1) instead of scanning every space. An
+   * archived tab keeps its owner entry (archive/restore do not touch this map).
+   */
+  private readonly ownerByTab = new Map<string, string>();
   private activeId: string;
   private readonly idFactory: () => string;
   private readonly now: () => number;
@@ -155,25 +162,57 @@ export class SpaceStore {
   // --- Profile lifecycle ---------------------------------------------------
 
   /**
-   * Creates a new profile with the given name and returns it. The id is a fresh
-   * value from the id factory — never reused, so orphaned session-partition data
-   * from a deleted profile can never be reached by a later one. Throws on a blank
-   * name.
+   * Whether a profile OTHER than `exceptId` already stores the given (trimmed)
+   * name, compared case-insensitively. Used to reject duplicate names on create
+   * and rename; a rename to a profile's own current name is accepted by passing
+   * that profile's id as `exceptId`.
    */
-  createProfile(name: string): Profile {
-    if (name.trim() === "") {
-      throw new Error("Profile name must not be blank");
+  private profileNameTaken(trimmed: string, exceptId?: string): boolean {
+    const lower = trimmed.toLowerCase();
+    for (const id of this.profileOrder) {
+      if (id === exceptId) {
+        continue;
+      }
+      if (this.profilesById.get(id)!.name.toLowerCase() === lower) {
+        return true;
+      }
     }
-    return this.insertProfile(this.idFactory(), name);
+    return false;
   }
 
-  /** Renames a profile. Throws on a blank name or an unknown id. */
+  /**
+   * Creates a new profile with the given name (stored trimmed) and returns it.
+   * The id is a fresh value from the id factory — never reused, so orphaned
+   * session-partition data from a deleted profile can never be reached by a later
+   * one. Throws on a blank name, or when another profile already has the same
+   * name (case-insensitive).
+   */
+  createProfile(name: string): Profile {
+    const trimmed = name.trim();
+    if (trimmed === "") {
+      throw new Error("Profile name must not be blank");
+    }
+    if (this.profileNameTaken(trimmed)) {
+      throw new Error(`Profile name already exists: ${name}`);
+    }
+    return this.insertProfile(this.idFactory(), trimmed);
+  }
+
+  /**
+   * Renames a profile (stored trimmed). Throws on a blank name, an unknown id, or
+   * when ANOTHER profile already has the same name (case-insensitive); renaming a
+   * profile to its own current name (any case) is accepted.
+   */
   renameProfile(id: string, name: string): void {
-    if (name.trim() === "") {
+    const trimmed = name.trim();
+    if (trimmed === "") {
       throw new Error("Profile name must not be blank");
     }
     const profile = this.requireProfile(id);
-    this.profilesById.set(id, { ...profile, name });
+    if (this.profileNameTaken(trimmed, id)) {
+      throw new Error(`Profile name already exists: ${name}`);
+    }
+    this.profilesById.set(id, { ...profile, name: trimmed });
   }
 
   /**
@@ -227,34 +266,31 @@ export class SpaceStore {
   }
 
   /**
-   * Whether {@link deleteSpace} would succeed for `id`: it names a known space
-   * AND is not the last remaining space. This is the single source of truth for
-   * deletability — the desktop main queries it to decide whether to tear down a
-   * space's views before calling {@link deleteSpace}, so the rule is never
-   * duplicated across the process boundary.
+   * Deletes a space and drops its entire tab set, returning the ids of the tabs
+   * it removed (open tabs first, then archived, in {@link tabsOfSpace} order).
+   * Validates BEFORE any mutation: throws `Unknown space: <id>` on an unknown id,
+   * and `Cannot delete the last remaining space: <id>` when it is the last
+   * remaining space (there is always at least one) — a throw leaves the store
+   * untouched. When the deleted space was active, the first remaining space (in
+   * creation order) becomes active. Every removed tab id is dropped from the
+   * ownership index.
    */
-  canDeleteSpace(id: string): boolean {
-    return this.spacesById.has(id) && this.order.length > 1;
-  }
-
-  /**
-   * Deletes a space and drops its entire tab set. Throws on an unknown id, and
-   * throws when it is the last remaining space (there is always at least one) —
-   * exactly the two conditions {@link canDeleteSpace} rules out. When the deleted
-   * space was active, the first remaining space (in creation order) becomes
-   * active.
-   */
-  deleteSpace(id: string): void {
+  deleteSpace(id: string): string[] {
     this.require(id);
     if (this.order.length <= 1) {
       throw new Error(`Cannot delete the last remaining space: ${id}`);
     }
+    const removed = this.tabsOfSpace(id).map((t) => t.id);
     const wasActive = this.activeId === id;
     this.spacesById.delete(id);
     this.order.splice(this.order.indexOf(id), 1);
     if (wasActive) {
       this.activeId = this.order[0];
     }
+    for (const tabId of removed) {
+      this.ownerByTab.delete(tabId);
+    }
+    return removed;
   }
 
   /** Makes `id` the active space. Throws on an unknown id. */
@@ -279,30 +315,74 @@ export class SpaceStore {
     return { ...this.spacesById.get(this.activeId)!.space };
   }
 
-  // --- Delegated tab operations (act on the ACTIVE space) ------------------
+  // --- Delegated tab operations --------------------------------------------
 
+  /**
+   * Resolves the {@link TabStore} that owns tab `id` via the ownership index,
+   * throwing `unknownMessage` (the exact wording the underlying `TabStore` op
+   * uses for its own unknown-id case) when no space owns it — so a routed op's
+   * unknown-id error reads identically to the un-routed one.
+   */
+  private ownerStoreOrThrow(id: string, unknownMessage: string): TabStore {
+    const owner = this.ownerByTab.get(id);
+    if (owner === undefined) {
+      throw new Error(unknownMessage);
+    }
+    return this.spacesById.get(owner)!.tabs;
+  }
+
+  /**
+   * Creates a tab in the ACTIVE space and records the active space as its owner.
+   */
   create(input: { url: string; title?: string }): Tab {
-    return this.active().create(input);
+    const tab = this.active().create(input);
+    this.ownerByTab.set(tab.id, this.activeId);
+    return tab;
   }
 
   close(id: string): void {
-    this.active().close(id);
+    const store = this.ownerStoreOrThrow(id, `Cannot close unknown tab: ${id}`);
+    store.close(id);
+    // `close` is a no-op on a pinned tab (it stays in the store), so drop the
+    // ownership entry only when the tab was actually removed — otherwise a
+    // pinned tab would become unroutable while it is still live.
+    if (
+      !store.list().some((tab) => tab.id === id) &&
+      !store.archived().some((tab) => tab.id === id)
+    ) {
+      this.ownerByTab.delete(id);
+    }
   }
 
+  /**
+   * Activates tab `id`. Throws the underlying unknown-tab message when no space
+   * owns it, and rejects a tab owned by a space OTHER than the active one — a
+   * cross-space activate must go through a space switch first, not this call.
+   */
   activate(id: string): void {
+    const owner = this.ownerByTab.get(id);
+    if (owner === undefined) {
+      throw new Error(`Cannot activate unknown tab: ${id}`);
+    }
+    if (owner !== this.activeId) {
+      throw new Error(`Cannot activate a tab outside the active space: ${id}`);
+    }
     this.active().activate(id);
   }
 
   pin(id: string): void {
-    this.active().pin(id);
+    this.ownerStoreOrThrow(id, `Cannot pin unknown tab: ${id}`).pin(id);
   }
 
   unpin(id: string): void {
-    this.active().unpin(id);
+    this.ownerStoreOrThrow(id, `Cannot unpin unknown tab: ${id}`).unpin(id);
   }
 
   reorder(id: string, toIndex: number): void {
-    this.active().reorder(id, toIndex);
+    this.ownerStoreOrThrow(id, `Cannot reorder unknown tab: ${id}`).reorder(
+      id,
+      toIndex,
+    );
   }
 
   moveToTop(id: string): void {
@@ -314,15 +394,16 @@ export class SpaceStore {
   }
 
   archive(id: string): void {
-    this.active().archive(id);
+    this.ownerStoreOrThrow(id, `Cannot archive unknown tab: ${id}`).archive(id);
   }
 
   restore(id: string): void {
-    this.active().restore(id);
+    this.ownerStoreOrThrow(id, `Cannot restore unknown tab: ${id}`).restore(id);
   }
 
   remove(id: string): void {
-    this.active().remove(id);
+    this.ownerStoreOrThrow(id, `Cannot remove unknown tab: ${id}`).remove(id);
+    this.ownerByTab.delete(id);
   }
 
   list(): Tab[] {
@@ -367,7 +448,9 @@ export class SpaceStore {
    * {@link create} stays the active-space shorthand.
    */
   createInSpace(spaceId: string, input: { url: string; title?: string }): Tab {
-    return this.require(spaceId).tabs.create(input);
+    const tab = this.require(spaceId).tabs.create(input);
+    this.ownerByTab.set(tab.id, spaceId);
+    return tab;
   }
 
   /**
@@ -391,19 +474,27 @@ export class SpaceStore {
   }
 
   /**
-   * Applies a partial metadata sync to whichever space owns `id`. Metadata
-   * events (`page-title-updated`/`page-favicon-updated`) fire for tab views in
-   * INACTIVE spaces too (their views stay alive but hidden), so this cannot be
-   * scoped to the active space. `TabStore.updateMeta` is a silent no-op on an
-   * unknown id, so fanning the call to every space updates only the owner.
+   * Applies a partial metadata sync to whichever space owns `id`, routing through
+   * the ownership index. Metadata events (`page-title-updated`/
+   * `page-favicon-updated`) fire for tab views in INACTIVE spaces too (their views
+   * stay alive but hidden), so this cannot be scoped to the active space. Never
+   * throws: an id owned by no space is a silent no-op.
+   *
+   * Returns `{ changed, inActiveSpace }`: `changed` is whether any stored value
+   * actually differed (so callers can skip a redundant broadcast), and
+   * `inActiveSpace` is whether the owning space is the currently-active one (both
+   * `false` for an unknown id).
    */
   updateMeta(
     id: string,
     meta: { title?: string; faviconUrl?: string | null; url?: string },
-  ): void {
-    for (const spaceId of this.order) {
-      this.spacesById.get(spaceId)!.tabs.updateMeta(id, meta);
+  ): { changed: boolean; inActiveSpace: boolean } {
+    const owner = this.ownerByTab.get(id);
+    if (owner === undefined) {
+      return { changed: false, inActiveSpace: false };
     }
+    const changed = this.spacesById.get(owner)!.tabs.updateMeta(id, meta);
+    return { changed, inActiveSpace: owner === this.activeId };
   }
 
   /**
@@ -453,16 +544,7 @@ export class SpaceStore {
    * and by the cross-space tab actions to route a suggestion to its space.
    */
   spaceOfTab(tabId: string): string | null {
-    for (const spaceId of this.order) {
-      const record = this.spacesById.get(spaceId)!;
-      if (
-        record.tabs.list().some((tab) => tab.id === tabId) ||
-        record.tabs.archived().some((tab) => tab.id === tabId)
-      ) {
-        return spaceId;
-      }
-    }
-    return null;
+    return this.ownerByTab.get(tabId) ?? null;
   }
 
   /**
@@ -641,6 +723,9 @@ export class SpaceStore {
       });
       store.spacesById.set(space.id, { space, tabs });
       store.order.push(space.id);
+      for (const tab of open.concat(archived)) {
+        store.ownerByTab.set(tab.id, space.id);
+      }
     }
 
     // Repair: fall back to the first space when the persisted active space id is

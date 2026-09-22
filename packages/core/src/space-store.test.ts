@@ -204,25 +204,41 @@ describe("SpaceStore.deleteSpace", () => {
     expect(() => store.deleteSpace("nope")).toThrow(/Unknown space/);
   });
 
-  test("canDeleteSpace mirrors the deleteSpace throw conditions", () => {
+  test("returns the removed tab ids open-then-archived", () => {
+    const store = makeStore();
+    const work = store.createSpace("Work");
+    const open1 = store.createInSpace(work.id, { url: "https://o1.test" });
+    const open2 = store.createInSpace(work.id, { url: "https://o2.test" });
+    const arch = store.createInSpace(work.id, { url: "https://a.test" });
+    // Archive the third tab within Work (routed archive acts on its owner).
+    store.archive(arch.id);
+
+    const removed = store.deleteSpace(work.id);
+    // Open tabs (in list order) first, then archived.
+    expect(removed).toEqual([open1.id, open2.id, arch.id]);
+    // The removed ids no longer resolve to any space.
+    expect(store.spaceOfTab(open1.id)).toBeNull();
+    expect(store.spaceOfTab(arch.id)).toBeNull();
+  });
+
+  test("an unknown-id throw leaves the store unmutated", () => {
+    const store = makeStore();
+    store.createSpace("Work");
+    const before = store.spaces().map((s) => s.id);
+    expect(() => store.deleteSpace("nope")).toThrow(/Unknown space/);
+    expect(store.spaces().map((s) => s.id)).toEqual(before);
+  });
+
+  test("a last-space throw leaves the store unmutated", () => {
     const store = makeStore();
     const personalId = store.activeSpaceId;
-    // Last remaining space: not deletable.
-    expect(store.canDeleteSpace(personalId)).toBe(false);
-    // Unknown id: not deletable.
-    expect(store.canDeleteSpace("nope")).toBe(false);
-
-    const work = store.createSpace("Work");
-    // With two spaces, both known ids are deletable; an unknown id still is not.
-    expect(store.canDeleteSpace(personalId)).toBe(true);
-    expect(store.canDeleteSpace(work.id)).toBe(true);
-    expect(store.canDeleteSpace("nope")).toBe(false);
-
-    // After deleting down to one, the survivor is no longer deletable — exactly
-    // when deleteSpace would throw.
-    store.deleteSpace(work.id);
-    expect(store.canDeleteSpace(personalId)).toBe(false);
+    const a = store.create({ url: "https://a.test" });
     expect(() => store.deleteSpace(personalId)).toThrow(/last remaining space/);
+    // Space, its tab, active pointer, and ownership index all intact.
+    expect(store.spaces().map((s) => s.id)).toEqual([personalId]);
+    expect(store.activeSpaceId).toBe(personalId);
+    expect(store.list().map((t) => t.id)).toEqual([a.id]);
+    expect(store.spaceOfTab(a.id)).toBe(personalId);
   });
 
   test("drops the deleted space and its tabs", () => {
@@ -282,7 +298,7 @@ describe("SpaceStore per-space tab isolation", () => {
     expect(store.snapshot().tabs.map((t) => t.id)).toEqual([a.id]);
   });
 
-  test("delegated tab ops (pin/archive) act only on the active space", () => {
+  test("pinning a tab in one space never touches another space's pin state", () => {
     const store = makeStore();
     const personalId = store.activeSpaceId;
     const a = store.create({ url: "https://a.test" });
@@ -295,11 +311,20 @@ describe("SpaceStore per-space tab isolation", () => {
     // Pinning b (Work) must not touch a's pin state (Personal).
     store.setActiveSpace(personalId);
     expect(store.list().find((t) => t.id === a.id)?.pinned).toBe(false);
+  });
 
-    // A command carrying another space's tab id is rejected by the active store.
-    expect(() => store.pin(b.id)).toThrow(/unknown tab/i);
-    expect(() => store.close(b.id)).toThrow(/unknown tab/i);
-    expect(() => store.activate(b.id)).toThrow(/unknown tab/i);
+  test("an unknown tab id is rejected by every routed op", () => {
+    const store = makeStore();
+    store.create({ url: "https://a.test" });
+
+    expect(() => store.pin("nope")).toThrow(/Cannot pin unknown tab/);
+    expect(() => store.unpin("nope")).toThrow(/Cannot unpin unknown tab/);
+    expect(() => store.close("nope")).toThrow(/Cannot close unknown tab/);
+    expect(() => store.archive("nope")).toThrow(/Cannot archive unknown tab/);
+    expect(() => store.restore("nope")).toThrow(/Cannot restore unknown tab/);
+    expect(() => store.remove("nope")).toThrow(/Cannot remove unknown tab/);
+    expect(() => store.reorder("nope", 0)).toThrow(/Cannot reorder unknown tab/);
+    expect(() => store.activate("nope")).toThrow(/Cannot activate unknown tab/);
   });
 
   test("moveToTop/moveToBottom delegate to the active space's tab store", () => {
@@ -323,6 +348,170 @@ describe("SpaceStore per-space tab isolation", () => {
     // The move did not disturb Personal's order.
     store.setActiveSpace(personalId);
     expect(store.list().map((t) => t.id)).toEqual([a.id, b.id, c.id]);
+  });
+});
+
+describe("SpaceStore routed tab ops target a tab's owning space", () => {
+  /**
+   * Builds a store with Personal active and a second space "Work" holding one
+   * tab, created via `createInSpace` so the active space is never switched.
+   */
+  function withInactiveWorkTab(): {
+    store: SpaceStore;
+    personalId: string;
+    workId: string;
+    personalTabId: string;
+    workTabId: string;
+  } {
+    const store = makeStore();
+    const personalId = store.activeSpaceId;
+    const personalTab = store.create({ url: "https://p.test" });
+    const work = store.createSpace("Work");
+    const workTab = store.createInSpace(work.id, { url: "https://w.test" });
+    return {
+      store,
+      personalId,
+      workId: work.id,
+      personalTabId: personalTab.id,
+      workTabId: workTab.id,
+    };
+  }
+
+  test("close routes to the inactive owner and leaves the active space untouched", () => {
+    const { store, personalId, workId, personalTabId, workTabId } =
+      withInactiveWorkTab();
+
+    store.close(workTabId);
+
+    // Work's tab is gone; the ownership index forgot it.
+    expect(store.spaceOfTab(workTabId)).toBeNull();
+    expect(store.tabsOfSpace(workId).map((t) => t.id)).toEqual([]);
+    // The active (Personal) space is untouched.
+    expect(store.activeSpaceId).toBe(personalId);
+    expect(store.list().map((t) => t.id)).toEqual([personalTabId]);
+  });
+
+  test("pin routes to the inactive owner", () => {
+    const { store, personalId, workId, personalTabId, workTabId } =
+      withInactiveWorkTab();
+
+    store.pin(workTabId);
+
+    expect(store.tabsOfSpace(workId).find((t) => t.id === workTabId)?.pinned).toBe(
+      true,
+    );
+    // Personal's tab (still active) is unaffected.
+    expect(store.list().find((t) => t.id === personalTabId)?.pinned).toBe(false);
+    expect(store.activeSpaceId).toBe(personalId);
+  });
+
+  test("archive then restore route to the inactive owner and keep ownership", () => {
+    const { store, workId, workTabId } = withInactiveWorkTab();
+
+    store.archive(workTabId);
+    // Archived tab keeps its owner.
+    expect(store.spaceOfTab(workTabId)).toBe(workId);
+    expect(store.tabsOfSpace(workId).map((t) => t.id)).toEqual([workTabId]);
+
+    store.restore(workTabId);
+    expect(store.spaceOfTab(workTabId)).toBe(workId);
+  });
+
+  test("remove routes to the inactive owner and forgets ownership", () => {
+    const { store, workId, workTabId } = withInactiveWorkTab();
+
+    store.archive(workTabId);
+    store.remove(workTabId);
+
+    expect(store.spaceOfTab(workTabId)).toBeNull();
+    expect(store.tabsOfSpace(workId).map((t) => t.id)).toEqual([]);
+  });
+
+  test("close of a pinned inactive-space tab is a no-op and keeps ownership", () => {
+    const { store, workId, workTabId } = withInactiveWorkTab();
+
+    store.pin(workTabId);
+    // close is a no-op on a pinned tab; the tab stays live so its ownership
+    // entry must survive (a pinned tab must remain routable).
+    store.close(workTabId);
+    expect(store.spaceOfTab(workTabId)).toBe(workId);
+    expect(store.tabsOfSpace(workId).map((t) => t.id)).toEqual([workTabId]);
+  });
+
+  test("activate of a foreign (inactive-space) tab throws and changes nothing", () => {
+    const { store, personalId, personalTabId, workTabId } = withInactiveWorkTab();
+
+    expect(() => store.activate(workTabId)).toThrow(
+      `Cannot activate a tab outside the active space: ${workTabId}`,
+    );
+    // Still on Personal, its active tab unchanged.
+    expect(store.activeSpaceId).toBe(personalId);
+    expect(store.activeTabId).toBe(personalTabId);
+  });
+
+  test("a same-space activate still works", () => {
+    const store = makeStore();
+    const a = store.create({ url: "https://a.test" });
+    const b = store.create({ url: "https://b.test" });
+    expect(store.activeTabId).toBe(b.id);
+
+    store.activate(a.id);
+    expect(store.activeTabId).toBe(a.id);
+  });
+});
+
+describe("SpaceStore.spaceOfTab ownership tracking", () => {
+  test("tracks create, createInSpace, close, remove, and deleteSpace", () => {
+    const store = makeStore();
+    const personalId = store.activeSpaceId;
+    const a = store.create({ url: "https://a.test" });
+    expect(store.spaceOfTab(a.id)).toBe(personalId);
+
+    const work = store.createSpace("Work");
+    const w = store.createInSpace(work.id, { url: "https://w.test" });
+    expect(store.spaceOfTab(w.id)).toBe(work.id);
+
+    // close drops ownership of the active-space tab.
+    store.close(a.id);
+    expect(store.spaceOfTab(a.id)).toBeNull();
+
+    // remove (via archive first) drops ownership of the inactive-space tab.
+    store.archive(w.id);
+    store.remove(w.id);
+    expect(store.spaceOfTab(w.id)).toBeNull();
+
+    // deleteSpace forgets the whole space's tabs.
+    const play = store.createSpace("Play");
+    const p = store.createInSpace(play.id, { url: "https://p.test" });
+    expect(store.spaceOfTab(p.id)).toBe(play.id);
+    store.deleteSpace(play.id);
+    expect(store.spaceOfTab(p.id)).toBeNull();
+  });
+
+  test("ownership is unchanged across archive and restore", () => {
+    const store = makeStore();
+    const personalId = store.activeSpaceId;
+    const a = store.create({ url: "https://a.test" });
+
+    store.archive(a.id);
+    expect(store.spaceOfTab(a.id)).toBe(personalId);
+    store.restore(a.id);
+    expect(store.spaceOfTab(a.id)).toBe(personalId);
+  });
+
+  test("rebuilds ownership from a persisted state", () => {
+    const store = makeStore();
+    const personalId = store.activeSpaceId;
+    const a = store.create({ url: "https://a.test" });
+    const work = store.createSpace("Work");
+    const w = store.createInSpace(work.id, { url: "https://w.test" });
+    store.archive(w.id);
+
+    const restored = SpaceStore.fromPersisted(store.toPersisted());
+    expect(restored.spaceOfTab(a.id)).toBe(personalId);
+    // An archived tab keeps its owner across a round trip.
+    expect(restored.spaceOfTab(w.id)).toBe(work.id);
+    expect(restored.spaceOfTab("nope")).toBeNull();
   });
 });
 
@@ -479,10 +668,43 @@ describe("SpaceStore.updateMeta", () => {
     expect(store.list().find((t) => t.id === b.id)?.title).toBe("B updated");
   });
 
-  test("is a silent no-op for an id owned by no space", () => {
+  test("reports changed + inActiveSpace for a real change on the active space", () => {
+    const store = makeStore();
+    const a = store.create({ url: "https://a.test", title: "A" });
+    expect(store.updateMeta(a.id, { title: "A2" })).toEqual({
+      changed: true,
+      inActiveSpace: true,
+    });
+  });
+
+  test("reports not-changed but inActiveSpace for a no-op on an active tab", () => {
+    const store = makeStore();
+    const a = store.create({ url: "https://a.test", title: "A" });
+    expect(store.updateMeta(a.id, { title: "A" })).toEqual({
+      changed: false,
+      inActiveSpace: true,
+    });
+  });
+
+  test("reports changed but not-inActiveSpace for a change on an inactive space", () => {
+    const store = makeStore();
+    const work = store.createSpace("Work");
+    const w = store.createInSpace(work.id, { url: "https://w.test", title: "W" });
+    // Personal stays active; w lives in the inactive Work space.
+    expect(store.updateMeta(w.id, { title: "W2" })).toEqual({
+      changed: true,
+      inActiveSpace: false,
+    });
+  });
+
+  test("reports neither for an id owned by no space, and never throws", () => {
     const store = makeStore();
     store.create({ url: "https://a.test" });
-    expect(() => store.updateMeta("ghost", { title: "X" })).not.toThrow();
+    let result: { changed: boolean; inActiveSpace: boolean } | undefined;
+    expect(() => {
+      result = store.updateMeta("ghost", { title: "X" });
+    }).not.toThrow();
+    expect(result).toEqual({ changed: false, inActiveSpace: false });
   });
 });
 
@@ -567,6 +789,27 @@ describe("SpaceStore.createProfile", () => {
     expect(() => store.createProfile("   ")).toThrow(/blank/);
     expect(store.profiles()).toHaveLength(1);
   });
+
+  test("stores the name trimmed", () => {
+    const store = makeStore();
+    const work = store.createProfile("  Work  ");
+    expect(work.name).toBe("Work");
+    expect(store.profiles().find((p) => p.id === work.id)?.name).toBe("Work");
+  });
+
+  test("rejects a duplicate name case-insensitively", () => {
+    const store = makeStore();
+    store.createProfile("Work");
+    expect(() => store.createProfile("work")).toThrow(
+      /Profile name already exists/,
+    );
+    // Duplicate against the trimmed form, too.
+    expect(() => store.createProfile("  WORK  ")).toThrow(
+      /Profile name already exists/,
+    );
+    // Nothing was added past the original two (default + Work).
+    expect(store.profiles()).toHaveLength(2);
+  });
 });
 
 describe("SpaceStore.renameProfile", () => {
@@ -574,6 +817,13 @@ describe("SpaceStore.renameProfile", () => {
     const store = makeStore();
     const work = store.createProfile("Work");
     store.renameProfile(work.id, "Job");
+    expect(store.profiles().find((p) => p.id === work.id)?.name).toBe("Job");
+  });
+
+  test("stores the new name trimmed", () => {
+    const store = makeStore();
+    const work = store.createProfile("Work");
+    store.renameProfile(work.id, "  Job  ");
     expect(store.profiles().find((p) => p.id === work.id)?.name).toBe("Job");
   });
 
@@ -588,6 +838,27 @@ describe("SpaceStore.renameProfile", () => {
   test("throws on an unknown profile id", () => {
     const store = makeStore();
     expect(() => store.renameProfile("nope", "X")).toThrow(/Unknown profile/);
+  });
+
+  test("rejects renaming onto another profile's name case-insensitively", () => {
+    const store = makeStore();
+    const work = store.createProfile("Work");
+    store.createProfile("Play");
+    expect(() => store.renameProfile(work.id, "play")).toThrow(
+      /Profile name already exists/,
+    );
+    // Also blocked against the seeded default profile.
+    expect(() => store.renameProfile(work.id, "default")).toThrow(
+      /Profile name already exists/,
+    );
+    expect(store.profiles().find((p) => p.id === work.id)?.name).toBe("Work");
+  });
+
+  test("accepts a self-rename to the profile's own name in any case", () => {
+    const store = makeStore();
+    const work = store.createProfile("Work");
+    expect(() => store.renameProfile(work.id, "WORK")).not.toThrow();
+    expect(store.profiles().find((p) => p.id === work.id)?.name).toBe("WORK");
   });
 });
 
