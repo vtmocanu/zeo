@@ -239,6 +239,20 @@ export class SpaceStore {
     return this.profileOrder.map((id) => ({ ...this.profilesById.get(id)! }));
   }
 
+  /**
+   * The id of the seeded default profile — the profile every space references
+   * until a real profile is assigned, and the one legacy default-session tabs
+   * belong to. It is created first (constructor), restored at position 0
+   * ({@link fromPersisted}), and undeletable ({@link deleteProfile}), so the
+   * first profile in creation order is always it. Read from the store rather
+   * than assuming the literal `"default"`, so a renamed or re-seeded default
+   * profile still resolves to the right partition. Falls back to
+   * {@link DEFAULT_PROFILE_ID} only for a hand-built zero-profile store.
+   */
+  get defaultProfileId(): string {
+    return this.profileOrder[0] ?? DEFAULT_PROFILE_ID;
+  }
+
   // --- Space lifecycle -----------------------------------------------------
 
   /**

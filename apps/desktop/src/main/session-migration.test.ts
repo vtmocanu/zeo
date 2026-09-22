@@ -6,6 +6,8 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 const h = vi.hoisted(() => ({
   defaultCookiesGet: vi.fn(),
   defaultClearStorageData: vi.fn(),
+  fromPartition: vi.fn(),
+  targetCookiesGet: vi.fn(),
   targetCookiesSet: vi.fn(),
   readMarker: vi.fn(),
   writeMarker: vi.fn(),
@@ -17,8 +19,9 @@ vi.mock("electron", () => ({
       cookies: { get: h.defaultCookiesGet },
       clearStorageData: h.defaultClearStorageData,
     },
-    // migrateDefaultSession only ever asks for persist:default.
-    fromPartition: () => ({ cookies: { set: h.targetCookiesSet } }),
+    // The migration derives the partition from the default profile id it is
+    // given; the mock records the argument and returns the target's cookie jar.
+    fromPartition: h.fromPartition,
   },
 }));
 
@@ -51,6 +54,12 @@ beforeEach(() => {
   // Sensible resolving defaults; individual tests override per case.
   h.defaultCookiesGet.mockResolvedValue([]);
   h.defaultClearStorageData.mockResolvedValue(undefined);
+  h.fromPartition.mockReturnValue({
+    cookies: { get: h.targetCookiesGet, set: h.targetCookiesSet },
+  });
+  // The target partition starts empty unless a test seeds it (non-destructive
+  // retry cases resolve a pre-existing cookie here).
+  h.targetCookiesGet.mockResolvedValue([]);
   h.targetCookiesSet.mockResolvedValue(undefined);
   h.readMarker.mockReturnValue(null);
   h.writeMarker.mockReturnValue(undefined);
@@ -64,7 +73,7 @@ describe("migrateDefaultSession", () => {
   test("copies every cookie, clears the source storage, and writes the marker", async () => {
     h.defaultCookiesGet.mockResolvedValue([cookie({ name: "a" }), cookie({ name: "b" })]);
 
-    await expect(migrateDefaultSession()).resolves.toBeUndefined();
+    await expect(migrateDefaultSession("default")).resolves.toBeUndefined();
 
     expect(h.targetCookiesSet).toHaveBeenCalledTimes(2);
     expect(h.defaultClearStorageData).toHaveBeenCalledTimes(1);
@@ -75,7 +84,7 @@ describe("migrateDefaultSession", () => {
   test("clears only cookies from the source session, leaving other stores intact", async () => {
     h.defaultCookiesGet.mockResolvedValue([cookie()]);
 
-    await expect(migrateDefaultSession()).resolves.toBeUndefined();
+    await expect(migrateDefaultSession("default")).resolves.toBeUndefined();
 
     // Only cookies are copied, so only cookies are cleared; localstorage, indexdb,
     // serviceworkers and cachestorage in the default session are left untouched.
@@ -89,7 +98,7 @@ describe("migrateDefaultSession", () => {
     // must omit `domain` and rely on `url` alone to scope it to the host.
     h.defaultCookiesGet.mockResolvedValue([cookie({ domain: "example.com" })]);
 
-    await expect(migrateDefaultSession()).resolves.toBeUndefined();
+    await expect(migrateDefaultSession("default")).resolves.toBeUndefined();
 
     expect(h.targetCookiesSet).toHaveBeenCalledTimes(1);
     const call = h.targetCookiesSet.mock.calls[0][0];
@@ -102,7 +111,7 @@ describe("migrateDefaultSession", () => {
     // intentional, so `domain` is preserved on the copy.
     h.defaultCookiesGet.mockResolvedValue([cookie({ domain: ".example.com" })]);
 
-    await expect(migrateDefaultSession()).resolves.toBeUndefined();
+    await expect(migrateDefaultSession("default")).resolves.toBeUndefined();
 
     expect(h.targetCookiesSet).toHaveBeenCalledTimes(1);
     expect(h.targetCookiesSet.mock.calls[0][0]).toMatchObject({
@@ -118,7 +127,7 @@ describe("migrateDefaultSession", () => {
       cookie({ name: "ok", domain: "example.com" }),
     ]);
 
-    await expect(migrateDefaultSession()).resolves.toBeUndefined();
+    await expect(migrateDefaultSession("default")).resolves.toBeUndefined();
 
     // Only the valid sibling was set.
     expect(h.targetCookiesSet).toHaveBeenCalledTimes(1);
@@ -133,7 +142,7 @@ describe("migrateDefaultSession", () => {
     // the guard returns before touching any session or accessor.
     h.readMarker.mockReturnValue(1_700_000_000_000);
 
-    await expect(migrateDefaultSession()).resolves.toBeUndefined();
+    await expect(migrateDefaultSession("default")).resolves.toBeUndefined();
 
     expect(h.defaultCookiesGet).not.toHaveBeenCalled();
     expect(h.targetCookiesSet).not.toHaveBeenCalled();
@@ -148,7 +157,7 @@ describe("migrateDefaultSession", () => {
       throw new Error("read failed");
     });
 
-    await expect(migrateDefaultSession()).resolves.toBeUndefined();
+    await expect(migrateDefaultSession("default")).resolves.toBeUndefined();
 
     expect(h.defaultCookiesGet).not.toHaveBeenCalled();
     expect(h.defaultClearStorageData).not.toHaveBeenCalled();
@@ -158,7 +167,7 @@ describe("migrateDefaultSession", () => {
     // Second call: read now returns null (the default), so it migrates normally.
     h.defaultCookiesGet.mockResolvedValue([cookie()]);
 
-    await expect(migrateDefaultSession()).resolves.toBeUndefined();
+    await expect(migrateDefaultSession("default")).resolves.toBeUndefined();
 
     expect(h.targetCookiesSet).toHaveBeenCalledTimes(1);
     expect(h.defaultClearStorageData).toHaveBeenCalledTimes(1);
@@ -170,7 +179,7 @@ describe("migrateDefaultSession", () => {
     // One set rejects on the first pass.
     h.targetCookiesSet.mockRejectedValueOnce(new Error("set failed"));
 
-    await expect(migrateDefaultSession()).resolves.toBeUndefined();
+    await expect(migrateDefaultSession("default")).resolves.toBeUndefined();
 
     // Nothing cleared, marker never written (marker stays null for the retry).
     expect(h.defaultClearStorageData).not.toHaveBeenCalled();
@@ -181,7 +190,7 @@ describe("migrateDefaultSession", () => {
     h.targetCookiesSet.mockClear();
     h.targetCookiesSet.mockResolvedValue(undefined);
 
-    await expect(migrateDefaultSession()).resolves.toBeUndefined();
+    await expect(migrateDefaultSession("default")).resolves.toBeUndefined();
 
     expect(h.targetCookiesSet).toHaveBeenCalledTimes(2);
     expect(h.defaultClearStorageData).toHaveBeenCalledTimes(1);
@@ -191,7 +200,7 @@ describe("migrateDefaultSession", () => {
   test("a cookies.get rejection leaves the marker unwritten and resolves", async () => {
     h.defaultCookiesGet.mockRejectedValue(new Error("get failed"));
 
-    await expect(migrateDefaultSession()).resolves.toBeUndefined();
+    await expect(migrateDefaultSession("default")).resolves.toBeUndefined();
 
     expect(h.targetCookiesSet).not.toHaveBeenCalled();
     expect(h.defaultClearStorageData).not.toHaveBeenCalled();
@@ -206,7 +215,7 @@ describe("migrateDefaultSession", () => {
       throw new Error("write failed");
     });
 
-    await expect(migrateDefaultSession()).resolves.toBeUndefined();
+    await expect(migrateDefaultSession("default")).resolves.toBeUndefined();
 
     expect(h.defaultClearStorageData).toHaveBeenCalledTimes(1);
     // The write threw, so the marker is still null and the failure was logged.
@@ -219,7 +228,7 @@ describe("migrateDefaultSession", () => {
     h.defaultClearStorageData.mockClear();
     h.writeMarker.mockClear();
 
-    await expect(migrateDefaultSession()).resolves.toBeUndefined();
+    await expect(migrateDefaultSession("default")).resolves.toBeUndefined();
 
     expect(h.targetCookiesSet).not.toHaveBeenCalled();
     expect(h.defaultClearStorageData).toHaveBeenCalledTimes(1);

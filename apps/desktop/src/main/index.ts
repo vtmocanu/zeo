@@ -80,11 +80,12 @@ app.whenReady().then(async () => {
     installDownloadHandler(p.id);
   }
 
-  // One-shot migration of the legacy default Electron session onto the
-  // persist:default partition (PRD 9.4 §8). Resolves in every case (never rejects),
-  // so a migration failure is logged and startup proceeds regardless. Runs after
-  // the store is restored/rebased and before the window opens.
-  await migrateDefaultSession();
+  // One-shot migration of the legacy default Electron session onto the default
+  // profile's partition (PRD 9.4 §8), the target derived from the store's default
+  // profile rather than a hard-coded literal. Resolves in every case (never
+  // rejects), so a migration failure is logged and startup proceeds regardless.
+  // Runs after the store is restored/rebased and before the window opens.
+  await migrateDefaultSession(runtime.store.defaultProfileId);
 
   buildMenu();
   createWindow(!restoredFromDisk);
