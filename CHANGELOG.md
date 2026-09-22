@@ -22,6 +22,13 @@ milestone, a minor bump only for very large breakthroughs.
   `target="_blank"` are now denied and instead open a new tab in the owning
   space, on that space's profile partition; a non-http(s) target is dropped.
 
+- Upgrading now migrates cookies from the pre-profiles default browser session
+  into the default profile's partition once, then clears the old session's
+  storage — so a user upgrading from before profiles is no longer logged out
+  everywhere. The migration runs at most once per user-data directory, never on
+  a fresh install, and retries on the next launch if any cookie fails to copy
+  (a new database schema column records that it ran).
+
 ### Fixed
 
 - A tab command issued from the sidebar that the main process rejects (for
@@ -58,6 +65,21 @@ milestone, a minor bump only for very large breakthroughs.
   a space's profile or creating a profile is now best-effort — a failure is
   logged and the remaining lifecycle steps (download-handler install, view
   recreation, reconcile, broadcast) still run.
+
+- Tab commands (close, pin, archive, activate, and the rest) issued against a
+  tab in an inactive space — for example from a context menu captured before a
+  space switch — now act on that tab's owning space instead of failing
+  silently; activating a tab in another space switches to that space first.
+
+- Double-clicking a space in the sidebar to rename it no longer also activates
+  it. A single click still activates the space (after a short delay, so a
+  double-click can cancel the activation).
+
+- Profile names are now unique, ignoring case and surrounding whitespace, so a
+  duplicate name is rejected. Creating a space and activating it, and creating a
+  profile and assigning it to a space, are each a single atomic action — a
+  failure can no longer leave behind a stray unactivated space or an unassigned
+  profile.
 
 ## [0.0.22] - 2026-09-21
 
