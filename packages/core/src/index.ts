@@ -121,6 +121,7 @@ export {
   downloadDetail,
   DOWNLOADS_CAP,
 } from "./downloads.js";
+export { cookieUrlFor } from "./cookie-url.js";
 export { defaultSpaceName } from "./space-name.js";
 export { buildSpaceContextMenu } from "./space-menu.js";
 export type { SpaceContextMenuInput } from "./space-menu.js";
@@ -128,6 +129,7 @@ export { titleForUrl } from "./tab-title.js";
 export { formatRelativeArchived } from "./relative-time.js";
 export {
   SIDEBAR_WIDTH,
+  SPACE_ACTIVATE_DELAY_MS,
   COMMAND_BAR_HEIGHT,
   SUGGESTION_ROW_HEIGHT,
   commandBarBounds,

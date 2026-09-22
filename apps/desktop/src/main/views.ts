@@ -17,7 +17,7 @@ import {
 import type { Tab, UnloadCandidate } from "@zeo/core";
 import { updateVisitTitle } from "./db.js";
 import { runtime } from "./state.js";
-import { broadcast, scheduleBlockingBroadcast } from "./broadcast.js";
+import { broadcast, noteInactiveChange, scheduleBlockingBroadcast } from "./broadcast.js";
 import { recordNavigation, logHistoryError } from "./history.js";
 import { applyViewZoom, applyZoom } from "./zoom.js";
 
@@ -70,9 +70,11 @@ export function raiseOverlays(): void {
 
 /**
  * Creates a hidden web view for a tab owned by `spaceId` and starts loading its
- * url. The view is tracked with its owning space so a space switch or delete can
- * find it. `urlOverride`, when given, is loaded instead of the tab's stored url
- * (used by profile remap to preserve each live view's current url).
+ * url. `spaceId` selects the profile partition the view runs on; the view is
+ * stored bare (keyed by tab id) — ownership is read back from the store's
+ * `spaceOfTab`, not tagged here. `urlOverride`, when given, is loaded instead of
+ * the tab's stored url (used by profile remap to preserve each live view's
+ * current url).
  */
 export function createViewFor(tab: Tab, spaceId: string, urlOverride?: string): void {
   if (runtime.win === null) {
@@ -92,7 +94,7 @@ export function createViewFor(tab: Tab, spaceId: string, urlOverride?: string): 
       nodeIntegrationInSubFrames: true,
     },
   });
-  runtime.views.set(tab.id, { view, spaceId });
+  runtime.views.set(tab.id, view);
   // Route every page-initiated popup (window.open / target="_blank") into a tab
   // in the owning space instead of a BrowserWindow (#62). The handler calls a
   // late-bound runtime hook so views.ts keeps NO import edge to tabs.ts (madge
@@ -119,8 +121,18 @@ export function createViewFor(tab: Tab, spaceId: string, urlOverride?: string): 
   // no-ops on an unknown/torn-down id, so late events after close are safe.
   view.webContents.on("page-title-updated", (_event, title) => {
     runtime.hasRealTitle.add(tab.id);
-    runtime.store.updateMeta(tab.id, { title });
-    broadcast();
+    // Gate ONLY the snapshot push on ownership: an active-space title change pushes
+    // a full snapshot, an inactive-space one persists + refreshes the catalog with
+    // no push. Never early-return here — the hasRealTitle mark above and the
+    // history bookkeeping below must run regardless of whether the title changed.
+    const { changed, inActiveSpace } = runtime.store.updateMeta(tab.id, { title });
+    if (changed) {
+      if (inActiveSpace) {
+        broadcast();
+      } else {
+        noteInactiveChange();
+      }
+    }
     // Update the title on the visit this document's load recorded. The key check
     // drops a title event that raced a navigation to a DIFFERENT key (the tab has
     // already left that visit's url). A database error is logged once.
@@ -137,8 +149,15 @@ export function createViewFor(tab: Tab, spaceId: string, urlOverride?: string): 
   });
   view.webContents.on("page-favicon-updated", (_event, favicons: string[]) => {
     const faviconUrl = favicons.length > 0 ? favicons[0] : null;
-    runtime.store.updateMeta(tab.id, { faviconUrl });
-    broadcast();
+    const { changed, inActiveSpace } = runtime.store.updateMeta(tab.id, { faviconUrl });
+    if (!changed) {
+      return;
+    }
+    if (inActiveSpace) {
+      broadcast();
+    } else {
+      noteInactiveChange();
+    }
   });
 
   // Live url tracking: mirror the view's real url into the store on every commit
@@ -154,8 +173,15 @@ export function createViewFor(tab: Tab, spaceId: string, urlOverride?: string): 
     if (!runtime.hasRealTitle.has(tab.id)) {
       meta.title = titleForUrl(current);
     }
-    runtime.store.updateMeta(tab.id, meta);
-    broadcast();
+    const { changed, inActiveSpace } = runtime.store.updateMeta(tab.id, meta);
+    if (!changed) {
+      return;
+    }
+    if (inActiveSpace) {
+      broadcast();
+    } else {
+      noteInactiveChange();
+    }
   };
   view.webContents.on("did-navigate", onDidNavigate);
   view.webContents.on("did-navigate-in-page", onDidNavigate);
@@ -217,7 +243,7 @@ export function createViewFor(tab: Tab, spaceId: string, urlOverride?: string): 
     if (!runtime.find.open || runtime.find.tabId !== tab.id) {
       return;
     }
-    const v = runtime.views.get(tab.id)?.view;
+    const v = runtime.views.get(tab.id);
     if (v != null && !v.webContents.isDestroyed()) {
       v.webContents.stopFindInPage("clearSelection");
     }
@@ -259,7 +285,7 @@ export function createViewFor(tab: Tab, spaceId: string, urlOverride?: string): 
       runtime.failedLoads.delete(tab.id);
     })
     .catch((err: unknown) => {
-      if (runtime.views.get(tab.id)?.view !== view) {
+      if (runtime.views.get(tab.id) !== view) {
         return;
       }
       // A navigateTab call on this tab while its initial load is still in flight
@@ -287,9 +313,9 @@ export function destroyView(id: string): void {
   if (runtime.find.open && runtime.find.tabId === id) {
     runtime.closeFindSession?.();
   }
-  const tracked = runtime.views.get(id);
-  if (tracked !== undefined) {
-    runtime.win?.contentView.removeChildView(tracked.view);
+  const view = runtime.views.get(id);
+  if (view !== undefined) {
+    runtime.win?.contentView.removeChildView(view);
     // Drop the reverse-index entry via the forward index, so the entry is removed
     // even when the webContents is already destroyed (its `id` would then be
     // inaccessible). NOT the blocked COUNT: a remap or activate-retry recreates
@@ -300,8 +326,8 @@ export function destroyView(id: string): void {
       runtime.webContentsToTab.delete(wcId);
     }
     runtime.tabToWcId.delete(id);
-    if (!tracked.view.webContents.isDestroyed()) {
-      tracked.view.webContents.close();
+    if (!view.webContents.isDestroyed()) {
+      view.webContents.close();
     }
     runtime.views.delete(id);
     // Drop any retry marker so a stale id never lingers past its view.
@@ -328,11 +354,11 @@ export function setActive(id: string | null): void {
   if (runtime.find.open && runtime.find.tabId !== id) {
     runtime.closeFindSession?.();
   }
-  for (const [tabId, tracked] of runtime.views) {
+  for (const [tabId, view] of runtime.views) {
     const active = tabId === id;
-    tracked.view.setVisible(active);
+    view.setVisible(active);
     if (active) {
-      tracked.view.setBounds(viewBounds());
+      view.setBounds(viewBounds());
     }
   }
 }
@@ -368,11 +394,11 @@ export function unloadView(id: string): void {
  * Snapshots the `views` entries before iterating, since unloadView mutates it.
  */
 export function unloadSpaceViews(spaceId: string, keepTabId: string | null): void {
-  for (const [tabId, tracked] of [...runtime.views]) {
-    if (tracked.spaceId !== spaceId || tabId === keepTabId) {
+  for (const [tabId, view] of [...runtime.views]) {
+    if (runtime.store.spaceOfTab(tabId) !== spaceId || tabId === keepTabId) {
       continue;
     }
-    const wc = tracked.view.webContents;
+    const wc = view.webContents;
     if (!wc.isDestroyed() && wc.isCurrentlyAudible()) {
       continue;
     }
@@ -409,7 +435,7 @@ export function unloadIdleViews(now: number): void {
   const shown = shownTabIds();
   const activeSpaceId = runtime.store.activeSpaceId;
   const candidates: UnloadCandidate[] = [];
-  for (const [tabId, tracked] of runtime.views) {
+  for (const [tabId, view] of runtime.views) {
     const spaceId = runtime.store.spaceOfTab(tabId);
     if (spaceId === null) {
       continue;
@@ -418,7 +444,7 @@ export function unloadIdleViews(now: number): void {
     if (tab === undefined) {
       continue;
     }
-    const wc = tracked.view.webContents;
+    const wc = view.webContents;
     candidates.push({
       tabId,
       lastActiveAt: tab.lastActiveAt,

@@ -328,15 +328,24 @@ export class TabStore {
    * `page-favicon-updated` events, which can fire AFTER a tab is closed or torn
    * down; throwing there would crash the main-process event listener, so a late
    * event on a gone tab must be ignored.
+   *
+   * Returns whether the call actually CHANGED any stored value: `false` for an
+   * unknown id, and `false` when every PRESENT field already equals the stored
+   * value (a `null`→`null` favicon counts as unchanged). Callers use this to skip
+   * a redundant broadcast.
    */
   updateMeta(
     id: string,
     meta: { title?: string; faviconUrl?: string | null; url?: string },
-  ): void {
+  ): boolean {
     const record = this.tabs.find((tab) => tab.id === id);
     if (!record) {
-      return;
+      return false;
     }
+    const changed =
+      (meta.title !== undefined && record.title !== meta.title) ||
+      (meta.faviconUrl !== undefined && record.faviconUrl !== meta.faviconUrl) ||
+      (meta.url !== undefined && record.url !== meta.url);
     if (meta.title !== undefined) {
       record.title = meta.title;
     }
@@ -346,6 +355,7 @@ export class TabStore {
     if (meta.url !== undefined) {
       record.url = meta.url;
     }
+    return changed;
   }
 
   /**

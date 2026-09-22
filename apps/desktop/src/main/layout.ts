@@ -105,8 +105,7 @@ export function applyLayout(): void {
   }
   const [contentWidth, contentHeight] = runtime.win!.getContentSize();
   const b = splitPaneBounds(contentWidth, contentHeight, layout.ratio);
-  for (const [tabId, tracked] of runtime.views) {
-    const view = tracked.view;
+  for (const [tabId, view] of runtime.views) {
     if (view.webContents.isDestroyed()) {
       continue;
     }
@@ -130,7 +129,7 @@ export function applyLayout(): void {
   }
   const focusedTabId = focusedPaneTab(layout);
   if (focusedTabId !== null) {
-    const focusedView = runtime.views.get(focusedTabId)?.view;
+    const focusedView = runtime.views.get(focusedTabId);
     if (focusedView !== undefined && !focusedView.webContents.isDestroyed()) {
       focusedView.webContents.focus();
     }
@@ -457,6 +456,13 @@ export function doSetRatio(ratio: number): void {
  * IPC handler and the "Activate Tab N" menu items.
  */
 export function activateTab(id: string): void {
+  // Activating a tab owned by another space is a cross-space activate: switch to
+  // its owning space FIRST (via the runtime hook, so layout.ts keeps no import
+  // edge to spaces.ts), because store.activate now throws for a foreign tab.
+  const owner = runtime.store.spaceOfTab(id);
+  if (owner !== null && owner !== runtime.store.activeSpaceId) {
+    runtime.switchSpace?.(owner);
+  }
   runtime.store.activate(id);
   // Honor the remap contract: a tab whose view failed to be created or failed
   // to load is retried when the user next activates it. Recreate a missing
@@ -467,12 +473,12 @@ export function activateTab(id: string): void {
       createViewFor(tab, runtime.store.activeSpaceId);
     }
   } else if (runtime.failedLoads.has(id)) {
-    const tracked = runtime.views.get(id);
+    const view = runtime.views.get(id);
     const tab = runtime.store.list().find((t) => t.id === id);
-    if (tracked !== undefined && tab !== undefined) {
+    if (view !== undefined && tab !== undefined) {
       destroyView(id);
       runtime.failedLoads.delete(id);
-      createViewFor(tab, tracked.spaceId);
+      createViewFor(tab, runtime.store.spaceOfTab(id) ?? runtime.store.activeSpaceId);
     }
   }
   // Layout-aware reconcile: activating a pane tab re-focuses that pane; activating

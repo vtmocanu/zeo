@@ -25,6 +25,7 @@ import { sweepIdle } from "./tabs.js";
 import { unloadIdleViews, viewUnloadIntervalMs } from "./views.js";
 import { handleExternalLink, drainExternalLinks } from "./quick-browse.js";
 import { flushLayoutSave } from "./layout.js";
+import { migrateDefaultSession } from "./session-migration.js";
 
 // External-link handoff (PRD 7.2). macOS delivers deep links via open-url; a link
 // that arrives before whenReady has drained is queued and dispatched by the
@@ -78,6 +79,12 @@ app.whenReady().then(async () => {
   for (const p of runtime.store.profiles()) {
     installDownloadHandler(p.id);
   }
+
+  // One-shot migration of the legacy default Electron session onto the
+  // persist:default partition (PRD 9.4 §8). Resolves in every case (never rejects),
+  // so a migration failure is logged and startup proceeds regardless. Runs after
+  // the store is restored/rebased and before the window opens.
+  await migrateDefaultSession();
 
   buildMenu();
   createWindow(!restoredFromDisk);

@@ -80,7 +80,7 @@ export function createWindow(seed: boolean): void {
   runtime.win!.on("resize", () => {
     const active = runtime.store.activeTabId;
     if (active !== null) {
-      runtime.views.get(active)?.view.setBounds(viewBounds());
+      runtime.views.get(active)?.setBounds(viewBounds());
     }
     if (runtime.settingsOpen && runtime.settingsView !== null) {
       runtime.settingsView.setBounds(settingsBoundsRect());
@@ -121,7 +121,7 @@ export function createWindow(seed: boolean): void {
   });
 
   runtime.win!.on("closed", () => {
-    for (const { view } of runtime.views.values()) {
+    for (const view of runtime.views.values()) {
       if (!view.webContents.isDestroyed()) {
         view.webContents.close();
       }

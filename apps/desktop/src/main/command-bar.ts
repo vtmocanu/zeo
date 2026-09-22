@@ -20,8 +20,7 @@ import { searchHistory } from "./db.js";
 import { runtime, HISTORY_CANDIDATES } from "./state.js";
 import { pushCommandBar } from "./broadcast.js";
 import { layoutOverlay } from "./overlay.js";
-import { createTab, navigateTab } from "./tabs.js";
-import { createViewFor } from "./views.js";
+import { createTab, navigateTab, restoreTab } from "./tabs.js";
 import { switchSpace } from "./spaces.js";
 import { activateTab, doSplitWith } from "./layout.js";
 import { teardownQuickBrowse } from "./quick-browse.js";
@@ -190,7 +189,7 @@ export function closeCommandBar(): void {
   pushCommandBar();
   const activeTabId = runtime.store.activeTabId;
   if (activeTabId !== null && runtime.views.has(activeTabId)) {
-    runtime.views.get(activeTabId)?.view.webContents.focus();
+    runtime.views.get(activeTabId)?.webContents.focus();
   } else {
     runtime.win?.webContents.focus();
   }
@@ -272,10 +271,11 @@ export function moveSelectionCommandBar(delta: 1 | -1): void {
  * (`tab`/`archived-tab`/`space`) are handled here; the text kinds
  * (`navigate`/`search`) are dispatched by {@link acceptCommandBar} through
  * {@link submitCommandBar} (which closes the bar itself) before this runs, so
- * they must never reach here. A `tab` activates its owning space (if not already
- * active) then the tab; an `archived-tab` switches space, restores + materializes
- * the view (mirroring the tabsRestore handler), then activates; a `space` just
- * switches the active space and reconciles the visible view.
+ * they must never reach here. A `tab` calls {@link activateTab} (which switches to
+ * the tab's owning space via the runtime hook when it differs, then activates); an
+ * `archived-tab` calls {@link restoreTab} (owning-space switch + un-archive +
+ * materialize) then {@link activateTab}; a `space` just switches the active space
+ * and reconciles the visible view.
  */
 export function performSuggestion(s: Suggestion): void {
   switch (s.kind) {
@@ -290,25 +290,17 @@ export function performSuggestion(s: Suggestion): void {
         );
         return;
       }
-      switchSpace(s.spaceId);
-      // activateTab does store.activate + view reconcile (the cross-space
-      // hide/show transition, and a split collapse when the tab is not a pane) +
-      // broadcast.
+      // activateTab switches to the tab's owning space (via the runtime hook) when
+      // it differs from the active one, then does store.activate + the cross-space
+      // hide/show view reconcile (and a split collapse when the tab is not a pane)
+      // + broadcast.
       activateTab(s.tabId);
       return;
     }
     case "archived-tab": {
-      switchSpace(s.spaceId);
-      // After the space switch, store.list()/store.restore act on the now-active
-      // owning space. Restore and materialize the view like the tabsRestore
-      // handler before activating it.
-      runtime.store.restore(s.tabId);
-      if (!runtime.views.has(s.tabId)) {
-        const tab = runtime.store.list().find((t) => t.id === s.tabId);
-        if (tab !== undefined) {
-          createViewFor(tab, runtime.store.activeSpaceId);
-        }
-      }
+      // restoreTab switches to the tab's owning space (via the runtime hook),
+      // un-archives it, and materializes the view; activateTab then shows it.
+      restoreTab(s.tabId);
       activateTab(s.tabId);
       return;
     }

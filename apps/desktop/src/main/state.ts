@@ -58,18 +58,6 @@ export const BLOCKING_BROADCAST_MS = 250;
 /** Coalescing window for {@link scheduleDownloadsBroadcast}, in milliseconds. */
 export const DOWNLOADS_BROADCAST_MS = 250;
 
-/**
- * Live WebContentsView per tab id, tagged with the id of its OWNING space. The
- * active space's active tab is the single visible view; every other view (other
- * tabs in the active space, and all tabs in inactive spaces) stays alive but
- * hidden. The owning-space tag lets a space delete destroy exactly that space's
- * views.
- */
-export interface TrackedView {
-  view: WebContentsView;
-  spaceId: string;
-}
-
 type Timer = ReturnType<typeof setTimeout> | null;
 
 /**
@@ -77,7 +65,7 @@ type Timer = ReturnType<typeof setTimeout> | null;
  * writes. Its properties are reassigned in place (`runtime.win = ...`), so a
  * module never holds a stale copy of a reassigned binding; the collection fields
  * (Maps/Sets/arrays) are mutated in place via `.set`/`.add`/`.delete`/`.clear`/
- * `.push`. The seven hook fields are late-bound cross-module callbacks each owning
+ * `.push`. The eight hook fields are late-bound cross-module callbacks each owning
  * module registers at load, breaking an otherwise-cyclic value import.
  */
 export interface RuntimeState {
@@ -113,7 +101,11 @@ export interface RuntimeState {
   downloads: DownloadsState;
   downloadsBroadcastTimer: Timer;
   downloadErrorLogged: boolean;
-  views: Map<string, TrackedView>;
+  // Live WebContentsView per tab id. The active space's active tab is the single
+  // visible view; every other view (other tabs in the active space, and all tabs
+  // in inactive spaces) stays alive but hidden. Ownership is NOT tagged here — the
+  // store's `spaceOfTab` is the single source of truth for which space owns a tab.
+  views: Map<string, WebContentsView>;
   failedLoads: Set<string>;
   navSeq: Map<string, number>;
   hasRealTitle: Set<string>;
@@ -129,6 +121,7 @@ export interface RuntimeState {
   reservedFilenames: Set<string>;
   downloadSessionProfiles: Set<string>;
   onStateApplied: (() => void) | null;
+  switchSpace: ((id: string) => void) | null;
   executeCommand: ((id: CommandId) => void) | null;
   commandContextOf: (() => CommandContext) | null;
   closeFindSession: ((returnFocus?: boolean) => void) | null;
@@ -206,6 +199,7 @@ export const runtime: RuntimeState = {
   reservedFilenames: new Set(),
   downloadSessionProfiles: new Set(),
   onStateApplied: null,
+  switchSpace: null,
   executeCommand: null,
   commandContextOf: null,
   closeFindSession: null,

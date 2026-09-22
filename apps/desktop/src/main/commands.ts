@@ -19,7 +19,7 @@ import { layoutOverlay } from "./overlay.js";
 import { openCommandBar, closeCommandBar, recomputeSuggestions } from "./command-bar.js";
 import { createTab, closeTab, pinTab, unpinTab, moveTabToTop, moveTabToBottom, archiveTab } from "./tabs.js";
 import { createViewFor, setActive } from "./views.js";
-import { deleteSpace, switchSpace } from "./spaces.js";
+import { createSpaceAndActivate, deleteSpace } from "./spaces.js";
 import { setBlockingEnabled, allowSite, disallowSite } from "./blocking.js";
 import { openSettings, openSettingsAt, closeSettings } from "./settings.js";
 import { invalidateAllHistoryKeys, logHistoryError } from "./history.js";
@@ -54,7 +54,7 @@ export function commandContextOf(): CommandContext {
     };
   }
   const tab = runtime.store.list().find((t) => t.id === activeTabId);
-  const wc = runtime.views.get(activeTabId)?.view.webContents;
+  const wc = runtime.views.get(activeTabId)?.webContents;
   // Derive siteHost from the LIVE view URL — the same identity zoomActiveTab/
   // applyZoom mutate — so zoom command enablement and the mutation agree on the
   // host even during an in-flight navigation (tab.url updates before loadURL
@@ -100,14 +100,13 @@ const commandHandlers: Record<CommandId, () => void> = {
       clipboard.writeText(tab.url);
     }
   },
-  "tab.reload": () => runtime.views.get(runtime.store.activeTabId!)?.view.webContents.reload(),
+  "tab.reload": () => runtime.views.get(runtime.store.activeTabId!)?.webContents.reload(),
   "tab.back": () =>
-    runtime.views.get(runtime.store.activeTabId!)?.view.webContents.navigationHistory.goBack(),
+    runtime.views.get(runtime.store.activeTabId!)?.webContents.navigationHistory.goBack(),
   "tab.forward": () =>
-    runtime.views.get(runtime.store.activeTabId!)?.view.webContents.navigationHistory.goForward(),
+    runtime.views.get(runtime.store.activeTabId!)?.webContents.navigationHistory.goForward(),
   "space.new": () => {
-    const space = runtime.store.createSpace(defaultSpaceName(runtime.store.spaces()));
-    switchSpace(space.id);
+    createSpaceAndActivate(defaultSpaceName(runtime.store.spaces()));
   },
   // From the macOS menu bar with no window, ensureWindow recreates one but this
   // first send reaches an unloaded renderer and is dropped (a second invocation

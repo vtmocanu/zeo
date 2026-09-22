@@ -50,6 +50,8 @@ const api = {
   },
   spaces: {
     create: (name: string): Promise<Space> => ipcRenderer.invoke(IPC.spacesCreate, name),
+    createAndActivate: (name: string): Promise<Space> =>
+      ipcRenderer.invoke(IPC.spacesCreateAndActivate, name),
     rename: (id: string, name: string): Promise<void> =>
       ipcRenderer.invoke(IPC.spacesRename, id, name),
     delete: (id: string): Promise<void> => ipcRenderer.invoke(IPC.spacesDelete, id),
@@ -62,6 +64,8 @@ const api = {
   },
   profiles: {
     create: (name: string): Promise<Profile> => ipcRenderer.invoke(IPC.profilesCreate, name),
+    createAndAssign: (spaceId: string, name: string): Promise<Profile> =>
+      ipcRenderer.invoke(IPC.profilesCreateAndAssign, spaceId, name),
     rename: (id: string, name: string): Promise<void> =>
       ipcRenderer.invoke(IPC.profilesRename, id, name),
     delete: (id: string): Promise<void> => ipcRenderer.invoke(IPC.profilesDelete, id),

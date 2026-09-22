@@ -21,10 +21,10 @@ vi.mock("electron", () => ({
   nativeTheme: {},
 }));
 
+import type { WebContentsView } from "electron";
 import { SpaceStore, initialBlockingState } from "@zeo/core";
 import type { Space, Tab } from "@zeo/core";
 import { runtime } from "./state.js";
-import type { TrackedView } from "./state.js";
 import { forgetTab, openPopupAsTab } from "./tabs.js";
 
 describe("forgetTab", () => {
@@ -60,11 +60,8 @@ describe("forgetTab", () => {
       blockedByTab: { [tabId]: 3, [otherId]: 1 },
     };
     // A live view entry for the target id: forgetTab must NOT touch runtime.views
-    // (each caller owns its own destroyView).
-    const trackedView: TrackedView = {
-      view: {} as TrackedView["view"],
-      spaceId: "space-1",
-    };
+    // (each caller owns its own destroyView). The map now stores the bare view.
+    const trackedView = {} as WebContentsView;
     runtime.views.set(tabId, trackedView);
 
     forgetTab(tabId);
