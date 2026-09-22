@@ -386,11 +386,13 @@ export class SpaceStore {
   }
 
   moveToTop(id: string): void {
-    this.active().moveToTop(id);
+    this.ownerStoreOrThrow(id, `Cannot reorder unknown tab: ${id}`).moveToTop(id);
   }
 
   moveToBottom(id: string): void {
-    this.active().moveToBottom(id);
+    this.ownerStoreOrThrow(id, `Cannot reorder unknown tab: ${id}`).moveToBottom(
+      id,
+    );
   }
 
   archive(id: string): void {

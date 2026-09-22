@@ -324,10 +324,12 @@ describe("SpaceStore per-space tab isolation", () => {
     expect(() => store.restore("nope")).toThrow(/Cannot restore unknown tab/);
     expect(() => store.remove("nope")).toThrow(/Cannot remove unknown tab/);
     expect(() => store.reorder("nope", 0)).toThrow(/Cannot reorder unknown tab/);
+    expect(() => store.moveToTop("nope")).toThrow(/Cannot reorder unknown tab/);
+    expect(() => store.moveToBottom("nope")).toThrow(/Cannot reorder unknown tab/);
     expect(() => store.activate("nope")).toThrow(/Cannot activate unknown tab/);
   });
 
-  test("moveToTop/moveToBottom delegate to the active space's tab store", () => {
+  test("moveToTop/moveToBottom route to a tab's owning space", () => {
     const store = makeStore();
     const personalId = store.activeSpaceId;
     const a = store.create({ url: "https://a.test" });
@@ -339,15 +341,20 @@ describe("SpaceStore per-space tab isolation", () => {
     store.moveToBottom(c.id);
     expect(store.list().map((t) => t.id)).toEqual([a.id, b.id, c.id]);
 
-    // A tab id from another space is rejected by the active store.
+    // A tab owned by another (now-inactive) space still routes to its owner
+    // rather than throwing: Personal is [a, b, c] here, so moveToTop(a) is a
+    // no-op and moveToBottom(a) yields [b, c, a] — and the active space (Work)
+    // is never touched during the calls.
     const work = store.createSpace("Work");
     store.setActiveSpace(work.id);
-    expect(() => store.moveToTop(a.id)).toThrow(/unknown tab/i);
-    expect(() => store.moveToBottom(a.id)).toThrow(/unknown tab/i);
+    store.moveToTop(a.id);
+    expect(store.activeSpaceId).toBe(work.id);
+    store.moveToBottom(a.id);
+    expect(store.activeSpaceId).toBe(work.id);
 
-    // The move did not disturb Personal's order.
+    // Switch back to Personal: the reorder landed on the owning space.
     store.setActiveSpace(personalId);
-    expect(store.list().map((t) => t.id)).toEqual([a.id, b.id, c.id]);
+    expect(store.list().map((t) => t.id)).toEqual([b.id, c.id, a.id]);
   });
 });
 
@@ -457,6 +464,27 @@ describe("SpaceStore routed tab ops target a tab's owning space", () => {
 
     store.activate(a.id);
     expect(store.activeTabId).toBe(a.id);
+  });
+
+  test("moveToTop/moveToBottom route to the inactive owner (a context-menu action that outlives a space switch)", () => {
+    const store = makeStore();
+    const personalId = store.activeSpaceId;
+    store.create({ url: "https://p.test" }); // Personal stays active
+    const work = store.createSpace("Work");
+    // Two tabs in the inactive Work space so a reorder is visible.
+    const w1 = store.createInSpace(work.id, { url: "https://w1.test" });
+    const w2 = store.createInSpace(work.id, { url: "https://w2.test" });
+    expect(store.tabsOfSpace(work.id).map((t) => t.id)).toEqual([w1.id, w2.id]);
+
+    // A context-menu reorder on a Work tab fires while Personal is active; it
+    // routes to Work's own store and never disturbs the active space.
+    store.moveToTop(w2.id);
+    expect(store.tabsOfSpace(work.id).map((t) => t.id)).toEqual([w2.id, w1.id]);
+    expect(store.activeSpaceId).toBe(personalId);
+
+    store.moveToBottom(w2.id);
+    expect(store.tabsOfSpace(work.id).map((t) => t.id)).toEqual([w1.id, w2.id]);
+    expect(store.activeSpaceId).toBe(personalId);
   });
 });
 
