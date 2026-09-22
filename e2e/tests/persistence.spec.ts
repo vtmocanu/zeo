@@ -398,16 +398,34 @@ test.describe("PRD 9.5 window-state restore", () => {
   test("restores window size and position across relaunch", async () => {
     const dir = mkdtempSync(join(tmpdir(), "zeo-winstate-"));
 
-    // --- Launch #1: move + resize the (un-maximized) window, then persist. ---
+    // --- Launch #1: resize/reposition the (un-maximized) window, then persist. ---
+    // Derive the target frame from the live primary work area so it fits ENTIRELY
+    // on-screen: a hardcoded 900×700 is clamped down to the work-area height on a
+    // small display (e.g. the macOS CI runner's ~677px-tall work area), so
+    // resolveWindowBounds would legitimately shrink the restore and the exact
+    // round-trip below would fail. Capping at 900×700 minus a 120px margin (and
+    // flooring at the 640×400 minimum window size), inset 60px into the work area,
+    // guarantees no size-clamp and no position-drop on any display, so the frame
+    // round-trips losslessly.
     const first = await launch(dir);
+    const workArea = await first.app.evaluate(
+      ({ screen }) => screen.getPrimaryDisplay().workArea,
+    );
+    const width = Math.max(640, Math.min(900, workArea.width - 120));
+    const height = Math.max(400, Math.min(700, workArea.height - 120));
+    const x = workArea.x + 60;
+    const y = workArea.y + 60;
     try {
-      await first.app.evaluate(({ BrowserWindow }) => {
-        const w = BrowserWindow.getAllWindows()[0];
-        // Ensure the frame (not a maximized state) is what getNormalBounds saves;
-        // setBounds then fires move + resize, scheduling the debounced save.
-        w.unmaximize?.();
-        w.setBounds({ x: 120, y: 80, width: 900, height: 700 });
-      });
+      await first.app.evaluate(
+        ({ BrowserWindow }, frame) => {
+          const w = BrowserWindow.getAllWindows()[0];
+          // Ensure the frame (not a maximized state) is what getNormalBounds saves;
+          // setBounds then fires move + resize, scheduling the debounced save.
+          w.unmaximize?.();
+          w.setBounds(frame);
+        },
+        { x, y, width, height },
+      );
       await waitForDebouncedSave();
     } finally {
       // The close/before-quit flush also persists the current normal bounds.
@@ -420,11 +438,12 @@ test.describe("PRD 9.5 window-state restore", () => {
       const bounds = await second.app.evaluate(({ BrowserWindow }) =>
         BrowserWindow.getAllWindows()[0].getNormalBounds(),
       );
+      // The frame was chosen to fit the work area, so the restore is lossless;
       // ±1 absorbs platform rounding of window geometry.
-      expect(Math.abs(bounds.width - 900)).toBeLessThanOrEqual(1);
-      expect(Math.abs(bounds.height - 700)).toBeLessThanOrEqual(1);
-      expect(Math.abs(bounds.x - 120)).toBeLessThanOrEqual(1);
-      expect(Math.abs(bounds.y - 80)).toBeLessThanOrEqual(1);
+      expect(Math.abs(bounds.width - width)).toBeLessThanOrEqual(1);
+      expect(Math.abs(bounds.height - height)).toBeLessThanOrEqual(1);
+      expect(Math.abs(bounds.x - x)).toBeLessThanOrEqual(1);
+      expect(Math.abs(bounds.y - y)).toBeLessThanOrEqual(1);
     } finally {
       await second.app.close();
     }
