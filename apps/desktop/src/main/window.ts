@@ -1,8 +1,15 @@
-import { BrowserWindow, WebContentsView } from "electron";
+import { BrowserWindow, WebContentsView, screen } from "electron";
 import { join } from "node:path";
-import { titleForUrl, closeFind, reconcileLayout, SINGLE_LAYOUT } from "@zeo/core";
-import type { WindowLayout } from "@zeo/core";
-import { readWindowLayout } from "./db.js";
+import {
+  titleForUrl,
+  closeFind,
+  reconcileLayout,
+  SINGLE_LAYOUT,
+  resolveWindowBounds,
+  MIN_WINDOW_SIZE,
+} from "@zeo/core";
+import type { WindowLayout, WindowState } from "@zeo/core";
+import { readWindowLayout, readWindowState, writeWindowState } from "./db.js";
 import { runtime, moduleDir, DEFAULT_URL } from "./state.js";
 import { broadcast } from "./broadcast.js";
 import { closeCommandBar } from "./command-bar.js";
@@ -10,6 +17,54 @@ import { layoutOverlay } from "./overlay.js";
 import { applyLayout, sendDividerGeometry } from "./layout.js";
 import { viewBounds } from "./views.js";
 import { settingsBoundsRect } from "./settings.js";
+
+let windowStateSaveTimer: ReturnType<typeof setTimeout> | null = null;
+let windowStateSaveErrorLogged = false;
+const WINDOW_STATE_SAVE_DEBOUNCE_MS = 500;
+
+/** Persist the live window's normal (un-maximized) bounds + maximized flag.
+ *  Fullscreen is not persisted: getNormalBounds reports the pre-fullscreen frame. */
+function saveWindowState(): void {
+  const win = runtime.win;
+  if (win === null || win.isDestroyed()) {
+    return;
+  }
+  const bounds = win.getNormalBounds();
+  try {
+    writeWindowState({
+      x: bounds.x,
+      y: bounds.y,
+      width: bounds.width,
+      height: bounds.height,
+      maximized: win.isMaximized(),
+    });
+  } catch (err) {
+    if (!windowStateSaveErrorLogged) {
+      console.error("[window] failed to persist window state:", err);
+      windowStateSaveErrorLogged = true;
+    }
+  }
+}
+
+/** Debounced save behind resize/move/maximize/unmaximize. */
+function scheduleWindowStateSave(): void {
+  if (windowStateSaveTimer !== null) {
+    clearTimeout(windowStateSaveTimer);
+  }
+  windowStateSaveTimer = setTimeout(() => {
+    windowStateSaveTimer = null;
+    saveWindowState();
+  }, WINDOW_STATE_SAVE_DEBOUNCE_MS);
+}
+
+/** Synchronous save that cancels any pending debounce — for `close`/`before-quit`. */
+export function flushWindowStateSave(): void {
+  if (windowStateSaveTimer !== null) {
+    clearTimeout(windowStateSaveTimer);
+    windowStateSaveTimer = null;
+  }
+  saveWindowState();
+}
 
 /**
  * Creates the main window and its renderer. When `seed` is true and no open tab
@@ -19,9 +74,21 @@ import { settingsBoundsRect } from "./settings.js";
  * every other tab materializes on first activation.
  */
 export function createWindow(seed: boolean): void {
+  let savedWindowState: WindowState | null = null;
+  try {
+    savedWindowState = readWindowState();
+  } catch (err) {
+    console.error("[window] failed to read saved window state; using defaults:", err);
+  }
+  const resolved = resolveWindowBounds(
+    savedWindowState,
+    screen.getAllDisplays().map((d) => d.workArea),
+  );
+  const { maximized, ...frame } = resolved;
   runtime.win = new BrowserWindow({
-    width: 1280,
-    height: 800,
+    ...frame,
+    minWidth: MIN_WINDOW_SIZE.width,
+    minHeight: MIN_WINDOW_SIZE.height,
     webPreferences: {
       preload: join(moduleDir, "../preload/index.cjs"),
       contextIsolation: true,
@@ -29,6 +96,11 @@ export function createWindow(seed: boolean): void {
       nodeIntegration: false,
     },
   });
+  // getNormalBounds reports the pre-maximize frame, so restoring the frame then
+  // maximizing is correct — and this MUST run before the renderer load below.
+  if (maximized) {
+    runtime.win.maximize();
+  }
 
   // Dev vs prod must NOT use app.isPackaged: Playwright launches an unpackaged
   // build. electron-vite sets ELECTRON_RENDERER_URL only in dev.
@@ -78,6 +150,7 @@ export function createWindow(seed: boolean): void {
   });
 
   runtime.win!.on("resize", () => {
+    scheduleWindowStateSave();
     const active = runtime.store.activeTabId;
     if (active !== null) {
       runtime.views.get(active)?.setBounds(viewBounds());
@@ -103,6 +176,20 @@ export function createWindow(seed: boolean): void {
       applyLayout();
       sendDividerGeometry();
     }
+  });
+
+  // Persist window geometry behind a debounce on move/maximize/unmaximize (resize
+  // already schedules a save above). getNormalBounds always reports the
+  // pre-maximize frame, so the maximize/unmaximize saves capture the flag + the
+  // frame to restore to.
+  runtime.win!.on("move", scheduleWindowStateSave);
+  runtime.win!.on("maximize", scheduleWindowStateSave);
+  runtime.win!.on("unmaximize", scheduleWindowStateSave);
+
+  // Flush the geometry synchronously on close (DISTINCT from the `closed` teardown
+  // handler below): getNormalBounds is still valid here, before destruction.
+  runtime.win!.on("close", () => {
+    flushWindowStateSave();
   });
 
   // Window lost OS focus → dismiss the command bar.
@@ -203,3 +290,12 @@ export function createWindow(seed: boolean): void {
 // Register the createWindow hook: handleExternalLink (quick-browse.ts) calls it to
 // ensure a fallback main window exists before dispatching an external link.
 runtime.createWindow = createWindow;
+
+// ZEO_E2E-only: let the e2e pre-write a window_state row to exercise the
+// off-screen-restore path deterministically. Gated strictly on ZEO_E2E === "1";
+// a packaged build never defines it.
+if (process.env.ZEO_E2E === "1") {
+  (globalThis as Record<string, unknown>).__zeoWriteWindowState = (state: WindowState): void => {
+    writeWindowState(state);
+  };
+}

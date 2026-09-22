@@ -387,3 +387,86 @@ test.describe("PRD 3.4 relaunch persistence", () => {
     }
   });
 });
+
+// PRD 9.5 M3 — window bounds + maximized state persist across a relaunch, and a
+// saved position that is now off-screen (e.g. a detached display) is dropped so
+// the restored window is never lost off the visible desktop. Both tests run their
+// own two launches against a per-test temp userData dir (same shape as the PRD 3.4
+// suite above); app.evaluate runs in the MAIN process, so BrowserWindow/screen are
+// available. waitForDebouncedSave (1300ms) clears the 500ms window-state debounce.
+test.describe("PRD 9.5 window-state restore", () => {
+  test("restores window size and position across relaunch", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "zeo-winstate-"));
+
+    // --- Launch #1: move + resize the (un-maximized) window, then persist. ---
+    const first = await launch(dir);
+    try {
+      await first.app.evaluate(({ BrowserWindow }) => {
+        const w = BrowserWindow.getAllWindows()[0];
+        // Ensure the frame (not a maximized state) is what getNormalBounds saves;
+        // setBounds then fires move + resize, scheduling the debounced save.
+        w.unmaximize?.();
+        w.setBounds({ x: 120, y: 80, width: 900, height: 700 });
+      });
+      await waitForDebouncedSave();
+    } finally {
+      // The close/before-quit flush also persists the current normal bounds.
+      await first.app.close();
+    }
+
+    // --- Launch #2: the restored window opens with the saved frame. ---
+    const second = await launch(dir);
+    try {
+      const bounds = await second.app.evaluate(({ BrowserWindow }) =>
+        BrowserWindow.getAllWindows()[0].getNormalBounds(),
+      );
+      // ±1 absorbs platform rounding of window geometry.
+      expect(Math.abs(bounds.width - 900)).toBeLessThanOrEqual(1);
+      expect(Math.abs(bounds.height - 700)).toBeLessThanOrEqual(1);
+      expect(Math.abs(bounds.x - 120)).toBeLessThanOrEqual(1);
+      expect(Math.abs(bounds.y - 80)).toBeLessThanOrEqual(1);
+    } finally {
+      await second.app.close();
+    }
+  });
+
+  test("an off-screen saved position falls back to an on-screen window", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "zeo-winstate-"));
+
+    // --- Launch #1: pre-write an off-screen row, then die WITHOUT a graceful
+    // close so the close/before-quit flush cannot overwrite it with the live
+    // (on-screen) bounds. The db is created at schema v11 on this fresh dir. ---
+    const first = await launch(dir);
+    await first.app.evaluate(() => {
+      (
+        globalThis as unknown as { __zeoWriteWindowState: (s: unknown) => void }
+      ).__zeoWriteWindowState({ x: -5000, y: -5000, width: 900, height: 700, maximized: false });
+    });
+    // writeWindowState is synchronous (better-sqlite3), so the row is durable now.
+    // Kill abruptly so before-quit/close don't re-save the live (on-screen) bounds.
+    await first.app.evaluate(() => {
+      process.exit(0);
+    }).catch(() => {});
+    await first.app.close().catch(() => {});
+
+    // --- Launch #2: the off-screen position is dropped and the window is
+    // centered fully within the primary display's work area. ---
+    const second = await launch(dir);
+    try {
+      const bounds = await second.app.evaluate(({ BrowserWindow }) =>
+        BrowserWindow.getAllWindows()[0].getNormalBounds(),
+      );
+      const workArea = await second.app.evaluate(({ screen }) =>
+        screen.getPrimaryDisplay().workArea,
+      );
+      // The 900×700 size was on-screen-sized, so it is preserved; only the
+      // off-screen position is dropped, and Electron centers the window.
+      expect(bounds.x).toBeGreaterThanOrEqual(workArea.x);
+      expect(bounds.y).toBeGreaterThanOrEqual(workArea.y);
+      expect(bounds.x + bounds.width).toBeLessThanOrEqual(workArea.x + workArea.width);
+      expect(bounds.y + bounds.height).toBeLessThanOrEqual(workArea.y + workArea.height);
+    } finally {
+      await second.app.close();
+    }
+  });
+});
