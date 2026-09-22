@@ -240,4 +240,41 @@ describe("deleteSpace", () => {
     expect(h.reconcileAndApply).toHaveBeenCalledTimes(1);
     expect(h.broadcast).toHaveBeenCalledTimes(1);
   });
+
+  test("best-effort teardown: a forgetTab throw for one removed tab still forgets the rest and completes", () => {
+    // Same three-open-tab active space, but this time the OTHER best-effort call
+    // (forgetTab) throws, pinning its own try/catch — without it, deleteSpace
+    // would abort mid-loop.
+    const work = runtime.store.createSpace("Work");
+    const t1 = runtime.store.createInSpace(work.id, { url: "https://a.test" });
+    const t2 = runtime.store.createInSpace(work.id, { url: "https://b.test" });
+    const t3 = runtime.store.createInSpace(work.id, { url: "https://c.test" });
+    runtime.store.setActiveSpace(work.id);
+
+    // One removed tab's forgetTab throws; destroyView never throws here.
+    h.forgetTab.mockImplementation((id: string) => {
+      if (id === t2.id) {
+        throw new Error("forget boom");
+      }
+    });
+
+    expect(() => deleteSpace(work.id)).not.toThrow();
+
+    for (const id of [t1.id, t2.id, t3.id]) {
+      // destroyView ran for every removed tab (it precedes forgetTab and does not
+      // throw in this case)...
+      expect(h.destroyView).toHaveBeenCalledWith(id);
+      // ...and forgetTab was attempted for every removed tab, including the
+      // thrower, so a forgetTab failure does not abort the loop.
+      expect(h.forgetTab).toHaveBeenCalledWith(id);
+    }
+
+    // Logged exactly once, for the throwing tab, with its id in the message.
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    expect(String(errorSpy.mock.calls[0][0])).toContain(t2.id);
+
+    // The function still ran to completion despite the forgetTab failure.
+    expect(h.reconcileAndApply).toHaveBeenCalledTimes(1);
+    expect(h.broadcast).toHaveBeenCalledTimes(1);
+  });
 });
