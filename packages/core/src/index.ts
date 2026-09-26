@@ -210,3 +210,23 @@ export {
   fitAndCenterInWorkArea,
 } from "./window-state.js";
 export type { WindowState, Rect } from "./window-state.js";
+export {
+  SPACE_HUES,
+  HUE_DEFINITIONS,
+  MIGRATION_HUE_ORDER,
+  SEMANTIC_TOKENS,
+  oklchToRgb,
+  contrastRatio,
+  toHex,
+  normalizeTheme,
+  themeReport,
+  themeTokens,
+} from "./theme.js";
+export type {
+  SpaceHue,
+  SpaceTheme,
+  Appearance,
+  SemanticToken,
+  Rgb,
+  ThemeReport,
+} from "./theme.js";
