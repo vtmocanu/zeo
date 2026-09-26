@@ -22,9 +22,12 @@ const FIXTURE_SHA256 = "0".repeat(64);
 
 function fail(message) {
   console.error(message);
-  process.exit(1);
+  process.exitCode = 1;
 }
 
+// Returns without throwing in every case; failure is signalled via
+// process.exitCode so callers can rely on cleanup (a `finally` block) always
+// running instead of being skipped by a process.exit() inside the try.
 function main() {
   // 1. Run the render script's unit tests.
   const testRun = spawnSync(process.execPath, ["--test", testScript], { stdio: "inherit" });
@@ -37,8 +40,7 @@ function main() {
   // temporary path, and assert it succeeds with no leftover placeholder.
   const version = JSON.parse(readFileSync(rootPackageJsonPath, "utf8")).version;
   const url =
-    `https://github.com/vtmocanu/zeo/releases/download/v${version}/` +
-    `zeo-${version}-arm64.dmg`;
+    `https://github.com/vtmocanu/zeo/releases/download/v${version}/` + `zeo-${version}-arm64.dmg`;
 
   let tmpDir;
   try {
@@ -83,7 +85,6 @@ function main() {
     }
 
     console.log("cask:check passed.");
-    process.exit(0);
   } finally {
     if (tmpDir) {
       rmSync(tmpDir, { recursive: true, force: true });

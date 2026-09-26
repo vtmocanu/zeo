@@ -66,7 +66,10 @@ url missing the version, or template placeholder drift), then pushes
 message `zeo <version>`. It is idempotent — if the tap already carries an
 identical cask for that version it commits and pushes nothing — fails fast on
 a missing `HOMEBREW_TAP_TOKEN`, and fails (never force-pushes) if the tap
-advanced concurrently. It never writes to this repository.
+advanced concurrently. It never writes to this repository. It does not
+consume the `release` job's `version` output, deriving its own version from
+the tag (`${GITHUB_REF_NAME#v}`) instead, which `release` already verified
+matches `package.json`.
 
 Note: the `publish-cask` job is delivered only in this template; per #20 it
 still needs a human to commit `.github/workflows/release.yml` before it runs,
@@ -80,11 +83,16 @@ Homebrew is installed, runs `brew style --cask` on the rendered cask. When
 Homebrew is not installed it prints "Homebrew not found; skipping brew style
 check" and exits `0`.
 
+`brew audit` is not run because current Homebrew refuses to audit a cask by
+file path (it must live in a tap); `brew style --cask` is the check that
+accepts a path.
+
 ## Hardening to consider before activating
 
-The template is the workflow as specified by PRD 8.1. A security review of it
-suggested these changes for the human who commits it (none are applied, so the
-committed file matches the spec unless you choose otherwise):
+The `release` job is the workflow as specified by PRD 8.1, and `publish-cask`
+is as specified by PRD 8.2. A security review suggested these changes for the
+human who commits it (none are applied, so the committed file matches the
+specs unless you choose otherwise):
 
 - **Split build from publish.** Dependency code (install, lint, build, test,
   package) runs in the same job that later hands `GH_TOKEN` (contents: write)
@@ -93,7 +101,9 @@ committed file matches the spec unless you choose otherwise):
   `SHA256SUMS`, and runs `gh release create`, keeps the write token away from
   third-party code.
 - **Pin actions to commit SHAs** (with a version comment) rather than moving
-  tags such as `@v7`, at least in this write-scoped workflow.
+  tags such as `@v7`, at least in this write-scoped workflow — this applies to
+  `publish-cask` too, which uses `actions/checkout@v7` and
+  `actions/setup-node@v7` while holding `HOMEBREW_TAP_TOKEN`.
 - **Pass the version through `env:`** in the "Generate SHA256SUMS" step
   (`"zeo-$VERSION-arm64.dmg"`) like the other steps, instead of interpolating
   `${{ steps.version.outputs.version }}` into the script.
@@ -103,9 +113,19 @@ committed file matches the spec unless you choose otherwise):
   packaged app keeps Electron defaults (e.g. `ELECTRON_RUN_AS_NODE`). Consider
   disabling `runAsNode`, `enableNodeOptionsEnvironmentVariable`, and
   `enableNodeCliInspectArguments`.
-- `publish-cask` already runs with `contents: read` on this repo, applying the
-  split-build-from-publish pattern above to the cask job, so no further change
-  is needed there.
+- `publish-cask` already runs with `contents: read` on this repo, so the
+  split-build-from-publish pattern above is not needed there, but two more
+  cask-specific gaps remain:
+  - **The tap token lives in the clone URL.** "Publish to the tap" clones
+    `https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/vtmocanu/homebrew-tap.git`,
+    so the token persists in `tap/.git/config` until the job ends, where a
+    later (or malicious) post-step of `checkout`/`setup-node` could read it.
+    Authenticate with an `http.extraheader` or a credential helper instead of
+    embedding it in the URL, or `rm -rf tap` at the end of the publish step.
+  - **Render before the token step.** "Render the cask" runs repo code
+    (`packaging/homebrew/render.mjs`) in the same job, before
+    `HOMEBREW_TAP_TOKEN` is used. For stronger isolation, render in a separate
+    job that uploads `zeo.rb` as an artifact to a token-only publish job.
 
 ## Local packaging on macOS
 

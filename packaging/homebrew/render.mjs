@@ -4,9 +4,9 @@
 // stdout). Runs standalone in the release workflow with only Node on PATH: no
 // pnpm install, no monorepo build, no import from @zeo/core or any workspace
 // package.
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync, realpathSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import process from "node:process";
 
 const TOKENS = ["{{VERSION}}", "{{SHA256}}", "{{URL}}"];
@@ -72,12 +72,33 @@ export function validate({ version, url, sha256, expectedVersion, template, rend
     throw new RenderError(2, "--sha256 must be exactly 64 lowercase hexadecimal characters");
   }
 
+  // Code 3: version must be a well-formed semver-ish string, checked before
+  // the equality comparison so a malformed value is rejected with a clear
+  // "malformed version" message rather than a confusing mismatch message.
+  if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version)) {
+    throw new RenderError(3, `--version ${version} is malformed`);
+  }
+
   // Code 3: version must equal the root package.json version.
   if (version !== expectedVersion) {
     throw new RenderError(
       3,
       `--version ${version} does not match package.json version ${expectedVersion}`,
     );
+  }
+
+  // Code 4: url must be a safe Ruby double-quoted string literal body: it
+  // must start with "https://" and must not contain any character that could
+  // break out of the literal or be interpreted by Ruby/shell (quote, hash,
+  // backslash, dollar, backtick, whitespace, or control characters).
+  if (!url.startsWith("https://")) {
+    throw new RenderError(4, `--url ${url} must start with https://`);
+  }
+  // Deliberately matching control characters (\x00-\x1f, \x7f) as part of the
+  // unsafe-character set.
+  // eslint-disable-next-line no-control-regex
+  if (/[\s"#\\$`\x00-\x1f\x7f]/.test(url)) {
+    throw new RenderError(4, `--url ${url} contains an unsafe character`);
   }
 
   // Code 4: url must contain version as a delimited token (not merely as a
@@ -111,8 +132,11 @@ function parseArgs(argv) {
       throw new Error(`unknown or misplaced argument: ${arg}`);
     }
     const value = argv[i + 1];
-    if (value === undefined) {
+    if (value === undefined || value.trim() === "") {
       throw new Error(`${arg} requires a value`);
+    }
+    if (value.startsWith("--")) {
+      throw new Error(`${arg} is missing a value (got flag-like ${value} instead)`);
     }
     result[flagToKey[arg]] = value;
     i += 2;
@@ -121,9 +145,7 @@ function parseArgs(argv) {
 }
 
 function usage() {
-  return (
-    "Usage: node render.mjs --version <version> --url <url> --sha256 <sha256> [--out <path>]"
-  );
+  return "Usage: node render.mjs --version <version> --url <url> --sha256 <sha256> [--out <path>]";
 }
 
 export function main() {
@@ -186,7 +208,7 @@ export function main() {
 const isMain = (() => {
   if (!process.argv[1]) return false;
   try {
-    return import.meta.url === pathToFileURL(process.argv[1]).href;
+    return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
   } catch {
     return false;
   }
