@@ -101,6 +101,15 @@
   font-size: 11px;
 }
 
+/* On the accent-soft selected row the popover-secondary ink drops below 4.5:1,
+   so the selected row's secondary text, icon and accelerator take the full
+   popover ink. */
+.command-bar__row--selected .command-bar__row-secondary,
+.command-bar__row--selected .command-bar__row-icon,
+.command-bar__row--selected .command-bar__row-accel {
+  color: var(--ink-popover);
+}
+
 /* The command accelerator, pushed to the row's right edge (the row is a flex
    container). Muted like the secondary text; monospace keeps the macOS glyphs
    crisp and evenly aligned across rows. */

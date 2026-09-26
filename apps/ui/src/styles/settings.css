@@ -144,9 +144,11 @@
   color: var(--ink-primary);
 }
 
+/* Raw --danger sits just under 4.5:1 on the light window; pulling it toward the
+   primary ink (as the danger button's label does) clears AA in both appearances. */
 .settings__error {
   margin: 0 0 10px;
-  color: var(--danger);
+  color: color-mix(in srgb, var(--danger) 70%, var(--ink-primary));
   font-size: 12px;
 }
 

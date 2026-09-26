@@ -5,14 +5,15 @@
 // tokens.css may hold literal colors. Scans every *.css file under the target
 // directory (default apps/ui/src/styles, or the first CLI argument) except
 // files named tokens.css, and reports each hex color, color function call
-// (rgb, rgba, hsl, hsla, oklch, color) and named color. `transparent`,
-// `currentColor` and `inherit` are allowed; `color-mix(` is allowed as long as
-// its arguments are tokens. Comments are ignored.
+// (rgb, rgba, hsl, hsla, hwb, lab, lch, oklab, oklch, color), named color and
+// CSS system color (Canvas, ButtonText, ...). `transparent`, `currentColor` and
+// `inherit` are allowed; `color-mix(` is allowed as long as its arguments are
+// tokens. Comments are ignored.
 //
 // Usage: node scripts/check-css-tokens.mjs [dir]
-// Exit code 1 on any finding, 0 otherwise.
+// Exit code 1 on any finding, 0 otherwise, 2 when the target is not a directory.
 
-import { readdirSync, readFileSync } from "node:fs";
+import { readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -22,11 +23,15 @@ const target = process.argv[2] ? resolve(process.argv[2]) : join(repoRoot, "apps
 const HEX = /#(?:[0-9a-f]{8}|[0-9a-f]{6}|[0-9a-f]{3,4})\b/gi;
 // `\b` before `color(` keeps `color-mix(` and `accent-color:` out: the former
 // has `-mix` before the paren, the latter no paren at all.
-const FUNC = /\b(?:rgba?|hsla?|oklch|color)\(/gi;
-// CSS named colors (the full CSS Color 4 keyword list), excluding the allowed
-// `transparent`, `currentColor` and `inherit`.
+const FUNC = /\b(?:rgba?|hsla?|hwb|lab|lch|oklab|oklch|color)\(/gi;
+// CSS named colors (the full CSS Color 4 keyword list) and system colors,
+// excluding the allowed `transparent`, `currentColor` and `inherit`. Compared
+// lowercased, as CSS keywords are case-insensitive.
 const NAMED_COLORS = new Set(
   (
+    "canvas canvastext buttonface buttontext field fieldtext highlight " +
+    "highlighttext linktext visitedtext activetext graytext mark marktext " +
+    "accentcolor accentcolortext selecteditem selecteditemtext " +
     "aliceblue antiquewhite aqua aquamarine azure beige bisque black " +
     "blanchedalmond blue blueviolet brown burlywood cadetblue chartreuse " +
     "chocolate coral cornflowerblue cornsilk crimson cyan darkblue darkcyan " +
@@ -89,7 +94,9 @@ function valueText(line) {
   for (const part of body.split(";")) {
     const declaration = /^\s*[\w-]+\s*:(.*)$/.exec(part);
     if (declaration) values.push(declaration[1]);
-    else if (!opened && !line.includes("}") && /^\s+\S/.test(part)) values.push(part);
+    // A continuation line may also close the rule (`    red; }`): only the
+    // text before the `}` is in `body`, so it is still a value.
+    else if (!opened && /^\s+\S/.test(part)) values.push(part);
   }
   return values.join(" ");
 }
@@ -108,6 +115,17 @@ function findings(file) {
     }
   });
   return found;
+}
+
+let isDirectory = false;
+try {
+  isDirectory = statSync(target).isDirectory();
+} catch {
+  // A missing path is reported below, like a path that is not a directory.
+}
+if (!isDirectory) {
+  console.error(`check-css-tokens: not a directory: ${target}`);
+  process.exit(2);
 }
 
 let failures = 0;
