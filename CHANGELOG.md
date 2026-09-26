@@ -9,6 +9,28 @@ milestone, a minor bump only for very large breakthroughs.
 
 ## [Unreleased]
 
+## [0.0.28] - 2026-09-26
+
+### Added
+
+- Theme tokens: `themeTokens()` in `@zeo/core` maps a space theme (one hue or
+  a two-stop gradient, plus an intensity) and the light or dark appearance to
+  the full set of semantic color tokens. It picks text colors that keep 4.5:1
+  contrast on every window and popover surface, and 3:1 for the accent. A
+  600-case sweep over every hue, pair and intensity checks those floors.
+- `pnpm lint` now rejects literal colors (hex, `rgb()`, `hsl()`, `oklch()`,
+  named colors, ...) in the UI stylesheets; only `tokens.css` may hold them.
+
+### Changed
+
+- zeo now follows the macOS appearance: every surface (sidebar, command bar,
+  find bar, settings, quick-browse) renders light in light mode and dark in
+  dark mode, and re-colors live when the system appearance changes.
+- The dark appearance moves to a new neutral palette with an iris accent, and
+  the UI font is the system font through `-apple-system`.
+- The renderer's single `App.css` is split into one stylesheet per component,
+  every color read from a semantic token. Layout is unchanged.
+
 ## [0.0.27] - 2026-09-26
 
 ### Added
