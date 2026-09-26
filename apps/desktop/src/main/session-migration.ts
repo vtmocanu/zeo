@@ -10,10 +10,9 @@ import {
  * One-shot migration of the legacy default Electron session onto the default
  * profile's partition (PRD 9.4 §8). Early builds ran tabs on the implicit default
  * session; spaces now always run on an explicit profile partition. The target is
- * derived from the store's default profile (`persist:<defaultProfileId>`) rather
- * than a hard-coded literal, so a renamed or re-seeded default profile still
- * receives the cookies. This copies every cookie from the old default session into
- * that partition, then clears those cookies from the old session.
+ * derived from the store's default profile id (`persist:<defaultProfileId>`)
+ * rather than a hard-coded literal. This copies every cookie from the old default
+ * session into that partition, then clears those cookies from the old session.
  *
  * The whole body is wrapped in a single try/catch so the function RESOLVES in
  * every case (it never rejects) — a migration failure must never block startup:

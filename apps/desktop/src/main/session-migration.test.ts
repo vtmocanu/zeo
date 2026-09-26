@@ -245,6 +245,36 @@ describe("migrateDefaultSession", () => {
     expect(errorSpy).toHaveBeenCalledTimes(1);
   });
 
+  test("a host-only target cookie does not shadow a same-named domain cookie from the source", async () => {
+    // Same name and path, different scope: host-only `example.com` vs the
+    // subdomain-wide `.example.com` are distinct cookies, so the source one is copied.
+    h.targetCookiesGet.mockResolvedValue([cookie({ name: "a", domain: "example.com" })]);
+    h.defaultCookiesGet.mockResolvedValue([cookie({ name: "a", domain: ".example.com" })]);
+
+    await expect(migrateDefaultSession("default")).resolves.toBeUndefined();
+
+    expect(h.targetCookiesSet).toHaveBeenCalledTimes(1);
+    expect(h.targetCookiesSet.mock.calls[0][0]).toMatchObject({
+      name: "a",
+      domain: ".example.com",
+    });
+    expect(h.defaultClearStorageData).toHaveBeenCalledTimes(1);
+    expect(h.writeMarker).toHaveBeenCalledTimes(1);
+  });
+
+  test("a target cookies.get rejection resolves without copying, clearing, or writing the marker", async () => {
+    h.defaultCookiesGet.mockResolvedValue([cookie()]);
+    h.targetCookiesGet.mockRejectedValue(new Error("target get failed"));
+
+    await expect(migrateDefaultSession("default")).resolves.toBeUndefined();
+
+    expect(h.targetCookiesSet).not.toHaveBeenCalled();
+    expect(h.defaultClearStorageData).not.toHaveBeenCalled();
+    // The marker stays null, so the next launch retries the migration.
+    expect(h.writeMarker).not.toHaveBeenCalled();
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+  });
+
   test("a write-marker failure after a successful clear resolves; the next call retries the marker over an empty source", async () => {
     h.defaultCookiesGet.mockResolvedValue([cookie()]);
     // The clear succeeded, but stamping the marker throws.
