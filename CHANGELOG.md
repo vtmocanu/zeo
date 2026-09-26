@@ -11,8 +11,9 @@ milestone, a minor bump only for very large breakthroughs.
 
 ### Added
 
-- zeo now checks GitHub Releases for a newer version: shortly after launch and
-  automatically at most once a day, plus on demand with **Check for Updates**
+- zeo now checks GitHub Releases for a newer version: a few seconds after launch
+  when the last check is over a day old, then at most once a day (automatic
+  checks run in packaged builds only), plus on demand with **Check for Updates**
   or **Settings → General → Check now**. A newer release shows a sidebar banner;
   Homebrew installs are told to run `brew upgrade --cask zeo` (with a Copy
   button) and direct installs get a button that opens the release page. A

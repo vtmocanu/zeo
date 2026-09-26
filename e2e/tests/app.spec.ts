@@ -3405,6 +3405,9 @@ test.describe("zeo desktop app", () => {
     // view.focusOtherPane / view.swapPanes need split mode, so they do NOT appear.
     "view.split",
     "view.splitChoose",
+    // PRD 9.6 — update.check is always enabled and appended after the view.*
+    // rows, so it is now the last registry row and closes out the list.
+    "update.check",
   ];
 
   // §5 bullet 1 — commands mode opens empty, lists only enabled command rows in
