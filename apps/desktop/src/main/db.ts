@@ -434,23 +434,36 @@ export function readUpdateSettings(): UpdateSettingsRow {
   };
 }
 
+/** The three meta columns {@link writeMetaColumn} is allowed to write. */
+type UpdateMetaColumn = "updateCheckEnabled" | "updateDismissedVersion" | "updateLastCheckedAt";
+
 /** Persists one meta column, throwing (like {@link writeQuickBrowseExternal}) when the id=0 row is missing. */
-function writeMetaColumn(column: string, value: number | string | null, fnName: string): void {
+function writeMetaColumn(column: UpdateMetaColumn, value: number | string | null, fnName: string): void {
   const info = requireDb().prepare(`UPDATE meta SET ${column}=? WHERE id=0`).run(value);
   if (info.changes === 0) throw new Error(`${fnName}: no meta row (id=0) to update`);
 }
 
-/** Persists the update-check-enabled flag. Throws when the database is not open. */
+/**
+ * Persists the update-check-enabled flag. Throws when the database is not
+ * open, or when there is no meta row (id=0) to update.
+ */
 export function writeUpdateCheckEnabled(enabled: boolean): void {
   writeMetaColumn("updateCheckEnabled", enabled ? 1 : 0, "writeUpdateCheckEnabled");
 }
 
-/** Persists the dismissed release version (`null` clears it). Throws when the database is not open. */
+/**
+ * Persists the dismissed release version (`null` clears it). Throws when the
+ * database is not open, or when there is no meta row (id=0) to update.
+ */
 export function writeUpdateDismissedVersion(version: string | null): void {
   writeMetaColumn("updateDismissedVersion", version, "writeUpdateDismissedVersion");
 }
 
-/** Persists the last successful check time. Throws when the database is not open. */
+/**
+ * Persists the last ATTEMPTED check time — stamped on every check, including
+ * a failed one, not only a successful one. Throws when the database is not
+ * open, or when there is no meta row (id=0) to update.
+ */
 export function writeUpdateLastCheckedAt(at: number): void {
   writeMetaColumn("updateLastCheckedAt", at, "writeUpdateLastCheckedAt");
 }

@@ -36,24 +36,48 @@ vi.mock("./db.js", () => ({
 
 import { runtime } from "./state.js";
 import {
+  MAX_FEED_BYTES,
+  UPDATE_TIMER_TICK_MS,
   checkForUpdates,
   dismissUpdate,
+  feedUrl,
   initUpdateState,
   openRelease,
   setUpdateCheckEnabled,
+  startUpdateChecks,
+  startupDelayMs,
 } from "./update.js";
+import {
+  UPDATE_CHECK_INTERVAL_MS,
+  UPDATE_CHECK_STARTUP_DELAY_MS,
+  UPDATE_FEED_URL,
+} from "@zeo/core";
 
-/** A JSON `Response`-shaped fetch result, `ok` derived from `status`. */
-function jsonResponse(status: number, body: unknown): {
-  ok: boolean;
-  status: number;
-  json: () => Promise<unknown>;
-} {
-  return {
-    ok: status >= 200 && status < 300,
-    status,
-    json: () => Promise.resolve(body),
-  };
+/** A JSON `Response`, `ok`/streaming all real (backed by the platform `Response`). */
+function jsonResponse(status: number, body: unknown): Response {
+  return new Response(JSON.stringify(body), { status });
+}
+
+/**
+ * A `Response` whose declared `Content-Length` header exceeds
+ * {@link MAX_FEED_BYTES}, regardless of the actual (small) body — exercises
+ * the early, no-body-read rejection path.
+ */
+function oversizedByHeaderResponse(): Response {
+  return new Response("{}", {
+    status: 200,
+    headers: { "content-length": String(MAX_FEED_BYTES + 1) },
+  });
+}
+
+/**
+ * A `Response` whose ACTUAL body exceeds {@link MAX_FEED_BYTES} with no
+ * (accurate) declared Content-Length — exercises the streaming byte-count
+ * rejection path.
+ */
+function oversizedByBodyResponse(): Response {
+  const body = "a".repeat(MAX_FEED_BYTES + 1);
+  return new Response(body, { status: 200 });
 }
 
 const release = (tag: string) => ({
@@ -107,6 +131,9 @@ describe("initUpdateState", () => {
     expect(runtime.update.enabled).toBe(false);
     expect(runtime.update.lastCheckedAt).toBe(999);
     expect(runtime.updateDismissedVersion).toBe("1.2.3");
+    // Seeded from the SAME readUpdateSettings() read (not re-read elsewhere).
+    expect(runtime.settings.updateCheckEnabled).toBe(false);
+    expect(h.readUpdateSettings).toHaveBeenCalledTimes(1);
   });
 
   test("a read failure is logged and leaves the seeded defaults in place", () => {
@@ -161,7 +188,7 @@ describe("checkForUpdates — coalescing", () => {
     const first = checkForUpdates("manual");
     const second = checkForUpdates("manual");
     expect(second).toBe(first);
-    resolveFetch(jsonResponse(200, { kind: "none" }));
+    resolveFetch(jsonResponse(200, { ...release("v0.0.1"), prerelease: true }));
     return first;
   });
 });
@@ -182,10 +209,19 @@ describe("checkForUpdates — error paths", () => {
     expect(runtime.update.checking).toBe(false);
   });
 
-  test("a rejected fetch sets 'network error'", async () => {
+  test("a rejected fetch sets 'network error' and leaves available/checking sane", async () => {
+    runtime.update = {
+      ...runtime.update,
+      available: { version: "9.9.9", url: "https://example.com/releases/v9.9.9" },
+    };
     h.fetch.mockRejectedValue(new Error("boom"));
     await checkForUpdates("manual");
     expect(runtime.update.error).toBe("network error");
+    expect(runtime.update.available).toEqual({
+      version: "9.9.9",
+      url: "https://example.com/releases/v9.9.9",
+    });
+    expect(runtime.update.checking).toBe(false);
   });
 
   test("a malformed feed sets 'malformed feed' and leaves available unchanged", async () => {
@@ -203,6 +239,10 @@ describe("checkForUpdates — error paths", () => {
   });
 
   test("a valid feed with no eligible release clears available and error", async () => {
+    runtime.update = {
+      ...runtime.update,
+      available: { version: "9.9.9", url: "https://example.com/releases/v9.9.9" },
+    };
     h.fetch.mockResolvedValue(jsonResponse(200, { ...release("v0.0.1"), prerelease: true }));
     await checkForUpdates("manual");
     expect(runtime.update.available).toBeNull();
@@ -233,6 +273,75 @@ describe("checkForUpdates — error paths", () => {
     // A second failure in the same launch does not log again.
     await checkForUpdates("manual");
     expect(errorSpy).toHaveBeenCalledTimes(1);
+  });
+
+  test("an over-cap Content-Length is rejected as malformed without reading the body", async () => {
+    runtime.update = {
+      ...runtime.update,
+      available: { version: "9.9.9", url: "https://example.com/releases/v9.9.9" },
+    };
+    h.fetch.mockResolvedValue(oversizedByHeaderResponse());
+    await checkForUpdates("manual");
+    expect(runtime.update.error).toBe("malformed feed");
+    expect(runtime.update.available).toEqual({
+      version: "9.9.9",
+      url: "https://example.com/releases/v9.9.9",
+    });
+  });
+
+  test("an over-cap body with no accurate Content-Length is rejected as malformed (streamed count)", async () => {
+    runtime.update = {
+      ...runtime.update,
+      available: { version: "9.9.9", url: "https://example.com/releases/v9.9.9" },
+    };
+    h.fetch.mockResolvedValue(oversizedByBodyResponse());
+    await checkForUpdates("manual");
+    expect(runtime.update.error).toBe("malformed feed");
+    expect(runtime.update.available).toEqual({
+      version: "9.9.9",
+      url: "https://example.com/releases/v9.9.9",
+    });
+  });
+
+  test("a JSON parse error is a network error, not malformed", async () => {
+    h.fetch.mockResolvedValue(new Response("not json", { status: 200 }));
+    await checkForUpdates("manual");
+    expect(runtime.update.error).toBe("network error");
+  });
+
+  test("dismissing during an in-flight check is not resurrected by a later error response", async () => {
+    runtime.update = {
+      ...runtime.update,
+      available: { version: "9.9.9", url: "https://example.com/releases/v9.9.9" },
+    };
+    let resolveFetch!: (value: Response) => void;
+    h.fetch.mockReturnValue(
+      new Promise<Response>((resolve) => {
+        resolveFetch = resolve;
+      }),
+    );
+    const promise = checkForUpdates("manual");
+    await dismissUpdate();
+    expect(runtime.update.available).toBeNull();
+
+    resolveFetch(jsonResponse(500, {}));
+    await promise;
+    expect(runtime.update.available).toBeNull();
+  });
+
+  test("updateDecision reads updateDismissedVersion as of completion, not at the start of the check", async () => {
+    let resolveFetch!: (value: Response) => void;
+    h.fetch.mockReturnValue(
+      new Promise<Response>((resolve) => {
+        resolveFetch = resolve;
+      }),
+    );
+    const promise = checkForUpdates("manual");
+    // Dismissed while the fetch is still in flight.
+    runtime.updateDismissedVersion = "2.0.0";
+    resolveFetch(jsonResponse(200, release("v2.0.0")));
+    await promise;
+    expect(runtime.update.available).toBeNull();
   });
 });
 
@@ -295,19 +404,28 @@ describe("openRelease", () => {
     expect(h.openExternal).not.toHaveBeenCalled();
   });
 
-  test("opens an https release url", async () => {
+  test("opens an https github.com release url", async () => {
     runtime.update = {
       ...runtime.update,
-      available: { version: "9.9.9", url: "https://example.com/releases/v9.9.9" },
+      available: { version: "9.9.9", url: "https://github.com/vtmocanu/zeo/releases/v9.9.9" },
     };
     await openRelease();
-    expect(h.openExternal).toHaveBeenCalledWith("https://example.com/releases/v9.9.9");
+    expect(h.openExternal).toHaveBeenCalledWith("https://github.com/vtmocanu/zeo/releases/v9.9.9");
   });
 
   test("a non-https url is a silent no-op", async () => {
     runtime.update = {
       ...runtime.update,
-      available: { version: "9.9.9", url: "http://example.com/releases/v9.9.9" },
+      available: { version: "9.9.9", url: "http://github.com/releases/v9.9.9" },
+    };
+    await openRelease();
+    expect(h.openExternal).not.toHaveBeenCalled();
+  });
+
+  test("a non-github.com https url is a silent no-op", async () => {
+    runtime.update = {
+      ...runtime.update,
+      available: { version: "9.9.9", url: "https://example.com/releases/v9.9.9" },
     };
     await openRelease();
     expect(h.openExternal).not.toHaveBeenCalled();
@@ -320,5 +438,80 @@ describe("openRelease", () => {
     };
     await openRelease();
     expect(h.openExternal).not.toHaveBeenCalled();
+  });
+});
+
+describe("feedUrl / startupDelayMs — overrides gated on ZEO_E2E", () => {
+  test("feedUrl ignores ZEO_UPDATE_FEED_URL without ZEO_E2E=1", () => {
+    process.env.ZEO_UPDATE_FEED_URL = "https://example.com/other-feed";
+    expect(feedUrl()).toBe(UPDATE_FEED_URL);
+  });
+
+  test("feedUrl honors the override under ZEO_E2E=1", () => {
+    process.env.ZEO_E2E = "1";
+    process.env.ZEO_UPDATE_FEED_URL = "https://example.com/other-feed";
+    expect(feedUrl()).toBe("https://example.com/other-feed");
+  });
+
+  test("startupDelayMs ignores ZEO_UPDATE_STARTUP_DELAY_MS without ZEO_E2E=1", () => {
+    process.env.ZEO_UPDATE_STARTUP_DELAY_MS = "500";
+    expect(startupDelayMs()).toBe(UPDATE_CHECK_STARTUP_DELAY_MS);
+  });
+
+  test("startupDelayMs falls back to the constant on an invalid override, even under ZEO_E2E=1", () => {
+    process.env.ZEO_E2E = "1";
+    process.env.ZEO_UPDATE_STARTUP_DELAY_MS = "not-a-number";
+    expect(startupDelayMs()).toBe(UPDATE_CHECK_STARTUP_DELAY_MS);
+
+    process.env.ZEO_UPDATE_STARTUP_DELAY_MS = "-5";
+    expect(startupDelayMs()).toBe(UPDATE_CHECK_STARTUP_DELAY_MS);
+  });
+
+  test("startupDelayMs honors a valid override under ZEO_E2E=1", () => {
+    process.env.ZEO_E2E = "1";
+    process.env.ZEO_UPDATE_STARTUP_DELAY_MS = "500";
+    expect(startupDelayMs()).toBe(500);
+  });
+});
+
+describe("startUpdateChecks — scheduling", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  test("schedules nothing when unpackaged without the ZEO_E2E/ZEO_UPDATE_FEED_URL override", async () => {
+    vi.useFakeTimers();
+    startUpdateChecks();
+    await vi.advanceTimersByTimeAsync(48 * UPDATE_TIMER_TICK_MS);
+    expect(h.fetch).not.toHaveBeenCalled();
+  });
+
+  test("auto checks land within about an hour of the 24h mark, at most once per 24h", async () => {
+    vi.useFakeTimers();
+    process.env.ZEO_E2E = "1";
+    process.env.ZEO_UPDATE_FEED_URL = "https://example.com/feed";
+    h.fetch.mockResolvedValue(jsonResponse(200, { ...release("v0.0.1"), prerelease: true }));
+
+    const hour = UPDATE_TIMER_TICK_MS;
+    const day = UPDATE_CHECK_INTERVAL_MS;
+
+    startUpdateChecks();
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(h.fetch).toHaveBeenCalledTimes(1);
+
+    // Hourly ticks up to the 24h mark stay rate-limited by the ~10s-old check
+    // (this is the bug: using the 24h interval itself as the timer period
+    // would instead miss this whole window and drift to ~48h between checks).
+    await vi.advanceTimersByTimeAsync(day - 10_000);
+    expect(h.fetch).toHaveBeenCalledTimes(1);
+
+    // The next hourly tick past the 24h mark (24h+1h absolute) fires.
+    await vi.advanceTimersByTimeAsync(hour);
+    expect(h.fetch).toHaveBeenCalledTimes(2);
+
+    // By 48h+2h absolute a third check has fired (at most once per 24h since).
+    await vi.advanceTimersByTimeAsync(day + hour);
+    expect(h.fetch).toHaveBeenCalledTimes(3);
   });
 });

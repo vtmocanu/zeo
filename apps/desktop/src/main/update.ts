@@ -21,7 +21,7 @@ import {
   parseLatestRelease,
   updateDecision,
 } from "@zeo/core";
-import type { InstallOrigin, UpdateState } from "@zeo/core";
+import type { AvailableUpdate, InstallOrigin, UpdateState } from "@zeo/core";
 import {
   readUpdateSettings,
   writeUpdateCheckEnabled,
@@ -33,6 +33,29 @@ import { broadcast } from "./broadcast.js";
 
 /** Reason a check was initiated, threaded through for the rate-limit rule. */
 export type CheckReason = "startup" | "timer" | "manual";
+
+/**
+ * Hard cap on the releases-feed response body. A compromised or misbehaving
+ * feed (or a MITM on a non-pinned connection) must not be able to stream an
+ * unbounded number of bytes into memory just because `checkForUpdates` awaits
+ * the response; 256 KiB is generously larger than any real GitHub release
+ * payload.
+ */
+export const MAX_FEED_BYTES = 256 * 1024;
+
+/**
+ * The setInterval tick granularity for the recurring automatic-check timer.
+ * The 24h {@link UPDATE_CHECK_INTERVAL_MS} rate limit inside
+ * {@link checkForUpdates} — not this timer — decides whether a tick actually
+ * fetches. Ticking hourly (rather than using the 24h interval as the timer
+ * period itself) means a tick lands within about an hour of the 24h mark even
+ * though `lastCheckedAt` is stamped a few seconds after launch by the startup
+ * check: using the 24h interval as the *timer* period would instead measure
+ * every subsequent tick from that few-seconds-past-launch instant, so each
+ * tick before the 24h mark keeps getting rate-limited and the effective cadence
+ * drifts to roughly 48h between checks (violating PRD 9.6 AC1's "every 24h").
+ */
+export const UPDATE_TIMER_TICK_MS = 60 * 60 * 1000;
 
 /**
  * Logs an update-settings-write error once per launch and swallows it
@@ -52,7 +75,10 @@ function logUpdateWriteError(err: unknown): void {
  * under `ZEO_E2E === "1"`, letting e2e tests exercise both install origins
  * without a real Caskroom directory. Any read failure is logged and leaves
  * the seeded defaults (enabled, direct origin) in place — never blocks
- * startup.
+ * startup. Also seeds `runtime.settings.updateCheckEnabled` from this SAME
+ * `readUpdateSettings()` read (`startBlocking` no longer re-reads it); this
+ * runs after `startBlocking()` (see index.ts), so this seed is not
+ * overwritten.
  */
 export function initUpdateState(): void {
   try {
@@ -74,6 +100,7 @@ export function initUpdateState(): void {
       lastCheckedAt: settings.lastCheckedAt,
     };
     runtime.updateDismissedVersion = settings.dismissedVersion;
+    runtime.settings = { ...runtime.settings, updateCheckEnabled: settings.enabled };
   } catch (err) {
     console.error("[update] failed to read update settings; using defaults:", err);
   }
@@ -110,6 +137,44 @@ export function startupDelayMs(): number {
 }
 
 /**
+ * Reads a fetch `Response` body up to {@link MAX_FEED_BYTES}: rejects early
+ * from a declared `Content-Length` exceeding the cap without reading any
+ * body, and otherwise stream-counts the bytes actually read via the body
+ * reader, aborting the moment the running total exceeds the cap. Returns the
+ * decoded text, or `null` when the cap was exceeded — the caller reports
+ * that the same as a malformed feed, never as a network error, so an
+ * oversized response is distinguishable from a transient failure.
+ */
+async function readCappedText(res: Response): Promise<string | null> {
+  const declaredLength = Number(res.headers.get("content-length"));
+  if (Number.isFinite(declaredLength) && declaredLength > MAX_FEED_BYTES) {
+    return null;
+  }
+  const reader = res.body?.getReader();
+  if (!reader) {
+    // No streaming body reader available (e.g. a stubbed Response in tests):
+    // fall back to buffering it whole, still capping on the decoded length.
+    const text = await res.text();
+    return text.length > MAX_FEED_BYTES ? null : text;
+  }
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) {
+      break;
+    }
+    total += value.byteLength;
+    if (total > MAX_FEED_BYTES) {
+      await reader.cancel();
+      return null;
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks).toString("utf-8");
+}
+
+/**
  * Runs (or coalesces onto) a releases-feed check, per PRD 9.6 §4:
  *
  * 1. A non-manual check no-ops (resolves immediately) when checking is
@@ -118,15 +183,24 @@ export function startupDelayMs(): number {
  * 2. A check already in flight returns the SAME promise (coalesced) rather
  *    than issuing a second request.
  * 3. Sets `checking = true`, clears `error`, broadcasts.
- * 4. Fetches the feed with a timeout; a non-2xx status or a rejection
- *    (network, timeout, JSON parse) sets `error` and leaves `available`
- *    unchanged.
+ * 4. Fetches the feed with a timeout; a non-2xx status, an over-cap body
+ *    (see {@link readCappedText}), or a rejection (network, timeout, JSON
+ *    parse) sets `error` and leaves `available` unchanged. An over-cap body
+ *    reports `"malformed feed"`; every other failure reports
+ *    `"network error"`.
  * 5. On success, `parseLatestRelease` decides `available`: malformed leaves
  *    it unchanged (like a network error); none clears it; a release runs it
- *    through `updateDecision`.
- * 6. In every case `lastCheckedAt` is stamped and persisted (a write failure
- *    is logged once, not fatal), `checking = false`, broadcast. Never
- *    rejects.
+ *    through `updateDecision`, reading `runtime.updateDismissedVersion` as of
+ *    THIS point (not snapshotted at step 3), so a dismissal that lands while
+ *    the fetch is in flight is honored.
+ * 6. In every case `available` is resolved from `runtime.update.available`
+ *    AS OF COMPLETION on every non-success path (never a value snapshotted
+ *    at step 3), so a concurrent dismissal during the in-flight fetch is
+ *    never resurrected by a subsequent error/malformed response.
+ *    `lastCheckedAt` is stamped and persisted (a write failure is logged
+ *    once, not fatal), `checking = false`, broadcast, all inside a `finally`
+ *    so a throw anywhere above (including from `broadcast()`) still clears
+ *    `checking`/`updateCheckInFlight`. Never rejects.
  */
 export function checkForUpdates(reason: CheckReason): Promise<void> {
   if (reason !== "manual") {
@@ -147,7 +221,11 @@ export function checkForUpdates(reason: CheckReason): Promise<void> {
 
   const promise = (async (): Promise<void> => {
     let error: string | null = null;
-    let nextAvailable = runtime.update.available;
+    // `undefined` means "leave `available` unchanged"; distinct from a
+    // decided `null`/`AvailableUpdate`, and resolved against the CURRENT
+    // `runtime.update.available` only once completion is reached below —
+    // never snapshotted here at the start of the check.
+    let nextAvailable: AvailableUpdate | null | undefined;
     try {
       const res = await net.fetch(feedUrl(), {
         headers: {
@@ -159,39 +237,59 @@ export function checkForUpdates(reason: CheckReason): Promise<void> {
       if (!res.ok) {
         error = `HTTP ${res.status}`;
       } else {
-        const json: unknown = await res.json();
-        const parsed = parseLatestRelease(json);
-        if (parsed.kind === "malformed") {
+        const text = await readCappedText(res);
+        if (text === null) {
           error = "malformed feed";
-        } else if (parsed.kind === "none") {
-          nextAvailable = null;
         } else {
-          nextAvailable = updateDecision(
-            app.getVersion(),
-            parsed.release,
-            runtime.updateDismissedVersion,
-          );
+          // A JSON.parse throw here propagates to the outer catch below,
+          // which reports "network error", per PRD (a parse error is not
+          // distinguished from a network failure).
+          const json: unknown = JSON.parse(text);
+          const parsed = parseLatestRelease(json);
+          if (parsed.kind === "malformed") {
+            error = "malformed feed";
+          } else if (parsed.kind === "none") {
+            nextAvailable = null;
+          } else {
+            nextAvailable = updateDecision(
+              app.getVersion(),
+              parsed.release,
+              runtime.updateDismissedVersion,
+            );
+          }
         }
       }
     } catch {
       error = "network error";
+    } finally {
+      const now = Date.now();
+      try {
+        writeUpdateLastCheckedAt(now);
+      } catch (err) {
+        logUpdateWriteError(err);
+      }
+      // Resolved against the CURRENT `runtime.update.available` on every
+      // non-success path (`nextAvailable` still `undefined`), so a dismissal
+      // that landed while the fetch was in flight is never resurrected.
+      const available = nextAvailable === undefined ? runtime.update.available : nextAvailable;
+      try {
+        runtime.update = {
+          ...runtime.update,
+          available,
+          checking: false,
+          error,
+          lastCheckedAt: now,
+        };
+        broadcast();
+      } catch (err) {
+        // A throwing broadcast must not leave `checking`/`updateCheckInFlight`
+        // stuck — logged, never rethrown, so `checkForUpdates` structurally
+        // never rejects.
+        console.error("[update] broadcast failed while completing a check:", err);
+      } finally {
+        runtime.updateCheckInFlight = null;
+      }
     }
-
-    const now = Date.now();
-    try {
-      writeUpdateLastCheckedAt(now);
-    } catch (err) {
-      logUpdateWriteError(err);
-    }
-    runtime.update = {
-      ...runtime.update,
-      available: nextAvailable,
-      checking: false,
-      error,
-      lastCheckedAt: now,
-    };
-    runtime.updateCheckInFlight = null;
-    broadcast();
   })();
 
   runtime.updateCheckInFlight = promise;
@@ -240,11 +338,13 @@ export async function setUpdateCheckEnabled(enabled: boolean): Promise<void> {
 
 /**
  * Opens the release page in the default browser, only when an update is
- * available and its url parses as `https:`. A parse failure or a non-https
- * url is a silent no-op — never an unvalidated `shell.openExternal` call.
- * Calls `shell.openExternal` as a property access on the imported `shell` so
- * an e2e stub installed via `app.evaluate` (replacing the property) is
- * observed here.
+ * available and its url parses as `https:` on the `github.com` host. A parse
+ * failure, a non-https url, or a non-github.com host is a silent no-op —
+ * never an unvalidated `shell.openExternal` call (the feed url always comes
+ * from `parseLatestRelease`, but this is defense in depth against a
+ * compromised or spoofed feed response). Calls `shell.openExternal` as a
+ * property access on the imported `shell` so an e2e stub installed via
+ * `app.evaluate` (replacing the property) is observed here.
  */
 export async function openRelease(): Promise<void> {
   const available = runtime.update.available;
@@ -257,7 +357,7 @@ export async function openRelease(): Promise<void> {
   } catch {
     return;
   }
-  if (parsed.protocol !== "https:") {
+  if (parsed.protocol !== "https:" || parsed.hostname !== "github.com") {
     return;
   }
   await shell.openExternal(available.url);
@@ -273,8 +373,11 @@ export async function copyUpgradeCommand(): Promise<void> {
  * `ZEO_E2E === "1"`) an explicit `ZEO_UPDATE_FEED_URL` override, so an
  * unpackaged dev build never polls the real feed on its own — `update.check`
  * still works there manually. Schedules one startup check after
- * {@link startupDelayMs} and a recurring check every
- * {@link UPDATE_CHECK_INTERVAL_MS}.
+ * {@link startupDelayMs} and a recurring timer that ticks every
+ * {@link UPDATE_TIMER_TICK_MS} (hourly); `checkForUpdates`'s own rate limit
+ * against {@link UPDATE_CHECK_INTERVAL_MS} decides which ticks actually fetch,
+ * so a check still lands at most once per 24h but within about an hour of
+ * that mark, rather than the timer period itself gating a 24h-or-longer drift.
  */
 export function startUpdateChecks(): void {
   const gate =
@@ -283,7 +386,7 @@ export function startUpdateChecks(): void {
     return;
   }
   setTimeout(() => void checkForUpdates("startup"), startupDelayMs());
-  setInterval(() => void checkForUpdates("timer"), UPDATE_CHECK_INTERVAL_MS);
+  setInterval(() => void checkForUpdates("timer"), UPDATE_TIMER_TICK_MS);
 }
 
 // --- Update -------------------------------------------------------------------
