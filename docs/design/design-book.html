@@ -1,0 +1,1056 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>zeo Design Book</title>
+<style>
+:root{
+  --b-bg:#f4f4f7;--b-paper:#ffffff;--b-ink:#1a1b21;--b-muted:#5b5d6a;--b-faint:#8a8c99;--b-rule:#e1e1e8;
+  --b-accent:#5048d0;--b-accent-soft:#ebeafd;--b-code:#ececf2;--b-ok:#1f7a4a;--b-bad:#b3261e;
+  --b-font:-apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",Arial,sans-serif;
+  --b-mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  --wall-light:radial-gradient(120% 90% at 8% 0%,#c7d3ff 0%,transparent 55%),radial-gradient(90% 80% at 100% 100%,#ffd6c4 0%,transparent 62%),linear-gradient(160deg,#e6eaf7,#f3e7ee);
+  --wall-dark:radial-gradient(120% 90% at 8% 0%,#2a2e6a 0%,transparent 55%),radial-gradient(90% 80% at 100% 100%,#5a283d 0%,transparent 62%),linear-gradient(160deg,#131528,#1c1421);
+  color-scheme:light;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --b-bg:#101013;--b-paper:#17171b;--b-ink:#ececf1;--b-muted:#a4a5b2;--b-faint:#737480;--b-rule:#29292f;
+    --b-accent:#a19df8;--b-accent-soft:#25234a;--b-code:#1e1e24;--b-ok:#5fd394;--b-bad:#ff7a70;color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --b-bg:#101013;--b-paper:#17171b;--b-ink:#ececf1;--b-muted:#a4a5b2;--b-faint:#737480;--b-rule:#29292f;
+  --b-accent:#a19df8;--b-accent-soft:#25234a;--b-code:#1e1e24;--b-ok:#5fd394;--b-bad:#ff7a70;color-scheme:dark;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--b-bg);color:var(--b-ink);font:15px/1.55 var(--b-font);-webkit-font-smoothing:antialiased}
+.book{display:grid;grid-template-columns:200px minmax(0,1fr);gap:56px;max-width:1340px;margin:0 auto;padding-inline:32px;padding-block:0 120px}
+.toc{position:sticky;top:env(safe-area-inset-top,0px);align-self:start;padding-block:44px;max-height:100vh;overflow:auto}
+.toc__name{font-weight:650;font-size:15px;letter-spacing:-.01em}
+.toc__sub{color:var(--b-faint);font-size:12px;margin-block:2px 20px}
+.toc ol{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:2px}
+.toc a{display:flex;gap:10px;color:var(--b-muted);text-decoration:none;font-size:13px;padding:5px 8px;border-radius:6px}
+.toc a:hover{background:var(--b-code);color:var(--b-ink)}
+.toc a span{color:var(--b-faint);font-variant-numeric:tabular-nums;min-width:18px}
+main{min-width:0}
+section{padding-block:56px 8px;border-top:1px solid var(--b-rule)}
+.cover{padding-block:48px 24px;border-top:0}
+.eyebrow{font-size:12px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--b-accent)}
+h1{font-size:44px;line-height:1.05;letter-spacing:-.03em;font-weight:700;margin:10px 0 14px;text-wrap:balance}
+h2{font-size:28px;line-height:1.15;letter-spacing:-.02em;font-weight:680;margin:0;text-wrap:balance}
+h3{font-size:17px;letter-spacing:-.01em;font-weight:620;margin:40px 0 10px}
+.sec-h{display:flex;align-items:baseline;gap:14px;margin-bottom:14px}
+.sec-n{font:600 13px var(--b-mono);color:var(--b-accent)}
+.lede{font-size:18px;line-height:1.5;color:var(--b-muted);max-width:64ch;margin:0}
+p{max-width:68ch;margin:0 0 12px}
+.muted{color:var(--b-muted)}
+code,.mono{font-family:var(--b-mono);font-size:.86em}
+code{background:var(--b-code);padding:1px 5px;border-radius:4px}
+pre.code{background:var(--b-code);border-radius:10px;padding:16px 18px;font:12.5px/1.6 var(--b-mono);overflow-x:auto;margin:12px 0 0}
+.principles{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:28px;margin-top:24px}
+.principles h4{font-size:15px;margin:0 0 6px;font-weight:620}
+.principles p{font-size:14px;color:var(--b-muted);margin:0}
+.spec{display:grid;grid-template-columns:minmax(120px,200px) minmax(0,1fr);margin:16px 0 0;max-width:900px}
+.spec dt,.spec dd{padding:10px 0;border-top:1px solid var(--b-rule);margin:0}
+.spec dt{font-weight:600;font-size:14px;padding-right:16px}
+.spec dd{font-size:14px;color:var(--b-muted)}
+.spec dd b{color:var(--b-ink);font-weight:600}
+.scroll-x{overflow-x:auto;margin-top:16px}
+table.tbl{border-collapse:collapse;font-size:13px;min-width:100%}
+.tbl th{text-align:left;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--b-faint);padding:8px 14px 8px 0;border-bottom:1px solid var(--b-rule);white-space:nowrap}
+.tbl td{padding:8px 14px 8px 0;border-bottom:1px solid var(--b-rule);vertical-align:middle;font-variant-numeric:tabular-nums}
+.tbl td.mono{white-space:nowrap}
+.sw{display:inline-block;width:22px;height:22px;border-radius:6px;vertical-align:middle;box-shadow:inset 0 0 0 1px rgb(127 127 140 / .25)}
+.pass{color:var(--b-ok);font-weight:600}
+.fail{color:var(--b-bad);font-weight:600}
+.controls{display:flex;flex-wrap:wrap;gap:14px 24px;align-items:flex-end;margin-block:24px 14px}
+.ctl{display:flex;flex-direction:column;gap:6px}
+.ctl__label{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--b-faint);display:flex;gap:8px}
+.ctl__label output{color:var(--b-ink);font-variant-numeric:tabular-nums}
+.seg{display:inline-flex;flex-wrap:wrap;background:var(--b-code);border-radius:9px;padding:3px;gap:2px}
+.seg button{font:500 13px var(--b-font);color:var(--b-muted);background:none;border:0;border-radius:7px;padding:5px 11px;cursor:pointer}
+.seg button:hover{color:var(--b-ink)}
+.seg button[aria-pressed="true"]{background:var(--b-paper);color:var(--b-ink);box-shadow:0 1px 2px rgb(0 0 0 / .12)}
+.ctl input[type=range]{width:200px;accent-color:var(--b-accent)}
+.btn{font:500 13px var(--b-font);color:var(--b-ink);background:var(--b-code);border:0;border-radius:8px;padding:7px 14px;cursor:pointer}
+.btn:hover{background:var(--b-rule)}
+:focus-visible{outline:2px solid var(--b-accent);outline-offset:2px}
+.stage{position:relative;overflow:hidden;border-radius:16px;margin-top:8px}
+.stage__inner{transform-origin:0 0;margin-inline:auto}
+.wall--light{background:var(--wall-light)}
+.wall--dark{background:var(--wall-dark)}
+.stage--thumb{pointer-events:none;border-radius:12px}
+.fig{margin:20px 0 0}
+.fig figcaption{font-size:13px;color:var(--b-faint);margin-top:10px;max-width:72ch}
+.grid-2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px}
+.grid-3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}
+.gallery-label{font-size:12px;color:var(--b-muted);margin-top:8px;display:flex;justify-content:space-between}
+.split{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:32px;align-items:start}
+.anatomy{display:grid;grid-template-columns:280px minmax(0,1fr);gap:40px;align-items:start;margin-top:16px}
+.anatomy ol{margin:0;padding-left:22px;display:flex;flex-direction:column;gap:12px;font-size:14px;color:var(--b-muted)}
+.anatomy li::marker{color:var(--b-accent);font-weight:600}
+.anatomy li b{color:var(--b-ink);font-weight:600}
+.ramp{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:4px;margin-top:10px}
+.ramp div{display:flex;flex-direction:column;gap:4px;font:11px var(--b-mono);color:var(--b-faint);min-width:0}
+.ramp i{display:block;height:44px;border-radius:6px;box-shadow:inset 0 0 0 1px rgb(127 127 140 / .18)}
+.ramp span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ramp-label{font-size:13px;font-weight:600;margin-top:20px}
+.tiers{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:0;margin-top:18px;border:1px solid var(--b-rule);border-radius:12px;overflow:hidden}
+.tiers div{padding:16px 18px;background:var(--b-paper)}
+.tiers div+div{border-left:1px solid var(--b-rule)}
+.tiers b{display:block;font-size:14px;margin-bottom:4px}
+.tiers span{font-size:13px;color:var(--b-muted)}
+.tiers code{font-size:11.5px}
+.type-row{display:grid;grid-template-columns:170px minmax(0,1fr);gap:24px;align-items:baseline;padding-block:14px;border-top:1px solid var(--b-rule)}
+.type-row .meta{font:12px/1.5 var(--b-mono);color:var(--b-faint)}
+.type-row .meta b{display:block;font:600 13px var(--b-font);color:var(--b-ink)}
+.type-sample{font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",Arial,sans-serif;overflow:hidden;text-overflow:ellipsis}
+.scale{display:flex;flex-direction:column;gap:6px;margin-top:14px}
+.scale div{display:grid;grid-template-columns:90px 50px minmax(0,1fr);align-items:center;font:12px var(--b-mono);color:var(--b-faint)}
+.scale i{display:block;height:10px;background:var(--b-accent);border-radius:2px}
+.radii{display:flex;flex-wrap:wrap;gap:18px;margin-top:14px}
+.radii div{display:flex;flex-direction:column;gap:8px;font:12px var(--b-mono);color:var(--b-faint)}
+.radii i{display:block;width:84px;height:64px;background:var(--b-accent-soft);box-shadow:inset 0 0 0 1.5px var(--b-accent)}
+.icons{display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:8px;margin-top:14px}
+.icons div{display:flex;flex-direction:column;align-items:center;gap:8px;padding:14px 6px 10px;border-radius:10px;background:var(--b-paper);box-shadow:inset 0 0 0 1px var(--b-rule);font:11px var(--b-mono);color:var(--b-faint)}
+.icons .pair{display:flex;gap:14px;align-items:center;color:var(--b-ink)}
+.geo svg{width:100%;height:auto;display:block}
+.geo-legend{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px 28px;margin-top:16px;font-size:14px;color:var(--b-muted)}
+.geo-legend div{display:flex;gap:10px}
+.mk{flex:none;width:20px;height:20px;border-radius:50%;background:var(--b-accent);color:var(--b-paper);font:700 11px/20px var(--b-font);text-align:center}
+.dg-win{fill:var(--b-paper);stroke:var(--b-faint);stroke-width:1}
+.dg-side{fill:var(--b-accent-soft)}
+.dg-card{fill:var(--b-bg);stroke:var(--b-faint);stroke-width:1}
+.dg-bar{fill:var(--b-accent);opacity:.22}
+.dg-line{stroke:var(--b-accent);stroke-width:1.2;fill:none}
+.dg-mk{fill:var(--b-accent)}
+.dg-mkt{fill:var(--b-paper);font:700 11px var(--b-font);text-anchor:middle;dominant-baseline:central}
+.dg-cap{fill:var(--b-muted);font:500 13px var(--b-font);text-anchor:middle}
+.dg-float{fill:var(--b-paper);stroke:var(--b-accent);stroke-width:1.2}
+.motion-demos{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:20px;margin-top:18px}
+.demo h4{margin:12px 0 4px;font-size:14px}
+.demo p{font-size:13px;color:var(--b-muted);margin:0}
+.demo .btn{margin-top:10px}
+.check{display:flex;gap:8px;align-items:center;font-size:14px;margin-top:18px}
+.prd{display:grid;grid-template-columns:70px minmax(0,1fr);gap:4px 18px;padding-block:14px;border-top:1px solid var(--b-rule);max-width:900px}
+.prd b{font:600 13px var(--b-mono);color:var(--b-accent)}
+.prd h4{margin:0;font-size:15px}
+.prd p{grid-column:2;margin:0;font-size:14px;color:var(--b-muted)}
+.qs{display:flex;flex-direction:column;gap:14px;margin-top:14px;padding-left:22px;max-width:900px}
+.qs li{font-size:14px;color:var(--b-muted)}
+.qs li b{color:var(--b-ink)}
+footer{margin-top:64px;padding-top:20px;border-top:1px solid var(--b-rule);font-size:13px;color:var(--b-faint)}
+@media (max-width:1060px){
+  .book{grid-template-columns:1fr;gap:0;padding-inline:16px}
+  .toc{position:static;padding-block:20px 0;max-height:none}
+  .toc ol{flex-direction:row;flex-wrap:wrap}
+  .anatomy,.split{grid-template-columns:1fr}
+  .motion-demos{grid-template-columns:1fr}
+}
+@media (max-width:720px){
+  h1{font-size:34px}
+  .grid-2,.grid-3,.tiers{grid-template-columns:1fr}
+  .tiers div+div{border-left:0;border-top:1px solid var(--b-rule)}
+  .type-row{grid-template-columns:1fr;gap:6px}
+  .ramp{grid-template-columns:repeat(6,minmax(0,1fr))}
+  .spec{grid-template-columns:1fr}
+  .spec dd{border-top:0;padding-top:0}
+}
+
+.zw{
+  --sidebar-width:240px;--row-height:34px;--card-inset:8px;
+  --radius-control:6px;--radius-tab:8px;--radius-pill:10px;--radius-card:10px;--radius-tile:12px;--radius-palette:14px;
+  --motion-fast:120ms;--motion-base:200ms;--motion-space:320ms;--ease-standard:cubic-bezier(.2,.8,.2,1);
+  --font-ui:-apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",Arial,sans-serif;
+  --font-page:ui-serif,"New York",Georgia,serif;
+  --light-close:#ff5f57;--light-min:#febc2e;--light-zoom:#28c840;
+  position:relative;width:100%;height:100%;border-radius:12px;overflow:hidden;isolation:isolate;
+  font:400 13px/1.3 var(--font-ui);color:var(--ink-primary);-webkit-font-smoothing:antialiased;
+  box-shadow:0 0 0 .5px rgb(0 0 0 / .35),0 24px 60px rgb(0 0 0 / .26);text-align:left;
+}
+.zw *{box-sizing:border-box}
+.zw button{font:inherit;color:inherit;background:none;border:0;padding:0;margin:0;cursor:default;text-align:inherit}
+.zw :focus-visible{outline:2px solid var(--focus-ring);outline-offset:1px}
+.zw-base{position:absolute;inset:0;background:var(--surface-window);-webkit-backdrop-filter:blur(40px) saturate(1.5);backdrop-filter:blur(40px) saturate(1.5)}
+.zw-tint{position:absolute;inset:0;background:var(--tint);opacity:var(--tint-opacity);pointer-events:none}
+.zw-tint--prev{opacity:0;transition:opacity var(--motion-space) var(--ease-standard)}
+.zw-side{position:absolute;top:0;left:0;bottom:0;width:var(--sidebar-width);display:flex;flex-direction:column;gap:10px;padding:0 8px 8px}
+.zw-top{flex:none;height:44px;display:flex;align-items:center;padding-left:6px;margin-bottom:-4px}
+.zw-lights{display:flex;gap:8px}
+.zw-lights i{width:12px;height:12px;border-radius:50%;background:var(--light-close);box-shadow:inset 0 0 0 .5px rgb(0 0 0 / .18)}
+.zw-lights i:nth-child(2){background:var(--light-min)}
+.zw-lights i:nth-child(3){background:var(--light-zoom)}
+.zw-tools{margin-left:auto;display:flex;gap:1px}
+.zw-icon-btn{width:28px;height:28px;flex:none;display:grid;place-items:center;border-radius:var(--radius-control);color:var(--ink-secondary);transition:background var(--motion-fast) var(--ease-standard),color var(--motion-fast) var(--ease-standard),transform var(--motion-fast) var(--ease-standard)}
+.zw-icon-btn:hover{background:var(--surface-hover);color:var(--ink-primary)}
+.zw-icon-btn:active{transform:scale(.92)}
+.zw-url{flex:none;width:100%;height:34px;display:flex;align-items:center;gap:8px;padding:0 10px 0 12px;border-radius:var(--radius-pill);background:var(--fill-subtle);color:var(--ink-primary);font-weight:500;transition:background var(--motion-fast) var(--ease-standard)}
+.zw-url:hover{background:var(--surface-hover)}
+.zw-url__host{flex:1;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.zw-url .ic{color:var(--ink-secondary)}
+.zw-scroll{flex:1;min-height:0;overflow:hidden;display:flex;flex-direction:column;gap:10px}
+.zw-favs{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px}
+.zw-tile{height:48px;border-radius:var(--radius-tile);background:var(--fill-subtle);display:grid;place-items:center;transition:background var(--motion-fast) var(--ease-standard)}
+.zw-tile:hover{background:var(--surface-hover)}
+.zw-tile.is-active{background:var(--surface-raised);box-shadow:var(--shadow-raised)}
+.zw-fav{width:16px;height:16px;flex:none;border-radius:4px;display:grid;place-items:center;font:700 9.5px/1 var(--font-ui);color:rgb(255 255 255);background:var(--fav)}
+.zw-fav--lg{width:24px;height:24px;border-radius:6px;font-size:13px}
+.zw-list{display:flex;flex-direction:column;gap:2px}
+.zw-row{width:100%;height:var(--row-height);display:flex;align-items:center;gap:9px;padding:0 5px 0 10px;border-radius:var(--radius-tab);font-weight:500;transition:background var(--motion-fast) var(--ease-standard)}
+.zw-row:hover{background:var(--surface-hover)}
+.zw-row.is-active{background:var(--surface-raised);box-shadow:var(--shadow-raised)}
+.zw-row--ghost{color:var(--ink-secondary)}
+.zw-row--ghost .ic{margin-inline:1px 1px}
+.zw-row__title{flex:1;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.zw-row__close{width:22px;height:22px;opacity:0}
+.zw-row:hover .zw-row__close,.zw-row.is-active .zw-row__close{opacity:1}
+.zw-badge{display:inline-flex;align-items:center;gap:3px;font-size:11px;font-weight:600;color:var(--ink-secondary);font-variant-numeric:tabular-nums}
+.zw-zoom{padding:1px 5px;border-radius:5px;background:var(--fill-subtle)}
+.zw-rule{display:flex;align-items:center;gap:8px;height:22px;padding-left:10px}
+.zw-rule::before{content:"";flex:1;height:1px;background:var(--hairline)}
+.zw-clear{display:flex;align-items:center;gap:3px;font-size:11px;font-weight:600;color:var(--ink-secondary);padding:3px 6px;border-radius:6px}
+.zw-clear:hover{background:var(--surface-hover);color:var(--ink-primary)}
+.zw-banner{flex:none;display:flex;flex-direction:column;gap:8px;padding:10px 10px 10px 12px;border-radius:var(--radius-pill);background:var(--surface-raised);box-shadow:var(--shadow-raised)}
+.zw-banner__text{font-size:12px;font-weight:500;display:flex;justify-content:space-between;align-items:center;gap:8px}
+.zw-banner__text span{color:var(--ink-secondary);font-weight:400;display:block}
+.zw-bottom{flex:none;height:32px;display:flex;align-items:center;justify-content:space-between}
+.zw-bottom__group{display:flex;gap:1px}
+.zw-space{width:28px;height:28px;border-radius:var(--radius-control);display:grid;place-items:center;transition:background var(--motion-fast) var(--ease-standard)}
+.zw-space i{width:8px;height:8px;border-radius:50%;opacity:.75}
+.zw-space:hover{background:var(--surface-hover)}
+.zw-space.is-active{background:var(--surface-raised);box-shadow:var(--shadow-raised)}
+.zw-space.is-active i{width:10px;height:10px;opacity:1}
+.zw-slide.is-enter-right{animation:zw-in-right var(--motion-space) var(--ease-standard)}
+.zw-slide.is-enter-left{animation:zw-in-left var(--motion-space) var(--ease-standard)}
+.zw-card{position:absolute;top:var(--card-inset);right:var(--card-inset);bottom:var(--card-inset);left:var(--sidebar-width);border-radius:var(--radius-card);background:var(--surface-card);box-shadow:var(--shadow-card);overflow:hidden}
+.zw-card.is-focused{box-shadow:var(--shadow-card),0 0 0 2px var(--accent-soft)}
+.pg{padding:44px 56px;color:var(--page-ink)}
+.pg.is-fade{animation:zw-fade var(--motion-space) var(--ease-standard)}
+.pg__site{font:500 12px var(--font-ui);color:var(--page-muted)}
+.pg h1{font:600 28px/1.15 var(--font-page);letter-spacing:-.01em;margin:10px 0 8px;color:var(--page-ink)}
+.pg__meta{font:12px var(--font-ui);color:var(--page-muted);padding-bottom:18px;border-bottom:1px solid var(--page-rule);margin-bottom:18px}
+.pg p{font:16px/1.6 var(--font-page);margin:0 0 14px;max-width:60ch}
+.pg__block{background:var(--page-code);border-radius:8px;padding:12px 14px;font:12.5px/1.6 ui-monospace,Menlo,monospace;margin:0;white-space:pre;color:var(--page-ink)}
+.zw-pop{background:var(--surface-popover);color:var(--ink-popover);border-radius:var(--radius-pill);box-shadow:var(--shadow-popover);-webkit-backdrop-filter:blur(24px) saturate(1.6);backdrop-filter:blur(24px) saturate(1.6);padding:6px}
+.zw-pop .zw-icon-btn,.zw-find .zw-icon-btn,.zw-sheet .zw-icon-btn,.zw-qb .zw-icon-btn{color:var(--ink-popover-secondary)}
+.zw-pop .zw-icon-btn:hover,.zw-find .zw-icon-btn:hover,.zw-sheet .zw-icon-btn:hover,.zw-qb .zw-icon-btn:hover{background:var(--popover-hover);color:var(--ink-popover)}
+.zw-pop.is-open{animation:zw-pop var(--motion-base) var(--ease-standard)}
+.zw-pop__head{display:flex;align-items:center;justify-content:space-between;padding:6px 6px 8px 8px;font-weight:600}
+.zw-menu-row{height:28px;display:flex;align-items:center;gap:8px;padding:0 8px;border-radius:6px}
+.zw-menu-row .ic{color:var(--ink-popover-secondary)}
+.zw-menu-row .k{margin-left:auto;color:var(--ink-popover-secondary);letter-spacing:.06em;font-size:12px}
+.zw-menu-row:hover,.zw-menu-row.is-sel{background:var(--accent);color:var(--ink-on-accent)}
+.zw-menu-row:hover .ic,.zw-menu-row.is-sel .ic,.zw-menu-row:hover .k,.zw-menu-row.is-sel .k{color:inherit}
+.zw-menu-row--danger{color:var(--danger)}
+.zw-sep{height:1px;background:var(--popover-hairline);margin:5px 8px}
+.zw-scrim{position:absolute;inset:0;background:var(--scrim);-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px);animation:zw-fade var(--motion-base) var(--ease-standard)}
+.zw-cmd{position:absolute;left:0;right:0;top:18%;margin-inline:auto;width:680px;background:var(--surface-popover);color:var(--ink-popover);border-radius:var(--radius-palette);box-shadow:var(--shadow-palette);overflow:hidden;-webkit-backdrop-filter:blur(30px) saturate(1.6);backdrop-filter:blur(30px) saturate(1.6);transform-origin:50% 0;animation:zw-pop var(--motion-base) var(--ease-standard)}
+.zw-cmd--static{top:36px;animation:none}
+.zw-cmd__input{height:58px;display:flex;align-items:center;gap:12px;padding:0 20px;font-size:22px;border-bottom:1px solid var(--popover-hairline)}
+.zw-cmd__input .ic{color:var(--ink-popover-secondary)}
+.zw-caret{width:2px;height:26px;margin-left:-10px;background:var(--accent);animation:zw-blink 1s steps(1) infinite}
+.zw-cmd__list{padding:4px 8px 8px}
+.zw-group{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-popover-secondary);padding:10px 12px 4px}
+.zw-cmd__row{height:40px;display:flex;align-items:center;gap:12px;padding:0 12px;border-radius:var(--radius-tab)}
+.zw-cmd__row .ic{color:var(--ink-popover-secondary);flex:none}
+.zw-cmd__row .p{font-weight:500;white-space:nowrap}
+.zw-cmd__row .s{flex:1;min-width:0;font-size:12px;color:var(--ink-popover-secondary);overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.zw-cmd__row .k{margin-left:auto;font-size:12px;color:var(--ink-popover-secondary);letter-spacing:.08em}
+.zw-cmd__row.is-sel{background:var(--accent-soft)}
+.zw-find{position:absolute;top:8px;right:8px;height:38px;display:flex;align-items:center;gap:4px;padding:0 5px 0 12px;background:var(--surface-popover);color:var(--ink-popover);border-radius:var(--radius-pill);box-shadow:var(--shadow-popover);-webkit-backdrop-filter:blur(24px);backdrop-filter:blur(24px);animation:zw-pop var(--motion-base) var(--ease-standard);transform-origin:100% 0}
+.zw-find .ic{color:var(--ink-popover-secondary)}
+.zw-find__q{min-width:150px;display:flex;align-items:center;gap:1px}
+.zw-find__q .zw-caret{height:16px;margin-left:1px}
+.zw-find__count{font-size:12px;color:var(--ink-popover-secondary);font-variant-numeric:tabular-nums;padding-right:6px}
+.zw-vsep{width:1px;height:18px;background:var(--popover-hairline);margin-inline:2px}
+.zw-sheet{position:absolute;inset:0;margin:auto;width:760px;height:500px;display:grid;grid-template-columns:200px minmax(0,1fr);background:var(--surface-popover);color:var(--ink-popover);border-radius:var(--radius-palette);box-shadow:var(--shadow-palette);overflow:hidden;-webkit-backdrop-filter:blur(30px);backdrop-filter:blur(30px);animation:zw-pop var(--motion-base) var(--ease-standard)}
+.zw-sheet--static{animation:none}
+.zw-sheet__nav{padding:18px 10px;background:var(--popover-well);border-right:1px solid var(--popover-hairline);display:flex;flex-direction:column;gap:2px}
+.zw-sheet__title{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-popover-secondary);padding:0 10px 10px}
+.zw-nav-row{height:30px;display:flex;align-items:center;gap:9px;padding:0 10px;border-radius:var(--radius-control);font-weight:500}
+.zw-nav-row .ic{color:var(--ink-popover-secondary)}
+.zw-nav-row:hover{background:var(--popover-hover)}
+.zw-nav-row.is-active{background:var(--accent-soft)}
+.zw-nav-row.is-active .ic{color:var(--accent)}
+.zw-sheet__body{position:relative;padding:22px 28px;display:flex;flex-direction:column;gap:18px;overflow:hidden}
+.zw-sheet__close{position:absolute;top:12px;right:12px}
+.zw-h2{font:600 17px/1.2 var(--font-ui);margin:0}
+.zw-label{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-popover-secondary);margin:0 0 7px}
+.zw-field{border-radius:var(--radius-pill);background:var(--popover-well);box-shadow:inset 0 0 0 1px var(--popover-hairline)}
+.zw-setrow{min-height:40px;display:flex;align-items:center;gap:12px;padding:8px 12px}
+.zw-setrow+.zw-setrow{border-top:1px solid var(--popover-hairline)}
+.zw-setrow .t{flex:1;min-width:0}
+.zw-setrow .t span{display:block;font-size:12px;color:var(--ink-popover-secondary)}
+.zw-radio{width:16px;height:16px;border-radius:50%;flex:none;box-shadow:inset 0 0 0 1.5px var(--popover-hairline-strong)}
+.zw-radio.is-on{box-shadow:inset 0 0 0 5px var(--accent)}
+.zw-btn{height:28px;padding:0 12px;border-radius:var(--radius-control);font-weight:500;background:var(--control-raised);box-shadow:0 0 0 1px var(--popover-hairline),0 1px 1px rgb(0 0 0 / .06);white-space:nowrap}
+.zw-btn--primary{background:var(--accent);color:var(--ink-on-accent);box-shadow:none}
+.zw-btn--danger{background:var(--danger);color:var(--ink-on-danger);box-shadow:none}
+.zw-btn--sm{height:24px;padding:0 9px;font-size:12px}
+.zw-dialog{width:380px;padding:20px;border-radius:var(--radius-palette)}
+.zw-dialog h3{font:600 15px/1.3 var(--font-ui);margin:0 0 6px}
+.zw-dialog p{font-size:13px;line-height:1.45;color:var(--ink-popover-secondary);margin:0 0 18px}
+.zw-dialog__actions{display:flex;justify-content:flex-end;gap:8px}
+.zw-dl{display:flex;align-items:center;gap:10px;padding:7px 8px;border-radius:var(--radius-tab)}
+.zw-dl:hover{background:var(--popover-hover)}
+.zw-dl__icon{width:32px;height:32px;flex:none;border-radius:8px;display:grid;place-items:center;background:var(--popover-well);box-shadow:inset 0 0 0 1px var(--popover-hairline);color:var(--ink-popover-secondary)}
+.zw-dl__text{flex:1;min-width:0}
+.zw-dl__name{font-weight:500;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.zw-dl__meta{font-size:12px;color:var(--ink-popover-secondary);font-variant-numeric:tabular-nums}
+.zw-progress{height:4px;border-radius:2px;background:var(--popover-hairline);margin-top:5px;overflow:hidden}
+.zw-progress i{display:block;height:100%;background:var(--accent);border-radius:2px}
+.zw-qb{position:absolute;inset:0;margin:auto;width:460px;height:300px;border-radius:12px;background:var(--surface-card);box-shadow:var(--shadow-palette);overflow:hidden;display:flex;flex-direction:column}
+.zw-qb__bar{flex:none;height:48px;display:flex;align-items:center;gap:8px;padding:0 8px 0 14px;background:var(--surface-popover);color:var(--ink-popover);border-bottom:1px solid var(--popover-hairline)}
+.zw-qb__title{flex:1;min-width:0;line-height:1.25}
+.zw-qb__title b{display:block;font-weight:600;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.zw-qb__title span{display:block;font-size:12px;color:var(--ink-popover-secondary)}
+.zw-qb .pg{padding:22px 26px}
+.zw-qb .pg h1{font-size:21px}
+.zw-picker{width:276px;padding:10px;display:flex;flex-direction:column;gap:12px}
+.zw-picker .zw-pop__head{padding:2px 2px 0}
+.zw-seg{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(0,1fr);gap:2px;padding:2px;border-radius:8px;background:var(--popover-well);box-shadow:inset 0 0 0 1px var(--popover-hairline)}
+.zw-seg button{height:24px;border-radius:6px;font-size:12px;font-weight:500;color:var(--ink-popover-secondary);display:flex;align-items:center;justify-content:center;gap:6px;cursor:pointer}
+.zw-seg button[aria-pressed="true"]{background:var(--control-raised);color:var(--ink-popover);box-shadow:0 1px 2px rgb(0 0 0 / .12)}
+.zw-dot{width:10px;height:10px;border-radius:50%;display:inline-block}
+.zw-swatches{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;justify-items:center;padding:2px 0}
+.zw-swatch{width:30px;height:30px;border-radius:50%;cursor:pointer;transition:transform var(--motion-fast) var(--ease-standard)}
+.zw-swatch:hover{transform:scale(1.08)}
+.zw-swatch[aria-pressed="true"]{box-shadow:0 0 0 2px var(--surface-card),0 0 0 4px var(--ink-popover)}
+.zw-slider{display:grid;grid-template-columns:1fr auto;gap:4px 8px;align-items:center;font-size:12px;font-weight:500}
+.zw-slider output{color:var(--ink-popover-secondary);font-variant-numeric:tabular-nums}
+.zw-slider input{grid-column:1 / -1;width:100%;accent-color:var(--accent);margin:0}
+.zw-chips{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.zw-chip{height:52px;border-radius:var(--radius-tab);padding:8px 10px;display:flex;flex-direction:column;justify-content:space-between;box-shadow:inset 0 0 0 1px var(--popover-hairline)}
+.zw-chip b{font-size:15px;font-weight:600;line-height:1}
+.zw-chip span{font-size:11px;font-variant-numeric:tabular-nums}
+.zw-anchor-space{position:absolute;left:14px;bottom:48px;transform-origin:0 100%}
+.zw-anchor{position:absolute}
+.zw-demo{position:absolute;inset:16px}
+@keyframes zw-in-right{from{transform:translateX(28px);opacity:0}to{transform:none;opacity:1}}
+@keyframes zw-in-left{from{transform:translateX(-28px);opacity:0}to{transform:none;opacity:1}}
+@keyframes zw-fade{from{opacity:0}to{opacity:1}}
+@keyframes zw-pop{from{opacity:0;transform:scale(.97)}to{opacity:1;transform:none}}
+@keyframes zw-blink{50%{opacity:0}}
+.reduced .zw *{animation-duration:120ms!important;transition-duration:0ms!important}
+.reduced .zw-slide.is-enter-right,.reduced .zw-slide.is-enter-left,.reduced .zw-pop.is-open,.reduced .zw-cmd,.reduced .zw-sheet,.reduced .zw-find{animation-name:zw-fade!important}
+.reduced .zw-tint--prev{transition:opacity 120ms linear!important}
+.reduced .zw-caret{animation:none!important}
+</style>
+</head>
+<body>
+<div class="book">
+  <nav class="toc" aria-label="Contents">
+    <div class="toc__name">zeo design book</div>
+    <div class="toc__sub">Epic 10 · approved</div>
+    <ol>
+      <li><a href="#overview"><span>0</span>Overview</a></li>
+      <li><a href="#principles"><span>1</span>Principles</a></li>
+      <li><a href="#geometry"><span>2</span>Window geometry</a></li>
+      <li><a href="#color"><span>3</span>Color and theming</a></li>
+      <li><a href="#type"><span>4</span>Type</a></li>
+      <li><a href="#spacing"><span>5</span>Spacing, radius, elevation</a></li>
+      <li><a href="#surfaces"><span>6</span>Surfaces</a></li>
+      <li><a href="#motion"><span>7</span>Motion</a></li>
+      <li><a href="#a11y"><span>8</span>Accessibility and tests</a></li>
+      <li><a href="#delivery"><span>9</span>Delivery</a></li>
+      <li><a href="#questions"><span>10</span>Decisions</a></li>
+    </ol>
+  </nav>
+
+  <main>
+    <section class="cover" id="overview">
+      <div class="eyebrow">Epic 10 · Approved · 27 September 2026</div>
+      <h1>zeo design book</h1>
+      <p class="lede">The visual language for zeo: a frameless, tinted window where the page floats in a card and every surface draws from one token set. Each Epic 10 PRD cites a section of this book.</p>
+      <div class="controls" role="toolbar" aria-label="Preview controls">
+        <div class="ctl"><span class="ctl__label">Space</span><div class="seg" data-ctl="space"><button data-v="work">Work</button><button data-v="personal">Personal</button><button data-v="research">Research</button></div></div>
+        <div class="ctl"><span class="ctl__label">Appearance</span><div class="seg" data-ctl="mode"><button data-v="">Auto</button><button data-v="light">Light</button><button data-v="dark">Dark</button></div></div>
+        <div class="ctl"><span class="ctl__label">Surface</span><div class="seg" data-ctl="overlay"><button data-v="none">None</button><button data-v="cmd">Command bar</button><button data-v="find">Find</button><button data-v="split">Split view</button><button data-v="settings">Settings</button><button data-v="theme">Theme</button></div></div>
+        <div class="ctl"><label class="ctl__label" for="hero-intensity">Tint intensity <output data-intensity-out>100%</output></label><input type="range" id="hero-intensity" data-pick-intensity min="0" max="100" step="5" value="100"></div>
+      </div>
+      <div id="hero"></div>
+      <p class="muted" style="font-size:13px;margin-top:12px">The window is live. Click tabs and favorites, click the space dots at the bottom of the sidebar, or click the URL pill to open the command bar. Esc closes a surface.</p>
+    </section>
+
+    <section id="principles">
+      <div class="sec-h"><span class="sec-n">§1</span><h2>Principles</h2></div>
+      <div class="principles">
+        <div><h4>Content is the hero</h4><p>The page sits in a floating card. Everything zeo draws recedes into the tinted window around it.</p></div>
+        <div><h4>Keyboard first, looks second</h4><p>Every shortcut, focus order, ARIA role and <code>data-testid</code> that works today keeps working. The redesign changes paint, not behavior.</p></div>
+        <div><h4>One visual language</h4><p>Every color, size, radius, shadow and duration comes from a token. Component CSS contains no hex values.</p></div>
+        <div><h4>Arc-like, not Arc</h4><p>The layout language follows Arc. The work is original: no Arc name, logo, icons or assets.</p></div>
+      </div>
+    </section>
+
+    <section id="geometry">
+      <div class="sec-h"><span class="sec-n">§2</span><h2>Window geometry</h2></div>
+      <p>No native title bar. The sidebar owns the top-left corner, and web content lives in an inset card with its own radius, hairline and shadow.</p>
+      <figure class="fig geo">
+        <svg viewBox="0 0 1080 420" role="img" aria-label="Window geometry with the sidebar open and collapsed">
+          <rect class="dg-win" x="20" y="50" width="500" height="318" rx="8"/>
+          <rect class="dg-side" x="20.5" y="50.5" width="115" height="317" rx="7.5"/>
+          <rect class="dg-card" x="135.4" y="53.9" width="380.8" height="310.3" rx="4.8"/>
+          <circle cx="29.6" cy="57.7" r="2.9" fill="#ff5f57"/><circle cx="39.2" cy="57.7" r="2.9" fill="#febc2e"/><circle cx="48.8" cy="57.7" r="2.9" fill="#28c840"/>
+          <rect class="dg-bar" x="24" y="68" width="107" height="16" rx="4.8"/>
+          <rect class="dg-bar" x="24" y="89" width="24" height="23" rx="5.8"/><rect class="dg-bar" x="51" y="89" width="24" height="23" rx="5.8"/><rect class="dg-bar" x="78" y="89" width="24" height="23" rx="5.8"/><rect class="dg-bar" x="105" y="89" width="26" height="23" rx="5.8"/>
+          <rect class="dg-bar" x="24" y="118" width="107" height="16" rx="3.8"/><rect class="dg-bar" x="24" y="136" width="107" height="16" rx="3.8"/>
+          <rect class="dg-bar" x="24" y="164" width="107" height="16" rx="3.8" style="opacity:.5"/><rect class="dg-bar" x="24" y="182" width="107" height="16" rx="3.8"/><rect class="dg-bar" x="24" y="200" width="107" height="16" rx="3.8"/><rect class="dg-bar" x="24" y="218" width="107" height="16" rx="3.8"/>
+          <rect class="dg-bar" x="24" y="348" width="107" height="14" rx="3"/>
+          <path class="dg-line" d="M20 32v10M135.4 32v10M20 37h115.4"/>
+          <circle class="dg-mk" cx="77.7" cy="37" r="10"/><text class="dg-mkt" x="77.7" y="37">A</text>
+          <circle class="dg-mk" cx="72" cy="57.7" r="9"/><text class="dg-mkt" x="72" y="57.7">B</text>
+          <path class="dg-line" d="M516.2 53.9l18 -18"/>
+          <circle class="dg-mk" cx="538" cy="32" r="10"/><text class="dg-mkt" x="538" y="32">C</text>
+          <path class="dg-line" d="M135.4 210h380.8" style="stroke-dasharray:3 4;opacity:.6"/>
+          <text class="dg-cap" x="270" y="402">Sidebar open</text>
+
+          <rect class="dg-win" x="560" y="50" width="500" height="318" rx="8"/>
+          <rect class="dg-card" x="563.9" y="53.9" width="492.3" height="310.3" rx="4.8"/>
+          <rect class="dg-float" x="567.8" y="57.8" width="115" height="302.5" rx="6"/>
+          <rect class="dg-bar" x="572" y="68" width="107" height="16" rx="4.8"/>
+          <rect class="dg-bar" x="572" y="89" width="24" height="23" rx="5.8"/><rect class="dg-bar" x="599" y="89" width="24" height="23" rx="5.8"/><rect class="dg-bar" x="626" y="89" width="24" height="23" rx="5.8"/><rect class="dg-bar" x="653" y="89" width="26" height="23" rx="5.8"/>
+          <rect class="dg-bar" x="572" y="118" width="107" height="16" rx="3.8"/><rect class="dg-bar" x="572" y="136" width="107" height="16" rx="3.8"/><rect class="dg-bar" x="572" y="164" width="107" height="16" rx="3.8"/>
+          <circle cx="569.6" cy="57.7" r="2.9" fill="#ff5f57"/><circle cx="579.2" cy="57.7" r="2.9" fill="#febc2e"/><circle cx="588.8" cy="57.7" r="2.9" fill="#28c840"/>
+          <circle class="dg-mk" cx="700" cy="210" r="10"/><text class="dg-mkt" x="700" y="210">D</text>
+          <path class="dg-line" d="M560 190v40" style="stroke-width:3;opacity:.6"/>
+          <text class="dg-cap" x="810" y="402">Sidebar collapsed, pointer at the left edge</text>
+        </svg>
+        <div class="geo-legend">
+          <div><span class="mk">A</span><span><b>Sidebar</b> 240 px by default, resizable from 200 to 360 px by dragging the card's left edge.</span></div>
+          <div><span class="mk">B</span><span><b>Window row</b> 44 px tall. Native traffic lights at x 14, y 16, followed by sidebar toggle (⌘S), back, forward and reload.</span></div>
+          <div><span class="mk">C</span><span><b>Content card</b> inset 8 px from top, right and bottom. Radius 10, 1 px hairline, card shadow.</span></div>
+          <div><span class="mk">D</span><span><b>Collapsed</b> the card is inset 8 px on all four sides. Touching the left 6 px slides the sidebar in over the card; it hides 400 ms after the pointer leaves.</span></div>
+        </div>
+      </figure>
+      <dl class="spec">
+        <dt>Split view</dt><dd>Two cards with an 8 px gap. The gap is the existing divider hit area. The focused pane adds a 2 px <code>--accent-soft</code> ring.</dd>
+        <dt>Window material</dt><dd>BrowserWindow <code>vibrancy: "sidebar"</code> with a transparent UI background. The space tint is a UI layer above the vibrancy and below the sidebar content.</dd>
+        <dt>Content bounds</dt><dd>WebContentsView bounds are <b>x = sidebar width, y = 8, width = W − sidebar − 8, height = H − 16</b>. Corner radius 10 on the view; confirm <code>setBorderRadius</code> against the pinned Electron version in PRD 10.2. The UI renderer paints the hairline and shadow in a card-shaped layer under the view.</dd>
+        <dt>Title bar</dt><dd><code>titleBarStyle: "hidden"</code> with <code>trafficLightPosition: { x: 14, y: 16 }</code>. The 44 px window row is a drag region except for its buttons.</dd>
+      </dl>
+    </section>
+
+    <section id="color">
+      <div class="sec-h"><span class="sec-n">§3</span><h2>Color and theming</h2></div>
+      <p>Color comes in three tiers. Components read only the semantic and component tiers, so a space theme changes every surface by changing one token set.</p>
+      <div class="tiers">
+        <div><b>Palette</b><span>A 12-step neutral ramp per appearance and ten space hues defined in OKLCH. Never used directly by components.</span></div>
+        <div><b>Semantic roles</b><span><code>--surface-window</code>, <code>--surface-card</code>, <code>--ink-primary</code>, <code>--ink-secondary</code>, <code>--accent</code>, <code>--hairline</code>, <code>--focus-ring</code> and the rest in the table below.</span></div>
+        <div><b>Component values</b><span><code>--sidebar-width</code>, <code>--row-height</code>, <code>--radius-tab</code>, <code>--card-inset</code>. Sizes only; component colors alias semantic roles.</span></div>
+      </div>
+
+      <h3>Neutral ramps</h3>
+      <p class="muted">A slight cool bias (OKLCH hue 275, chroma 0.006) keeps the greys from reading as unconsidered mid-grey.</p>
+      <div id="ramps"></div>
+
+      <h3>Space hues</h3>
+      <p class="muted">Each hue is a hue angle and a chroma. The theme function derives the tint and accent lightness per appearance, so the same hue works in light and dark.</p>
+      <div class="scroll-x"><table class="tbl" id="hue-table"></table></div>
+
+      <h3>Space theme model</h3>
+      <p>A space theme is one hue or a two-stop gradient plus an intensity from 0 to 1. A pure function in <code>packages/core</code> maps the theme and the appearance to the full semantic token set.</p>
+<pre class="code">export type SpaceHue =
+  | "iris" | "violet" | "orchid" | "rose" | "coral"
+  | "amber" | "lime" | "mint" | "teal" | "sky";
+
+export interface SpaceTheme {
+  stops: [SpaceHue] | [SpaceHue, SpaceHue];
+  intensity: number;
+}
+
+export type Appearance = "light" | "dark";
+
+export function themeTokens(
+  theme: SpaceTheme | null,
+  appearance: Appearance,
+): Record&lt;SemanticToken, string&gt;;</pre>
+      <dl class="spec">
+        <dt>Composite</dt><dd>Vibrancy base, then the tint layer at <b>0.55 × intensity</b> opacity in light and <b>0.35 × intensity</b> in dark, then sidebar content. Tint lightness is OKLCH 0.78 in light and 0.48 in dark.</dd>
+        <dt>Ink</dt><dd>The function picks dark or light ink by the higher worst-case contrast against every stop's composite. <code>--ink-secondary</code> mixes ink toward the ground until it just holds 4.5:1.</dd>
+        <dt>Accent</dt><dd>From the first stop's hue. Lightness starts at 0.54 (light) or 0.76 (dark) and moves until the accent holds 3:1 against the card and the tinted window.</dd>
+        <dt>Null theme</dt><dd>No tint. The window shows plain vibrancy and the accent falls back to iris.</dd>
+        <dt>Guarantees</dt><dd>Pure and deterministic; intensity clamped to 0–1. Unit tests sweep 10 single hues and 90 ordered pairs at intensity 0, 0.5 and 1 in both appearances (600 cases) and assert every contrast floor.</dd>
+        <dt>Storage</dt><dd>PRD 10.3 adds a nullable <code>theme</code> JSON column to spaces in the next schema version. Existing spaces receive hues by position (§10).</dd>
+      </dl>
+
+      <h3>Live semantic tokens</h3>
+      <p class="muted" id="tokens-caption">Values for the space and appearance selected at the top of the page.</p>
+      <div class="scroll-x"><table class="tbl" id="token-table"></table></div>
+
+      <h3>Three spaces, both appearances</h3>
+      <div class="grid-3" id="gallery"></div>
+    </section>
+
+    <section id="type">
+      <div class="sec-h"><span class="sec-n">§4</span><h2>Type</h2></div>
+      <p>SF Pro through <code>-apple-system</code>. Six sizes, three weights. Web content keeps its own fonts.</p>
+      <div id="type-rows" style="margin-top:18px"></div>
+    </section>
+
+    <section id="spacing">
+      <div class="sec-h"><span class="sec-n">§5</span><h2>Spacing, radius, elevation</h2></div>
+      <div class="split">
+        <div>
+          <h3 style="margin-top:0">Spacing</h3>
+          <p class="muted">A 4 px grid with two half steps. Bars drawn at 4× scale.</p>
+          <div class="scale" id="space-scale"></div>
+        </div>
+        <div>
+          <h3 style="margin-top:0">Radius</h3>
+          <p class="muted">Radius grows with the size of the object.</p>
+          <div class="radii">
+            <div><i style="border-radius:6px"></i>6 · controls</div>
+            <div><i style="border-radius:8px"></i>8 · tabs, rows</div>
+            <div><i style="border-radius:10px"></i>10 · pills, cards</div>
+            <div><i style="border-radius:12px"></i>12 · favorite tiles</div>
+            <div><i style="border-radius:14px"></i>14 · command bar</div>
+          </div>
+        </div>
+      </div>
+      <h3>Elevation</h3>
+      <p class="muted">Three shadow levels, each paired with a hairline so edges hold on any tint.</p>
+      <div id="elevation"></div>
+      <h3>Icons</h3>
+      <p class="muted">16 px line icons at 1.5 stroke, round caps and joins, drawn as inline SVG with <code>currentColor</code>. Shown at 1× and 2×.</p>
+      <div class="icons" id="icons"></div>
+    </section>
+
+    <section id="surfaces">
+      <div class="sec-h"><span class="sec-n">§6</span><h2>Surfaces</h2></div>
+      <h3 style="margin-top:8px">Sidebar</h3>
+      <div class="anatomy">
+        <div id="sidebar-stage"></div>
+        <ol>
+          <li><b>Window row.</b> Traffic lights, then sidebar toggle, back, forward and reload as 28 px icon buttons.</li>
+          <li><b>URL pill.</b> Domain of the active tab only. 34 px tall, radius 10, <code>--fill-subtle</code>. Click or ⌘L opens the command bar in location mode.</li>
+          <li><b>Favorites.</b> A global list shared by every space. Up to four columns of 48 px tiles with 24 px favicons, radius 12. The active favorite is raised.</li>
+          <li><b>Pinned tabs.</b> Same rows as today's tabs. They survive Clear. Keeps <code>pinned-section</code>.</li>
+          <li><b>Divider and Clear.</b> A hairline with a Clear action that archives today's tabs.</li>
+          <li><b>Today's tabs.</b> New Tab row, then 34 px rows. Active row is raised, hover is an 8% ink overlay. Zoom level and blocked-request count sit at the trailing edge; close appears on hover. Keeps <code>unpinned-section</code>.</li>
+          <li><b>Update banner.</b> Shown only when an update is ready. Raised surface, primary action in the accent.</li>
+          <li><b>Bottom bar.</b> Downloads and archived tabs on the left, one dot per space in its theme color, new space on the right.</li>
+        </ol>
+      </div>
+
+      <h3>Command bar</h3>
+      <p>Floats centered about 20% from the top of the window, 680 px wide, over a blurred scrim. The input is 22 px. Results group as Tabs, History and Commands in 40 px rows, with shortcut hints right-aligned. The selected row uses <code>--accent-soft</code>.</p>
+      <div id="cmd-stage"></div>
+
+      <h3>Settings</h3>
+      <p>A 760 × 500 sheet over the scrim, with a section list on the left. Groups sit in wells with hairline row separators. Sections map to today's groups: search engine, external links and updates under General; content blocking and allowlisted sites; profiles; history; about.</p>
+      <div id="settings-stage"></div>
+
+      <div class="split" style="margin-top:8px">
+        <div>
+          <h3>Find bar</h3>
+          <p>A floating pill at the top right of the content card, inset 8 px. Query, match count, previous, next and close. Keeps every <code>find-*</code> test id.</p>
+          <div id="find-stage"></div>
+        </div>
+        <div>
+          <h3>Space theme picker</h3>
+          <p>Opens from Edit Theme… in a space's context menu, anchored to its dot in the bottom bar. Solid or gradient, ten swatches, intensity, and a live contrast readout for both appearances. This one is live: it edits the selected space.</p>
+          <div class="seg" data-ctl="space" style="margin-top:6px"><button data-v="work">Work</button><button data-v="personal">Personal</button><button data-v="research">Research</button></div>
+          <div id="picker-stage"></div>
+        </div>
+      </div>
+
+      <h3>Popovers, menus and dialogs</h3>
+      <p>Downloads, quick-browse, the update banner and dialogs share the popover tokens: <code>--surface-popover</code>, <code>--shadow-popover</code> or <code>--shadow-palette</code>, radius 10 or 14. Tab and space context menus stay native macOS menus.</p>
+      <div class="grid-2" id="popover-grid"></div>
+    </section>
+
+    <section id="motion">
+      <div class="sec-h"><span class="sec-n">§7</span><h2>Motion</h2></div>
+      <p>Three durations and one curve. Motion confirms a change of place; it never delays input.</p>
+      <div class="scroll-x"><table class="tbl">
+        <thead><tr><th>Token</th><th>Value</th><th>Used for</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">--motion-fast</td><td class="mono">120ms</td><td>Hover and press on rows, tiles and icon buttons</td></tr>
+          <tr><td class="mono">--motion-base</td><td class="mono">200ms</td><td>Popover, find bar, settings and command bar open</td></tr>
+          <tr><td class="mono">--motion-space</td><td class="mono">320ms</td><td>Space switch: tab list slides horizontally, tint cross-fades</td></tr>
+          <tr><td class="mono">--ease-standard</td><td class="mono">cubic-bezier(.2, .8, .2, 1)</td><td>All of the above</td></tr>
+        </tbody>
+      </table></div>
+      <div class="motion-demos">
+        <div class="demo"><div id="demo-hover"></div><h4>Hover and press</h4><p>Point at a row, press an icon button.</p></div>
+        <div class="demo"><div id="demo-pop"></div><h4>Popover</h4><p>Scale from 0.97 and fade in.</p><button class="btn" data-demo-pop>Toggle downloads</button></div>
+        <div class="demo"><div id="demo-space"></div><h4>Space switch</h4><p>The list slides toward the new space; the tint cross-fades.</p><button class="btn" data-demo-next>Next space</button></div>
+      </div>
+      <label class="check"><input type="checkbox" id="reduced-motion"> Simulate reduced motion: every movement becomes a 120 ms cross-fade.</label>
+    </section>
+
+    <section id="a11y">
+      <div class="sec-h"><span class="sec-n">§8</span><h2>Accessibility and tests</h2></div>
+      <dl class="spec">
+        <dt>Focus</dt><dd>Every control shows a 2 px <code>--focus-ring</code> outline on <code>:focus-visible</code>, offset 1 px. Press Tab inside the window below to see it.</dd>
+        <dt>Contrast</dt><dd>Enforced by the theme function, not by review: 4.5:1 for primary and secondary ink on every tint, 3:1 for the accent against the card and the window.</dd>
+        <dt>Hit targets</dt><dd>At least 28 × 28 px. Icon buttons are 28 px with 16 px icons; rows are 34 px.</dd>
+        <dt>Semantics</dt><dd>Existing ARIA roles and every <code>data-testid</code> stay on the same elements. Class names may change.</dd>
+      </dl>
+      <div id="focus-stage" style="max-width:520px;margin-top:18px"></div>
+      <h3>Contrast at full intensity</h3>
+      <p class="muted">Computed live by the same function as the preview. Worst case across the composite.</p>
+      <div class="scroll-x"><table class="tbl" id="contrast-table"></table></div>
+      <h3>Test ids that must survive</h3>
+      <div class="scroll-x"><table class="tbl">
+        <thead><tr><th>Surface</th><th>data-testid</th></tr></thead>
+        <tbody>
+          <tr><td>Sidebar</td><td class="mono">sidebar, pinned-section, unpinned-section, new-tab-button, tab-zoom, tab-shield, drop-indicator, dropzone</td></tr>
+          <tr><td>Spaces</td><td class="mono">space-switcher, space-item, new-space-button, space-name-input</td></tr>
+          <tr><td>Archive</td><td class="mono">archived-toggle, archived-view, archived-item, archived-time, archived-delete, archived-empty</td></tr>
+          <tr><td>Footer</td><td class="mono">downloads-indicator, update-banner, update-banner-action</td></tr>
+          <tr><td>Command bar</td><td class="mono">command-bar, command-bar-input, command-bar-suggestion</td></tr>
+          <tr><td>Find bar</td><td class="mono">find-bar, find-input, find-count, find-previous, find-next, find-close</td></tr>
+          <tr><td>Quick-browse</td><td class="mono">quick-browse, quick-browse-title, quick-browse-url, quick-browse-promote, quick-browse-promote-space, quick-browse-dismiss</td></tr>
+        </tbody>
+      </table></div>
+      <h3>End-to-end checks per surface PRD</h3>
+      <dl class="spec">
+        <dt>Tokens</dt><dd>Read computed custom properties on the window root after a space switch and compare them with <code>themeTokens()</code> output.</dd>
+        <dt>Geometry</dt><dd>Assert WebContentsView bounds equal the §2 formula at several window sizes, sidebar widths and in split view.</dd>
+        <dt>No hex</dt><dd>A lint step fails the build when a component CSS file contains a hex color outside the palette file.</dd>
+        <dt>No screenshots</dt><dd>Checks read the DOM and bounds. Screenshots are for the PR description, not for assertions.</dd>
+      </dl>
+    </section>
+
+    <section id="delivery">
+      <div class="sec-h"><span class="sec-n">§9</span><h2>Delivery</h2></div>
+      <p>One PRD per uzi run, in order. The foundation lands first so every later PRD only adds tokens and component CSS.</p>
+      <div class="prd"><b>10.1</b><h4>Foundation</h4><p>Token tiers as CSS, <code>themeTokens()</code> in <code>packages/core</code> with the contrast sweep, <code>App.css</code> split into one file per component. No visual change beyond the token swap. §3, §4, §5.</p></div>
+      <div class="prd"><b>10.2</b><h4>Frameless chrome</h4><p>Hidden title bar, traffic lights in the sidebar row, vibrancy, inset content card with main-process view bounds, collapsible and resizable sidebar, <code>view.toggleSidebar</code> on ⌘S. §2.</p></div>
+      <div class="prd"><b>10.3</b><h4>Space themes</h4><p>Schema field, theme picker, window re-tint on space switch, space dots in theme colors. §3, §6.</p></div>
+      <div class="prd"><b>10.4</b><h4>Sidebar</h4><p>URL pill, global favorites (storage and grid), pinned and today sections, Clear, bottom bar, update banner. §6.</p></div>
+      <div class="prd"><b>10.5</b><h4>Command bar</h4><p>Floating bar, grouped results, shortcut hints, scrim. §6.</p></div>
+      <div class="prd"><b>10.6</b><h4>Secondary surfaces</h4><p>Settings sheet, find bar, downloads, split view, quick-browse and dialogs. §6.</p></div>
+      <div class="prd"><b>10.7</b><h4>Motion and polish</h4><p>Durations, space switch animation, reduced motion, final contrast and focus pass. §7, §8.</p></div>
+    </section>
+
+    <section id="questions">
+      <div class="sec-h"><span class="sec-n">§10</span><h2>Decisions</h2></div>
+      <ol class="qs">
+        <li><b>Favorites are global.</b> A new favorites list shared by every space fills the tile grid. Pinned tabs stay per space and render as rows below it. PRD 10.4 adds the storage.</li>
+        <li><b>Sidebar toggle on ⌘S.</b> A new <code>view.toggleSidebar</code> command in the View menu, delivered with PRD 10.2.</li>
+        <li><b>Existing spaces get hues by position.</b> The migration that adds the <code>theme</code> column assigns iris, rose, teal, amber, violet, mint, coral, sky, orchid, lime in space order, intensity 1.</li>
+        <li><b>Context menus stay native.</b> Tab and space context menus remain macOS <code>Menu</code> popups. Only surfaces zeo draws itself take the popover tokens.</li>
+      </ol>
+      <footer>Approved 27 September 2026. The markdown spec in <code>docs/design/README.md</code> carries the same content in text form.</footer>
+    </section>
+  </main>
+</div>
+
+<script>
+(function(){
+const $=(s,r=document)=>r.querySelector(s);
+const $$=(s,r=document)=>Array.from(r.querySelectorAll(s));
+
+const HUE_ORDER=["iris","violet","orchid","rose","coral","amber","lime","mint","teal","sky"];
+const HUES={iris:{n:"Iris",h:277,c:.15},violet:{n:"Violet",h:305,c:.15},orchid:{n:"Orchid",h:338,c:.14},rose:{n:"Rose",h:12,c:.15},coral:{n:"Coral",h:42,c:.14},amber:{n:"Amber",h:78,c:.13},lime:{n:"Lime",h:128,c:.14},mint:{n:"Mint",h:162,c:.11},teal:{n:"Teal",h:198,c:.10},sky:{n:"Sky",h:240,c:.13}};
+const ORDER=["work","personal","research"];
+
+function oklchRgb(L,C,h){
+  const hr=h*Math.PI/180,a=C*Math.cos(hr),b=C*Math.sin(hr);
+  const l_=L+0.3963377774*a+0.2158037573*b,m_=L-0.1055613458*a-0.0638541728*b,s_=L-0.0894841775*a-1.2914855480*b;
+  const l=l_*l_*l_,m=m_*m_*m_,s=s_*s_*s_;
+  const lin=[4.0767416621*l-3.3077115913*m+0.2309699292*s,-1.2684380046*l+2.6097574011*m-0.3413193965*s,-0.0041960863*l-0.7034186147*m+1.7076147010*s];
+  return lin.map(x=>{x=Math.max(0,Math.min(1,x));return 255*(x<=0.0031308?12.92*x:1.055*Math.pow(x,1/2.4)-0.055);});
+}
+const toLin=c=>{c/=255;return c<=0.04045?c/12.92:Math.pow((c+0.055)/1.055,2.4);};
+const lum=c=>0.2126*toLin(c[0])+0.7152*toLin(c[1])+0.0722*toLin(c[2]);
+const contrast=(a,b)=>{const x=lum(a),y=lum(b);return (Math.max(x,y)+0.05)/(Math.min(x,y)+0.05);};
+const mix=(a,b,t)=>a.map((v,i)=>v+(b[i]-v)*t);
+const hex=c=>"#"+c.map(v=>Math.round(Math.max(0,Math.min(255,v))).toString(16).padStart(2,"0")).join("");
+const rgba=(c,a)=>`rgb(${c.map(v=>Math.round(v)).join(" ")} / ${a})`;
+
+const BASE={light:[234,234,238],dark:[32,32,36]};
+const CARD={light:[255,255,255],dark:[27,27,31]};
+const POP={light:[250,250,252],dark:[44,44,49]};
+const INK={dark:[26,26,31],light:[245,245,247]};
+const TINT_L={light:.78,dark:.48};
+const TINT_A={light:.55,dark:.35};
+const WHITE=[255,255,255],BLACK=[0,0,0];
+
+function themeTokens(theme,mode){
+  const isDark=mode==="dark",base=BASE[mode],card=CARD[mode],pop=POP[mode];
+  const k=theme?Math.max(0,Math.min(1,theme.intensity)):0;
+  const stops=theme&&k>0?theme.stops:[];
+  const alpha=TINT_A[mode]*k;
+  const tints=stops.map(s=>oklchRgb(TINT_L[mode],HUES[s].c,HUES[s].h));
+  const grounds=tints.length?tints.map(t=>mix(base,t,alpha)):[base];
+  const avg=grounds.reduce((acc,g)=>acc.map((v,i)=>v+g[i]/grounds.length),[0,0,0]);
+  const worst=c=>Math.min(...grounds.map(g=>contrast(c,g)));
+  const ink=worst(INK.dark)>=worst(INK.light)?INK.dark:INK.light;
+  const inkDark=ink===INK.dark;
+  let ink2=ink;
+  for(let m=0.56;m<=1.0001;m+=0.02){const c=mix(avg,ink,m);if(worst(c)>=4.5){ink2=c;break;}}
+  const hue=HUES[(theme&&theme.stops[0])||"iris"];
+  let aL=isDark?0.76:0.54,acc=oklchRgb(aL,Math.min(hue.c+0.03,0.19),hue.h);
+  for(let i=0;i<14;i++){acc=oklchRgb(aL,Math.min(hue.c+0.03,0.19),hue.h);if(contrast(acc,card)>=3&&worst(acc)>=3)break;aL+=isDark?0.02:-0.02;}
+  const onAcc=contrast(WHITE,acc)>=contrast(INK.dark,acc)?WHITE:INK.dark;
+  const popInk=isDark?INK.light:INK.dark;
+  let popInk2=popInk;
+  for(let m=0.5;m<=1.0001;m+=0.02){const c=mix(pop,popInk,m);if(contrast(c,pop)>=4.5){popInk2=c;break;}}
+  const danger=isDark?oklchRgb(.7,.17,25):oklchRgb(.55,.2,27);
+  const tintCss=tints.length===0?"transparent":tints.length===1?hex(tints[0]):`linear-gradient(160deg, ${hex(tints[0])}, ${hex(tints[1])})`;
+  const vars={
+    "--surface-window":rgba(base,.88),
+    "--tint":tintCss,
+    "--tint-opacity":alpha.toFixed(3),
+    "--surface-card":hex(card),
+    "--surface-raised":inkDark?rgba(WHITE,.8):rgba(WHITE,.15),
+    "--surface-hover":rgba(ink,isDark?.1:.08),
+    "--fill-subtle":rgba(ink,isDark?.09:.06),
+    "--hairline":rgba(ink,.12),
+    "--ink-primary":hex(ink),
+    "--ink-secondary":hex(ink2),
+    "--accent":hex(acc),
+    "--accent-soft":rgba(acc,isDark?.3:.16),
+    "--ink-on-accent":hex(onAcc),
+    "--focus-ring":hex(acc),
+    "--danger":hex(danger),
+    "--ink-on-danger":hex(WHITE),
+    "--surface-popover":rgba(pop,.94),
+    "--ink-popover":hex(popInk),
+    "--ink-popover-secondary":hex(popInk2),
+    "--popover-hairline":rgba(popInk,.1),
+    "--popover-hairline-strong":rgba(popInk,.28),
+    "--popover-hover":rgba(popInk,.07),
+    "--popover-well":rgba(popInk,.035),
+    "--control-raised":isDark?rgba(WHITE,.14):hex(WHITE),
+    "--scrim":isDark?rgba(BLACK,.34):rgba([24,24,32],.14),
+    "--shadow-raised":inkDark?"0 1px 2px rgb(0 0 0 / .08), 0 0 0 .5px rgb(0 0 0 / .06)":"0 1px 2px rgb(0 0 0 / .3)",
+    "--shadow-card":isDark?"0 0 0 1px rgb(255 255 255 / .07), 0 1px 3px rgb(0 0 0 / .4), 0 8px 24px rgb(0 0 0 / .28)":"0 0 0 1px rgb(0 0 0 / .07), 0 1px 2px rgb(0 0 0 / .06), 0 6px 18px rgb(0 0 0 / .06)",
+    "--shadow-popover":isDark?"0 0 0 1px rgb(255 255 255 / .09), 0 10px 30px rgb(0 0 0 / .45)":"0 0 0 1px rgb(0 0 0 / .06), 0 10px 30px rgb(0 0 0 / .14), 0 2px 6px rgb(0 0 0 / .06)",
+    "--shadow-palette":isDark?"0 0 0 1px rgb(255 255 255 / .1), 0 28px 70px rgb(0 0 0 / .6)":"0 0 0 1px rgb(0 0 0 / .06), 0 28px 70px rgb(0 0 0 / .22), 0 6px 18px rgb(0 0 0 / .08)",
+    "--page-ink":isDark?"#e6e6eb":"#1d1d22",
+    "--page-muted":isDark?"#9696a0":"#696a74",
+    "--page-rule":isDark?"rgb(255 255 255 / .08)":"rgb(0 0 0 / .08)",
+    "--page-code":isDark?"rgb(255 255 255 / .05)":"rgb(0 0 0 / .035)"
+  };
+  return {vars,info:{grounds,ink,ink2,acc,inkC:worst(ink),ink2C:worst(ink2),accC:Math.min(contrast(acc,card),worst(acc)),popC:contrast(popInk2,pop)}};
+}
+const varStr=v=>Object.entries(v).map(([k,x])=>`${k}:${x}`).join(";");
+
+const ICONS={
+  back:'<path d="M10 3.5 5.5 8l4.5 4.5"/>',
+  forward:'<path d="M6 3.5 10.5 8 6 12.5"/>',
+  reload:'<path d="M12.8 8.6A4.9 4.9 0 1 1 11.4 4.3"/><path d="M11.8 1.8v2.9H8.9"/>',
+  sidebar:'<rect x="2" y="3" width="12" height="10" rx="2.2"/><path d="M6.2 3v10"/>',
+  plus:'<path d="M8 3.2v9.6M3.2 8h9.6"/>',
+  close:'<path d="m4.6 4.6 6.8 6.8M11.4 4.6l-6.8 6.8"/>',
+  download:'<path d="M8 2.6v7.6M4.8 7.2 8 10.4l3.2-3.2M3 13.2h10"/>',
+  archive:'<rect x="2.2" y="3" width="11.6" height="3.2" rx="1"/><path d="M3.2 6.2v6.3c0 .6.4 1 1 1h7.6c.6 0 1-.4 1-1V6.2M6.4 9h3.2"/>',
+  search:'<circle cx="7" cy="7" r="4.3"/><path d="m10.2 10.2 3.3 3.3"/>',
+  shield:'<path d="M8 2.2 12.8 4v3.7c0 2.8-2 5-4.8 6.1-2.8-1.1-4.8-3.3-4.8-6.1V4z"/>',
+  split:'<rect x="2" y="3" width="12" height="10" rx="2.2"/><path d="M8 3v10"/>',
+  sliders:'<path d="M2.5 5h4.2M9.8 5h3.7M2.5 11h1.7M7.3 11h6.2"/><circle cx="8.2" cy="5" r="1.5"/><circle cx="5.7" cy="11" r="1.5"/>',
+  pin:'<path d="M6 2.5h4l-.6 3.8 2.1 2.1v1.1h-7V8.4l2.1-2.1z"/><path d="M8 9.5v4"/>',
+  copy:'<rect x="5.5" y="5.5" width="8" height="8" rx="1.6"/><path d="M10.5 5.5V4.1c0-.9-.7-1.6-1.6-1.6H4.1c-.9 0-1.6.7-1.6 1.6v4.8c0 .9.7 1.6 1.6 1.6h1.4"/>',
+  up:'<path d="m4 10 4-4 4 4"/>',
+  down:'<path d="m4 6 4 4 4-4"/>',
+  history:'<circle cx="8" cy="8" r="5.6"/><path d="M8 4.8V8l2.2 1.4"/>',
+  bolt:'<path d="M8.8 2 3.8 9h4l-.8 5 5-7h-4z"/>',
+  globe:'<circle cx="8" cy="8" r="5.6"/><path d="M2.4 8h11.2M8 2.4c1.6 1.6 2.4 3.5 2.4 5.6S9.6 12 8 13.6C6.4 12 5.6 10.1 5.6 8S6.4 4 8 2.4z"/>',
+  arrow:'<path d="M3 8h10M9.2 4.2 13 8l-3.8 3.8"/>',
+  file:'<path d="M4 2.5h5l3 3v8H4z"/><path d="M9 2.5v3h3"/>',
+  check:'<path d="m3.5 8.4 2.9 2.9 6.1-6.6"/>',
+  palette:'<path d="M8 2.4a5.6 5.6 0 1 0 0 11.2c.9 0 1.3-.6 1.3-1.2 0-.9-.8-1.2-.8-2 0-.7.6-1.2 1.3-1.2h1.4c1.4 0 2.4-1 2.4-2.4 0-2.5-2.5-4.4-5.6-4.4z"/><circle cx="5.2" cy="7" r=".6"/><circle cx="7.4" cy="4.9" r=".6"/><circle cx="10.2" cy="5.4" r=".6"/>',
+  grid:'<rect x="2.5" y="2.5" width="4.5" height="4.5" rx="1.2"/><rect x="9" y="2.5" width="4.5" height="4.5" rx="1.2"/><rect x="2.5" y="9" width="4.5" height="4.5" rx="1.2"/><rect x="9" y="9" width="4.5" height="4.5" rx="1.2"/>',
+  info:'<circle cx="8" cy="8" r="5.6"/><path d="M8 7.2v3.6M8 5.2v.1"/>',
+  trash:'<path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.3 4.5l.6 8.5h6.2l.6-8.5"/>'
+};
+const ic=(n,s=16)=>`<svg class="ic" width="${s}" height="${s}" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[n]}</svg>`;
+const favColor=h=>hex(oklchRgb(.6,HUES[h].c,HUES[h].h));
+const dotColor=h=>hex(oklchRgb(.66,HUES[h].c+.02,HUES[h].h));
+const dotCss=key=>{const t=book.themes[key];if(!t||t.intensity===0)return "#8e8e96";return t.stops.length===2?`linear-gradient(135deg, ${dotColor(t.stops[0])}, ${dotColor(t.stops[1])})`:dotColor(t.stops[0]);};
+
+const SPACES={
+  work:{name:"Work",
+    favs:[{id:"f0",t:"Inbox",d:"mail.local",l:"M",hue:"sky"},{id:"f1",t:"Week 39",d:"calendar.local",l:"C",hue:"coral"},{id:"f2",t:"vtmocanu/zeo",d:"github.com",l:"G",hue:"violet"},{id:"f3",t:"Team chat",d:"chat.local",l:"T",hue:"mint"}],
+    pinned:[{id:"p0",t:"zeo · Pull requests",d:"github.com",l:"G",hue:"violet"},{id:"p1",t:"Epic 10 · design draft",d:"notes.local",l:"N",hue:"amber"}],
+    today:[
+      {id:"t0",t:"Space ownership · PR #150",d:"github.com",l:"G",hue:"violet",shield:14,meta:"Merged · 22 September 2026",body:["Every tab now belongs to exactly one space. Moving a tab between spaces moves its session partition with it, and deleting a space tears its views down in the background.","The migration copies cookies into each profile's own partition. Retries skip cookies that are already present, so a partial failure never overwrites newer values."],code:"spaces.profile_id  -> profiles.id\ntabs.space_id      -> spaces.id"},
+      {id:"t1",t:"CI · build #412 passed",d:"github.com",l:"G",hue:"violet"},
+      {id:"t2",t:"WebContentsView",d:"electronjs.org",l:"E",hue:"sky",zoom:"110%"},
+      {id:"t3",t:"oklch() · CSS color",d:"developer.mozilla.org",l:"M",hue:"amber",shield:3},
+      {id:"t4",t:"NSVisualEffectView",d:"developer.apple.com",l:"A",hue:"teal"}
+    ]},
+  personal:{name:"Personal",
+    favs:[{id:"f0",t:"Photos",d:"photos.local",l:"P",hue:"rose"},{id:"f1",t:"Radio",d:"radio.local",l:"R",hue:"coral"},{id:"f2",t:"Maps",d:"maps.local",l:"M",hue:"lime"},{id:"f3",t:"News",d:"news.local",l:"N",hue:"sky"}],
+    pinned:[{id:"p0",t:"Weekend plans",d:"notes.local",l:"N",hue:"amber"},{id:"p1",t:"Recipes · soups",d:"notes.local",l:"N",hue:"amber"}],
+    today:[
+      {id:"t0",t:"Saturday hike · route notes",d:"maps.local",l:"M",hue:"lime",meta:"Saved · 26 September 2026",body:["Start early. Water at the hut, and check the forecast on Friday evening.","Leave the car at the lower station and take the cable car down if the weather turns."]},
+      {id:"t1",t:"Espresso grinders compared",d:"reviews.local",l:"R",hue:"orchid",shield:23},
+      {id:"t2",t:"Train times · Saturday",d:"trains.local",l:"T",hue:"teal",zoom:"90%"},
+      {id:"t3",t:"Rent reminder · October",d:"notes.local",l:"N",hue:"amber"}
+    ]},
+  research:{name:"Research",
+    favs:[{id:"f0",t:"Papers",d:"papers.local",l:"P",hue:"iris"},{id:"f1",t:"Notes",d:"notes.local",l:"N",hue:"amber"},{id:"f2",t:"Library",d:"library.local",l:"L",hue:"teal"},{id:"f3",t:"Wiki",d:"wiki.local",l:"W",hue:"mint"}],
+    pinned:[{id:"p0",t:"Reading list",d:"notes.local",l:"N",hue:"amber"}],
+    today:[
+      {id:"t0",t:"Understanding SC 1.4.3: Contrast (Minimum)",d:"w3.org",l:"W",hue:"sky",meta:"WCAG 2.2 · Understanding documents",body:["Text and images of text need a contrast ratio of at least 4.5:1. Large text needs at least 3:1.","zeo applies the 4.5:1 floor to sidebar ink on every space tint, in both appearances, inside the theme function."]},
+      {id:"t1",t:"A perceptual color space for image processing",d:"papers.local",l:"P",hue:"iris"},
+      {id:"t2",t:"Materials and vibrancy",d:"developer.apple.com",l:"A",hue:"teal"},
+      {id:"t3",t:"color-mix() · CSS color",d:"developer.mozilla.org",l:"M",hue:"amber",zoom:"125%"}
+    ]}
+};
+const allTabs=sp=>[...sp.favs,...sp.pinned,...sp.today];
+
+const book={space:"work",mode:null,reduced:false,themes:{work:{stops:["iris"],intensity:1},personal:{stops:["rose","amber"],intensity:1},research:{stops:["teal"],intensity:.85}}};
+const picker={stop:0};
+const pageMode=()=>{const t=document.documentElement.getAttribute("data-theme");if(t==="dark"||t==="light")return t;return matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";};
+
+const fav=(t,lg)=>`<span class="zw-fav${lg?" zw-fav--lg":""}" style="--fav:${favColor(t.hue)}">${t.l}</span>`;
+function tabRow(t,active){
+  return `<div class="zw-row${active?" is-active":""}" data-tab="${t.id}" role="tab" aria-selected="${active}" tabindex="0">${fav(t)}<span class="zw-row__title">${t.t}</span>${t.zoom?`<span class="zw-badge zw-zoom" data-testid="tab-zoom">${t.zoom}</span>`:""}${t.shield?`<span class="zw-badge" data-testid="tab-shield">${ic("shield",12)}${t.shield}</span>`:""}<button class="zw-icon-btn zw-row__close" tabindex="-1" aria-label="Close tab">${ic("close",12)}</button></div>`;
+}
+function renderSidebar(o){
+  const sp=SPACES[o.space],tabs=allTabs(sp),act=tabs.find(t=>t.id===o.activeId)||sp.today[0];
+  const spaces=ORDER.map(k=>`<button class="zw-space${k===o.space?" is-active":""}" data-space="${k}" data-testid="space-item" aria-label="${SPACES[k].name}" aria-pressed="${k===o.space}"><i data-dot="${k}" style="background:${dotCss(k)}"></i></button>`).join("");
+  return `<aside class="zw-side" data-testid="sidebar">
+    <div class="zw-top"><span class="zw-lights" aria-hidden="true"><i></i><i></i><i></i></span><span class="zw-tools"><button class="zw-icon-btn" aria-label="Toggle sidebar">${ic("sidebar")}</button><button class="zw-icon-btn" aria-label="Back">${ic("back")}</button><button class="zw-icon-btn" aria-label="Forward">${ic("forward")}</button><button class="zw-icon-btn" aria-label="Reload">${ic("reload")}</button></span></div>
+    <button class="zw-url" data-act="cmd" aria-label="Open location"><span class="zw-url__host">${act.d}</span>${act.shield?ic("shield",14):""}</button>
+    <div class="zw-scroll zw-slide">
+      <div class="zw-favs">${sp.favs.map(f=>`<button class="zw-tile${f.id===act.id?" is-active":""}" data-tab="${f.id}" aria-label="${f.t}">${fav(f,true)}</button>`).join("")}</div>
+      <div class="zw-list" data-testid="pinned-section" role="tablist">${sp.pinned.map(t=>tabRow(t,t.id===act.id)).join("")}</div>
+      <div class="zw-rule"><button class="zw-clear">${ic("down",12)}Clear</button></div>
+      <div class="zw-list" data-testid="unpinned-section" role="tablist"><button class="zw-row zw-row--ghost" data-testid="new-tab-button">${ic("plus",14)}<span class="zw-row__title">New Tab</span></button>${sp.today.map(t=>tabRow(t,t.id===act.id)).join("")}</div>
+    </div>
+    ${o.banner?`<div class="zw-banner" data-testid="update-banner"><div class="zw-banner__text"><div>zeo 0.0.25 is ready<span>Restart to update.</span></div><button class="zw-icon-btn" style="width:22px;height:22px" aria-label="Dismiss">${ic("close",12)}</button></div><button class="zw-btn zw-btn--primary zw-btn--sm" data-testid="update-banner-action" style="align-self:flex-start">Restart</button></div>`:""}
+    <div class="zw-bottom"><span class="zw-bottom__group"><button class="zw-icon-btn" data-testid="downloads-indicator" aria-label="Downloads">${ic("download")}</button><button class="zw-icon-btn" data-testid="archived-toggle" aria-label="Archived tabs">${ic("archive")}</button></span><span class="zw-bottom__group" data-testid="space-switcher">${spaces}</span><button class="zw-icon-btn" data-testid="new-space-button" aria-label="New space">${ic("plus")}</button></div>
+  </aside>`;
+}
+function renderPage(t){
+  const body=t.body||[`This page belongs to ${t.d}. zeo draws nothing inside the card; the site owns every pixel here.`,"Everything around the card, from the sidebar to the command bar, is zeo, and it takes its colors from the space theme."];
+  return `<article class="pg">${`<div class="pg__site">${t.d}</div><h1>${t.t}</h1><div class="pg__meta">${t.meta||"Visited today"}</div>`}${body.map(p=>`<p>${p}</p>`).join("")}${t.code?`<pre class="pg__block">${t.code}</pre>`:""}</article>`;
+}
+function renderContent(o){
+  const sp=SPACES[o.space],tabs=allTabs(sp),act=tabs.find(t=>t.id===o.activeId)||sp.today[0];
+  const find=o.overlay==="find"?renderFind():"";
+  if(o.overlay==="split"){
+    const other=sp.today.find(t=>t.id!==act.id)||sp.today[0];
+    return `<main class="zw-card is-focused" style="right:auto;width:392px">${renderPage(act)}</main><main class="zw-card" style="left:640px">${renderPage(other)}</main>`;
+  }
+  return `<main class="zw-card">${renderPage(act)}${find}</main>`;
+}
+function renderFind(){
+  return `<div class="zw-find" data-testid="find-bar" role="search">${ic("search",14)}<span class="zw-find__q" data-testid="find-input">vibrancy<span class="zw-caret"></span></span><span class="zw-find__count" data-testid="find-count">2 of 7</span><span class="zw-vsep"></span><button class="zw-icon-btn" data-testid="find-previous" aria-label="Previous match">${ic("up",14)}</button><button class="zw-icon-btn" data-testid="find-next" aria-label="Next match">${ic("down",14)}</button><button class="zw-icon-btn" data-testid="find-close" data-act="close" aria-label="Close find">${ic("close",14)}</button></div>`;
+}
+function renderCmd(cls){
+  const row=(icon,p,s,k,sel)=>`<div class="zw-cmd__row${sel?" is-sel":""}" data-testid="command-bar-suggestion">${ic(icon)}<span class="p">${p}</span><span class="s">${s}</span>${k?`<span class="k">${k}</span>`:""}</div>`;
+  return `<div class="zw-cmd ${cls||""}" role="dialog" aria-label="Command bar" data-testid="command-bar">
+    <div class="zw-cmd__input">${ic("search",20)}<span data-testid="command-bar-input">split</span><span class="zw-caret"></span></div>
+    <div class="zw-cmd__list">
+      <div class="zw-group">Tabs</div>
+      ${row("globe","PRD 8.2 · split view","github.com","",true)}
+      <div class="zw-group">History</div>
+      ${row("history","WebContentsView","electronjs.org/docs/latest/api/web-contents-view","")}
+      <div class="zw-group">Commands</div>
+      ${row("split","Split View","","⌘\\")}
+      ${row("split","Split View with Tab…","","")}
+      ${row("bolt","Exit Split View","","⌘⇧\\")}
+      ${row("bolt","Swap Panes","","⌘⌥S")}
+    </div>
+  </div>`;
+}
+function renderSettings(cls){
+  const nav=[["sliders","General",true],["shield","Content blocking"],["grid","Profiles"],["history","History"],["info","About"]];
+  const radio=(n,on)=>`<div class="zw-setrow"><span class="zw-radio${on?" is-on":""}"></span><span class="t">${n}</span></div>`;
+  return `<div class="zw-sheet ${cls||""}" role="dialog" aria-label="Settings">
+    <nav class="zw-sheet__nav"><div class="zw-sheet__title">Settings</div>${nav.map(([i,n,a])=>`<div class="zw-nav-row${a?" is-active":""}">${ic(i)}${n}</div>`).join("")}</nav>
+    <div class="zw-sheet__body">
+      <button class="zw-icon-btn zw-sheet__close" data-act="close" aria-label="Close settings">${ic("close",14)}</button>
+      <h2 class="zw-h2">General</h2>
+      <div><h3 class="zw-label">Default search engine</h3><div class="zw-field">${radio("DuckDuckGo",true)}${radio("Google")}${radio("Bing")}</div></div>
+      <div><h3 class="zw-label">External links</h3><div class="zw-field"><div class="zw-setrow"><span class="t">Default browser<span>zeo is not your default browser.</span></span><button class="zw-btn">Make Default</button></div></div></div>
+      <div><h3 class="zw-label">Updates</h3><div class="zw-field"><div class="zw-setrow"><span class="t">Version 0.0.24<span>Checked today at 09:12.</span></span><button class="zw-btn">Check Now</button></div></div></div>
+    </div>
+  </div>`;
+}
+function chipHtml(m){
+  const t=book.themes[book.space],th=themeTokens(t,m),g=th.info.grounds;
+  const bg=g.length===2?`linear-gradient(160deg, ${hex(g[0])}, ${hex(g[1])})`:hex(g[0]);
+  return `<div class="zw-chip" data-chip="${m}" style="background:${bg};color:${hex(th.info.ink)}"><b>Aa</b><span style="color:${hex(th.info.ink2)}">${m==="light"?"Light":"Dark"} · ${th.info.inkC.toFixed(1)} / ${th.info.ink2C.toFixed(1)}</span></div>`;
+}
+let pickerUid=0;
+function renderPicker(cls){
+  const t=book.themes[book.space],sp=SPACES[book.space],grad=t.stops.length===2,stop=Math.min(picker.stop,t.stops.length-1),id="picker-intensity-"+(++pickerUid);
+  return `<div class="zw-pop zw-picker ${cls||""}" role="dialog" aria-label="${sp.name} theme">
+    <div class="zw-pop__head"><span>${sp.name} theme</span>${ic("palette")}</div>
+    <div class="zw-seg" role="group" aria-label="Theme kind"><button data-pick-kind="solid" aria-pressed="${!grad}">Solid</button><button data-pick-kind="gradient" aria-pressed="${grad}">Gradient</button></div>
+    ${grad?`<div class="zw-seg" role="group" aria-label="Gradient stop">${t.stops.map((s,i)=>`<button data-pick-stop="${i}" aria-pressed="${i===stop}"><i class="zw-dot" style="background:${dotColor(s)}"></i>Color ${i+1}</button>`).join("")}</div>`:""}
+    <div class="zw-swatches">${HUE_ORDER.map(k=>`<button class="zw-swatch" data-pick-hue="${k}" aria-pressed="${t.stops[stop]===k}" aria-label="${HUES[k].n}" title="${HUES[k].n}" style="background:${dotColor(k)}"></button>`).join("")}</div>
+    <div class="zw-slider"><label for="${id}">Intensity</label><output data-intensity-out>${Math.round(t.intensity*100)}%</output><input type="range" id="${id}" data-pick-intensity min="0" max="100" step="5" value="${Math.round(t.intensity*100)}"></div>
+    <div class="zw-chips">${chipHtml("light")}${chipHtml("dark")}</div>
+  </div>`;
+}
+function renderOverlay(o){
+  if(o.overlay==="cmd")return `<div class="zw-scrim" data-act="close"></div>${renderCmd()}`;
+  if(o.overlay==="settings")return `<div class="zw-scrim" data-act="close"></div>${renderSettings()}`;
+  if(o.overlay==="theme")return renderPicker("zw-anchor-space is-open");
+  return "";
+}
+function shell(space,mode,inner,cls){
+  const th=themeTokens(book.themes[space],mode);
+  return `<div class="zw ${cls||""}" data-space="${space}" data-mode="${mode}" style="${varStr(th.vars)}"><div class="zw-base"></div><div class="zw-tint"></div><div class="zw-tint zw-tint--prev"></div>${inner}</div>`;
+}
+function renderWindow(o){
+  return shell(o.space,o.mode,renderSidebar(o)+(o.sidebarOnly?"":renderContent(o))+renderOverlay(o));
+}
+
+const stages=[];
+class Stage{
+  constructor(host,opt){
+    this.host=host;this.w=opt.w;this.h=opt.h;this.pad=opt.pad==null?40:opt.pad;this.draw=opt.render;this.fixedMode=opt.mode||null;this.localSpace=opt.space||null;
+    this.active={work:"t0",personal:"t0",research:"t0"};this.overlay="none";this.banner=!!opt.banner;
+    host.classList.add("stage");if(opt.thumb)host.classList.add("stage--thumb");
+    host.__stage=this;
+    this.inner=document.createElement("div");this.inner.className="stage__inner";
+    this.inner.style.width=(this.w+2*this.pad)+"px";this.inner.style.height=(this.h+2*this.pad)+"px";this.inner.style.padding=this.pad+"px";
+    host.append(this.inner);
+    stages.push(this);this.render();this.fit();
+    if(window.ResizeObserver)new ResizeObserver(()=>this.fit()).observe(host);
+  }
+  mode(){return this.fixedMode||book.mode||pageMode();}
+  spaceKey(){return this.localSpace||book.space;}
+  fit(){const W=this.w+2*this.pad,H=this.h+2*this.pad,cw=this.host.clientWidth||W,s=Math.min(1,cw/W);this.inner.style.transform=`scale(${s})`;this.host.style.height=`${H*s}px`;}
+  render(){const m=this.mode();this.host.classList.remove("wall--light","wall--dark");this.host.classList.add("wall--"+m);this.inner.className="stage__inner wall--"+m;this.inner.innerHTML=this.draw(m,this);}
+}
+function winStage(host,opt){
+  return new Stage(host,Object.assign({w:1040,h:660},opt,{render:(m,s)=>renderWindow({space:s.spaceKey(),mode:m,overlay:s.overlay,activeId:s.active[s.spaceKey()],banner:s.banner,sidebarOnly:opt.sidebarOnly})}));
+}
+function bareStage(host,w,h,inner,opt){
+  return new Stage(host,Object.assign({w,h,pad:24},opt||{},{render:(m,s)=>shell(s.spaceKey(),m,typeof inner==="function"?inner(m,s):inner)}));
+}
+
+function animateIn(stage,dir,pv){
+  const z=stage.inner.querySelector(".zw");if(!z)return;
+  const prev=z.querySelector(".zw-tint--prev");
+  if(prev&&pv){prev.style.transition="none";prev.style.background=pv.bg;prev.style.opacity=pv.op;void prev.offsetWidth;prev.style.transition="";prev.style.opacity="0";}
+  const sl=z.querySelector(".zw-slide");if(sl)sl.classList.add("is-enter-"+dir);
+  const pg=z.querySelector(".pg");if(pg)pg.classList.add("is-fade");
+}
+function switchSpace(stage,key){
+  const cur=stage.spaceKey();if(key===cur)return;
+  const dir=ORDER.indexOf(key)>ORDER.indexOf(cur)?"right":"left";
+  const z=stage.inner.querySelector(".zw");
+  const pv=z?{bg:z.style.getPropertyValue("--tint"),op:z.style.getPropertyValue("--tint-opacity")}:null;
+  if(stage.localSpace){stage.localSpace=key;stage.render();}
+  else{book.space=key;picker.stop=0;rerenderAll();}
+  animateIn(stage,dir,pv);
+}
+function retint(){
+  $$(".zw[data-space]").forEach(z=>{z.style.cssText=varStr(themeTokens(book.themes[z.dataset.space],z.dataset.mode).vars);});
+  $$("[data-dot]").forEach(e=>{e.style.background=dotCss(e.dataset.dot);});
+  $$("[data-chip]").forEach(e=>{e.outerHTML=chipHtml(e.dataset.chip);});
+  renderTables();
+}
+function rerenderAll(){stages.forEach(s=>s.render());renderTables();syncControls();}
+function syncControls(){
+  $$("[data-ctl]").forEach(g=>{const k=g.dataset.ctl;const v=k==="space"?book.space:k==="mode"?(book.mode||""):hero.overlay;$$("button",g).forEach(b=>b.setAttribute("aria-pressed",String(b.dataset.v===v)));});
+  const pct=Math.round(book.themes[book.space].intensity*100);
+  $$("input[data-pick-intensity]").forEach(i=>{if(document.activeElement!==i)i.value=pct;});
+  $$("[data-intensity-out]").forEach(o=>{o.textContent=pct+"%";});
+}
+
+function renderTables(){
+  const mode=book.mode||pageMode(),th=themeTokens(book.themes[book.space],mode);
+  const roles={"--surface-window":"Vibrancy fallback under the tint","--tint":"Space tint layer","--tint-opacity":"Tint layer opacity","--surface-card":"Content card","--surface-raised":"Active tab, active tile, banner","--surface-hover":"Hover overlay","--fill-subtle":"URL pill, favorite tiles","--hairline":"Dividers on the window","--ink-primary":"Text on the window","--ink-secondary":"Secondary text and icons on the window","--accent":"Selection, primary buttons, progress","--accent-soft":"Selected rows","--ink-on-accent":"Text on the accent","--focus-ring":"Keyboard focus","--danger":"Destructive actions","--surface-popover":"Popovers, command bar, sheets","--ink-popover":"Text on popovers","--ink-popover-secondary":"Secondary text on popovers","--popover-hairline":"Dividers on popovers","--scrim":"Behind modal surfaces"};
+  const isColor=v=>/^#|^rgb|^linear/.test(v);
+  $("#tokens-caption").textContent=`${SPACES[book.space].name} space, ${mode} appearance. Values update as you change the space, appearance or intensity.`;
+  $("#token-table").innerHTML=`<thead><tr><th></th><th>Token</th><th>Value</th><th>Role</th></tr></thead><tbody>${Object.keys(roles).map(k=>{const v=th.vars[k];return `<tr><td>${isColor(v)?`<span class="sw" style="background:${v}"></span>`:""}</td><td class="mono">${k}</td><td class="mono">${v}</td><td>${roles[k]}</td></tr>`;}).join("")}</tbody>`;
+  const cell=(c,min)=>`<span class="${c>=min?"pass":"fail"}">${c.toFixed(2)}</span>`;
+  $("#contrast-table").innerHTML=`<thead><tr><th>Hue</th><th>Light ink</th><th>Light secondary</th><th>Light accent</th><th>Dark ink</th><th>Dark secondary</th><th>Dark accent</th></tr></thead><tbody>${HUE_ORDER.map(k=>{const L=themeTokens({stops:[k],intensity:1},"light").info,D=themeTokens({stops:[k],intensity:1},"dark").info;return `<tr><td><span class="sw" style="background:${dotColor(k)};width:14px;height:14px;border-radius:50%;margin-right:8px"></span>${HUES[k].n}</td><td>${cell(L.inkC,4.5)}</td><td>${cell(L.ink2C,4.5)}</td><td>${cell(L.accC,3)}</td><td>${cell(D.inkC,4.5)}</td><td>${cell(D.ink2C,4.5)}</td><td>${cell(D.accC,3)}</td></tr>`;}).join("")}</tbody>`;
+}
+function renderStatic(){
+  const rampL=[.992,.978,.955,.93,.905,.875,.83,.76,.62,.55,.44,.22],rampD=[.17,.2,.235,.265,.295,.33,.38,.46,.6,.67,.8,.95];
+  const ramp=(ls)=>`<div class="ramp">${ls.map((l,i)=>{const c=hex(oklchRgb(l,.006,275));return `<div><i style="background:${c}"></i><span>${i+1}</span><span>${c}</span></div>`;}).join("")}</div>`;
+  $("#ramps").innerHTML=`<div class="ramp-label">Light</div>${ramp(rampL)}<div class="ramp-label">Dark</div>${ramp(rampD)}`;
+  $("#hue-table").innerHTML=`<thead><tr><th>Hue</th><th>OKLCH h</th><th>Chroma</th><th>Tint light</th><th>Tint dark</th><th>Accent light</th><th>Accent dark</th></tr></thead><tbody>${HUE_ORDER.map(k=>{const H=HUES[k],tl=hex(oklchRgb(TINT_L.light,H.c,H.h)),td=hex(oklchRgb(TINT_L.dark,H.c,H.h)),al=hex(themeTokens({stops:[k],intensity:1},"light").info.acc),ad=hex(themeTokens({stops:[k],intensity:1},"dark").info.acc);return `<tr><td><b>${H.n}</b></td><td class="mono">${H.h}</td><td class="mono">${H.c.toFixed(2)}</td><td class="mono"><span class="sw" style="background:${tl}"></span> ${tl}</td><td class="mono"><span class="sw" style="background:${td}"></span> ${td}</td><td class="mono"><span class="sw" style="background:${al}"></span> ${al}</td><td class="mono"><span class="sw" style="background:${ad}"></span> ${ad}</td></tr>`;}).join("")}</tbody>`;
+  const types=[["22 / 400","--text-xl","Command bar input","Open location or search",22,400,0,""],["17 / 600","--text-lg","Sheet and page titles","General",17,600,-.01,""],["15 / 600","--text-md","Dialog and popover titles","Delete the Personal space?",15,600,0,""],["13 / 500","--text-base","Tab titles, buttons","Space ownership · PR #150",13,500,0,""],["13 / 400","--text-base","Body text in surfaces","Version 0.0.24, checked today at 09:12.",13,400,0,""],["12 / 400","--text-sm","Meta, counts, shortcut hints","2 of 7 · ⌘⇧J · 142 MB",12,400,0,""],["11 / 600","--text-xs","Section labels, uppercase","Default search engine",11,600,.06,"uppercase"]];
+  $("#type-rows").innerHTML=types.map(([s,tok,role,sample,px,w,ls,tt])=>`<div class="type-row"><div class="meta"><b>${role}</b>${s}${ls?` · ${ls>0?"+":""}${ls}em`:""}<br>${tok}</div><div class="type-sample" style="font-size:${px}px;font-weight:${w};letter-spacing:${ls}em;text-transform:${tt||"none"}">${sample}</div></div>`).join("");
+  $("#space-scale").innerHTML=[2,4,6,8,12,16,20,24,32].map((v,i)=>`<div><span>--space-${i+1}</span><span>${v}px</span><i style="width:${v*4}px"></i></div>`).join("");
+  $("#icons").innerHTML=Object.keys(ICONS).map(n=>`<div><span class="pair">${ic(n)}${ic(n,32)}</span>${n}</div>`).join("");
+}
+
+const hero=winStage($("#hero"),{pad:48});
+const gallery=$("#gallery");
+ORDER.forEach(sp=>["light","dark"].forEach(m=>{
+  const wrap=document.createElement("div");const host=document.createElement("div");const lab=document.createElement("div");
+  lab.className="gallery-label";lab.innerHTML=`<span>${SPACES[sp].name}</span><span>${m==="light"?"Light":"Dark"}</span>`;
+  wrap.append(host,lab);gallery.append(wrap);
+  winStage(host,{pad:20,mode:m,space:sp,thumb:true});
+}));
+winStage($("#sidebar-stage"),{w:248,h:660,pad:16,sidebarOnly:true,banner:true});
+bareStage($("#cmd-stage"),820,440,()=>renderCmd("zw-cmd--static"));
+bareStage($("#settings-stage"),820,540,()=>renderSettings("zw-sheet--static"));
+bareStage($("#find-stage"),520,150,()=>`<main class="zw-card" style="left:8px;bottom:-40px"><article class="pg" style="padding-top:64px"><div class="pg__site">developer.apple.com</div></article>${renderFind()}</main>`);
+bareStage($("#picker-stage"),300,400,()=>`<div class="zw-anchor" style="left:12px;top:12px">${renderPicker()}</div>`);
+const pg=$("#popover-grid");
+const cell=(label,w,h,fn)=>{const wrap=document.createElement("div");const host=document.createElement("div");const lab=document.createElement("div");lab.className="gallery-label";lab.innerHTML=`<span>${label}</span>`;wrap.append(host,lab);pg.append(wrap);bareStage(host,w,h,fn);};
+const downloads=(cls)=>`<div class="zw-pop ${cls||""}" style="width:320px"><div class="zw-pop__head"><span>Downloads</span><button class="zw-icon-btn" aria-label="Clear downloads">${ic("trash",14)}</button></div>
+  <div class="zw-dl"><span class="zw-dl__icon">${ic("file")}</span><span class="zw-dl__text"><div class="zw-dl__name">dataset-2026-09.zip</div><div class="zw-dl__meta">212 of 560 MB · 38%</div><div class="zw-progress"><i style="width:38%"></i></div></span><button class="zw-icon-btn" aria-label="Cancel">${ic("close",14)}</button></div>
+  <div class="zw-dl"><span class="zw-dl__icon">${ic("file")}</span><span class="zw-dl__text"><div class="zw-dl__name">zeo-0.0.24-arm64.dmg</div><div class="zw-dl__meta">142 MB · Done</div></span></div>
+  <div class="zw-dl"><span class="zw-dl__icon">${ic("file")}</span><span class="zw-dl__text"><div class="zw-dl__name">route-saturday.gpx</div><div class="zw-dl__meta">1.2 MB · Done</div></span></div></div>`;
+cell("Downloads",380,270,()=>`<div class="zw-anchor" style="left:30px;top:24px">${downloads()}</div>`);
+cell("Update banner",380,270,()=>`<div class="zw-anchor" style="left:70px;top:60px;width:224px;display:flex;flex-direction:column;gap:10px"><div class="zw-banner" data-testid="update-banner"><div class="zw-banner__text"><div>zeo 0.0.25 is ready<span>Restart to update.</span></div><button class="zw-icon-btn" style="width:22px;height:22px" aria-label="Dismiss">${ic("close",12)}</button></div><button class="zw-btn zw-btn--primary zw-btn--sm" data-testid="update-banner-action" style="align-self:flex-start">Restart</button></div><div class="zw-bottom"><span class="zw-bottom__group"><button class="zw-icon-btn" aria-label="Downloads">${ic("download")}</button><button class="zw-icon-btn" aria-label="Archived tabs">${ic("archive")}</button></span><span class="zw-bottom__group">${ORDER.map(k=>`<button class="zw-space${k===book.space?" is-active":""}" aria-label="${SPACES[k].name}"><i data-dot="${k}" style="background:${dotCss(k)}"></i></button>`).join("")}</span><button class="zw-icon-btn" aria-label="New space">${ic("plus")}</button></div></div>`);
+cell("Quick-browse",520,340,()=>`<div class="zw-qb" data-testid="quick-browse"><div class="zw-qb__bar"><span class="zw-qb__title"><b data-testid="quick-browse-title">Materials and vibrancy</b><span data-testid="quick-browse-url">developer.apple.com</span></span><button class="zw-btn zw-btn--primary zw-btn--sm" data-testid="quick-browse-promote">Open in Tab</button><button class="zw-btn zw-btn--sm" data-testid="quick-browse-promote-space">Move to Space</button><button class="zw-icon-btn" data-testid="quick-browse-dismiss" aria-label="Dismiss">${ic("close",14)}</button></div>${renderPage({d:"developer.apple.com",t:"Materials and vibrancy",meta:"Opened from Mail",body:["Links opened from other apps land here first. Keep the page in a tab, move it to a space, or dismiss it."]})}</div>`);
+cell("Dialog",520,340,()=>`<div class="zw-scrim" style="animation:none"></div><div class="zw-pop zw-dialog zw-anchor" style="left:70px;top:90px"><h3>Delete the Personal space?</h3><p>The space and its tabs are removed. This cannot be undone.</p><div class="zw-dialog__actions"><button class="zw-btn">Cancel</button><button class="zw-btn zw-btn--danger">Delete Space</button></div></div>`);
+
+bareStage($("#demo-hover"),300,150,()=>`<div class="zw-demo"><div class="zw-list">${SPACES.work.today.slice(0,3).map((t,i)=>tabRow(t,i===0)).join("")}</div><div style="display:flex;gap:2px;margin-top:6px"><button class="zw-icon-btn" aria-label="Back">${ic("back")}</button><button class="zw-icon-btn" aria-label="Forward">${ic("forward")}</button><button class="zw-icon-btn" aria-label="Reload">${ic("reload")}</button></div></div>`,{pad:12});
+const popDemo=bareStage($("#demo-pop"),300,150,(m,s)=>`<div class="zw-demo" style="inset:12px"><button class="zw-icon-btn" data-demo-pop aria-label="Downloads">${ic("download")}</button>${s.open?`<div class="zw-anchor" style="left:34px;top:0;transform:scale(.72);transform-origin:0 0">${downloads("is-open")}</div>`:""}</div>`,{pad:12});
+popDemo.open=true;popDemo.render();
+const spaceDemo=winStage($("#demo-space"),{w:248,h:360,pad:12,sidebarOnly:true,space:"work"});
+bareStage($("#focus-stage"),480,110,()=>`<div class="zw-demo" style="display:flex;flex-direction:column;gap:8px"><div style="display:flex;gap:2px"><button class="zw-icon-btn" aria-label="Toggle sidebar">${ic("sidebar")}</button><button class="zw-icon-btn" aria-label="Back">${ic("back")}</button><button class="zw-icon-btn" aria-label="Forward">${ic("forward")}</button><button class="zw-icon-btn" aria-label="Reload">${ic("reload")}</button><button class="zw-url" style="width:auto;flex:1;margin-left:8px">github.com</button></div>${tabRow(SPACES.work.today[0],false)}</div>`,{pad:12});
+
+document.addEventListener("click",e=>{
+  const t=e.target;
+  const ctl=t.closest("[data-ctl] button");
+  if(ctl){const k=ctl.parentElement.dataset.ctl,v=ctl.dataset.v;
+    if(k==="space")switchSpace(hero,v);
+    else if(k==="mode"){book.mode=v||null;rerenderAll();}
+    else if(k==="overlay"){hero.overlay=v;hero.render();syncControls();}
+    return;}
+  if(t.closest("[data-demo-pop]")){popDemo.open=!popDemo.open;popDemo.render();return;}
+  if(t.closest("[data-demo-next]")){const i=ORDER.indexOf(spaceDemo.spaceKey());switchSpace(spaceDemo,ORDER[(i+1)%ORDER.length]);return;}
+  const hueB=t.closest("[data-pick-hue]");
+  if(hueB){const th=book.themes[book.space];const i=Math.min(picker.stop,th.stops.length-1);th.stops[i]=hueB.dataset.pickHue;if(th.intensity===0)th.intensity=1;rerenderAll();return;}
+  const kind=t.closest("[data-pick-kind]");
+  if(kind){const th=book.themes[book.space];if(kind.dataset.pickKind==="solid"){th.stops=[th.stops[0]];picker.stop=0;}else if(th.stops.length===1){th.stops=[th.stops[0],HUE_ORDER[(HUE_ORDER.indexOf(th.stops[0])+3)%HUE_ORDER.length]];picker.stop=1;}rerenderAll();return;}
+  const st=t.closest("[data-pick-stop]");
+  if(st){picker.stop=Number(st.dataset.pickStop);rerenderAll();return;}
+  const stageHost=t.closest(".stage");if(!stageHost)return;
+  const stage=stageHost.__stage;if(!stage)return;
+  const sp=t.closest("[data-space]:not(.zw)");
+  if(sp){switchSpace(stage,sp.dataset.space);return;}
+  if(stage===hero){
+    const act=t.closest("[data-act]");
+    if(act&&act.dataset.act==="cmd"){hero.overlay="cmd";hero.render();syncControls();return;}
+    if(act&&act.dataset.act==="close"){hero.overlay="none";hero.render();syncControls();return;}
+  }
+  const tab=t.closest("[data-tab]");
+  if(tab&&!t.closest(".zw-row__close")){stage.active[stage.spaceKey()]=tab.dataset.tab;stage.render();}
+});
+document.addEventListener("keydown",e=>{
+  if(e.key==="Escape"&&hero.overlay!=="none"){hero.overlay="none";hero.render();syncControls();}
+  if(e.key==="Enter"){const tab=e.target.closest&&e.target.closest(".zw-row[data-tab]");const host=tab&&tab.closest(".stage");if(host&&host.__stage){const s=host.__stage;s.active[s.spaceKey()]=tab.dataset.tab;s.render();}}
+});
+document.addEventListener("input",e=>{
+  if(!e.target.matches("[data-pick-intensity]"))return;
+  book.themes[book.space].intensity=Number(e.target.value)/100;
+  retint();syncControls();
+});
+const rm=$("#reduced-motion");
+const mq=matchMedia("(prefers-reduced-motion: reduce)");
+book.reduced=mq.matches;rm.checked=book.reduced;document.body.classList.toggle("reduced",book.reduced);
+rm.addEventListener("change",()=>{book.reduced=rm.checked;document.body.classList.toggle("reduced",book.reduced);});
+const onScheme=()=>{if(!book.mode)rerenderAll();};
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change",onScheme);
+new MutationObserver(onScheme).observe(document.documentElement,{attributes:true,attributeFilter:["data-theme"]});
+
+renderStatic();renderTables();syncControls();
+})();
+</script>
+</body>
+</html>
