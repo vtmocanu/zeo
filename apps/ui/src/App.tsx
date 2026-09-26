@@ -925,6 +925,35 @@ export function App() {
         </div>
       )}
 
+      {state.update.available !== null && (
+        <div className="update-banner" data-testid="update-banner">
+          <span className="update-banner__text">
+            Update available: zeo {state.update.available.version}
+          </span>
+          <button
+            type="button"
+            className="update-banner__action"
+            data-testid="update-banner-action"
+            onClick={() =>
+              void (state.update.origin === "homebrew"
+                ? window.zeo?.commands.run("settings.openGeneral")
+                : window.zeo?.update.openRelease()
+              )?.catch(() => {})
+            }
+          >
+            {state.update.origin === "homebrew" ? "How to upgrade" : "Open release"}
+          </button>
+          <button
+            type="button"
+            className="update-banner__dismiss"
+            aria-label="Dismiss update"
+            onClick={() => void window.zeo?.update.dismiss().catch(() => {})}
+          >
+            ×
+          </button>
+        </div>
+      )}
+
       <footer className="sidebar__footer">
         {downloadItems.length > 0 && (
           <button
