@@ -217,6 +217,9 @@ export function Settings() {
           <ProfilesSection profiles={state.profiles} spaces={state.spaces} />
         )}
         {selected === "history" && <HistorySection />}
+        {selected === "about" && state !== null && (
+          <AboutSection version={state.appVersion} />
+        )}
       </div>
     </div>
   );
@@ -982,6 +985,31 @@ function HistorySection() {
             Confirm clear
           </button>
         )}
+      </div>
+    </section>
+  );
+}
+
+/**
+ * The about settings body (PRD 8.1 §7): the product name and the running app
+ * version, both purely display — no controls, no mutations. `version` is read
+ * straight from the broadcast `TabsState.appVersion`, set once at launch from
+ * `app.getVersion()`.
+ */
+function AboutSection({ version }: { version: string }) {
+  return (
+    <section className="settings__group">
+      <h2 className="settings__group-title">About</h2>
+
+      <div className="settings__row">
+        <span className="settings__label">Product</span>
+        <span className="settings__value">zeo</span>
+      </div>
+      <div className="settings__row">
+        <span className="settings__label">Version</span>
+        <span className="settings__value" data-testid="settings-about-version">
+          {version}
+        </span>
       </div>
     </section>
   );
