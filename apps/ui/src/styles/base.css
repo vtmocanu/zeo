@@ -1,0 +1,17 @@
+/* Document base: appearance, box model and the UI font. */
+
+:root {
+  color-scheme: light dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-ui);
+  font-size: var(--text-base);
+  color: var(--ink-primary);
+  -webkit-font-smoothing: antialiased;
+}

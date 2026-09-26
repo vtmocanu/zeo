@@ -1,0 +1,73 @@
+/* Space switcher ---------------------------------------------------------- */
+
+/* Horizontal, wrapping strip of spaces sitting between the header and the tab
+   sections. Matches the header's 1px divider and padding tokens. */
+.space-switcher {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  padding: 8px;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.space-item {
+  appearance: none;
+  border: 1px solid transparent;
+  background: none;
+  color: var(--ink-primary);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 12px;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.space-item:hover {
+  background: var(--surface-hover);
+}
+
+.space-item--active {
+  background: var(--surface-raised);
+}
+
+.space-item:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+.space-new {
+  appearance: none;
+  border: 1px solid var(--hairline);
+  background: var(--fill-subtle);
+  color: var(--ink-primary);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.space-new:hover {
+  background: var(--surface-hover);
+}
+
+.space-name-input {
+  appearance: none;
+  border: 1px solid var(--hairline);
+  background: var(--surface-card);
+  color: var(--ink-primary);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 12px;
+  min-width: 0;
+  flex: 1 1 80px;
+}
+
+.space-name-input:focus {
+  outline: none;
+  border-color: var(--focus-ring);
+}

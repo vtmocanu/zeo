@@ -5,7 +5,6 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { clampRatio } from "@zeo/core";
-import "./App.css";
 
 /**
  * The draggable divider (gutter) between the two split panes, mounted in its own

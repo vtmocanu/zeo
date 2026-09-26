@@ -7,7 +7,6 @@ import {
 } from "react";
 import { formatAccelerator } from "@zeo/core";
 import type { CommandBarMode, CommandBarState, Suggestion } from "@zeo/core";
-import "./App.css";
 
 /**
  * A per-kind glyph placeholder for a suggestion row. The {@link Suggestion} type

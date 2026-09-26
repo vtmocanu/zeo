@@ -1,0 +1,119 @@
+/* Command bar ------------------------------------------------------------- */
+
+/* The overlay WebContentsView is sized/positioned by main to fit the input plus
+   its suggestion rows, so this container fills it (100vh) as a column with the
+   input at the top and the rows flowing below. Reads the popover
+   tokens for its surface, border, and text colors. Never scrolls (the row cap in
+   main bounds the list). */
+.command-bar {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  padding: 8px;
+  background: var(--surface-popover);
+  color: var(--ink-popover);
+  border: 1px solid var(--popover-hairline);
+  border-radius: 10px;
+  box-shadow: var(--shadow-palette);
+  overflow: hidden;
+}
+
+/* Full-width input matching the sidebar's inline-edit field, sized up for the
+   address row. No default outline; a clear accent border on focus. */
+.command-bar__input {
+  appearance: none;
+  flex: 0 0 auto;
+  min-width: 0;
+  border: 1px solid var(--popover-hairline-strong);
+  background: var(--popover-well);
+  color: var(--ink-popover);
+  border-radius: 6px;
+  padding: 10px 12px;
+  font-size: 14px;
+  font-family: inherit;
+}
+
+.command-bar__input::placeholder {
+  color: var(--ink-popover-secondary);
+}
+
+.command-bar__input:focus {
+  outline: none;
+  border-color: var(--focus-ring);
+}
+
+/* Suggestion rows flow directly under the input. No scroll — main caps the row
+   count and sizes the overlay to fit, so the column always fits. */
+.command-bar__list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 6px;
+}
+
+.command-bar__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: default;
+}
+
+.command-bar__row--selected {
+  background: var(--accent-soft);
+}
+
+.command-bar__row-icon {
+  flex: 0 0 auto;
+  width: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ink-popover-secondary);
+  font-size: 13px;
+  line-height: 1;
+}
+
+.command-bar__row-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.command-bar__row-primary {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink-popover);
+  font-size: 13px;
+}
+
+.command-bar__row-secondary {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink-popover-secondary);
+  font-size: 11px;
+}
+
+/* The command accelerator, pushed to the row's right edge (the row is a flex
+   container). Muted like the secondary text; monospace keeps the macOS glyphs
+   crisp and evenly aligned across rows. */
+.command-bar__row-accel {
+  flex: 0 0 auto;
+  margin-left: auto;
+  padding-left: 8px;
+  white-space: nowrap;
+  color: var(--ink-popover-secondary);
+  font-size: 12px;
+  font-family:
+    ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+}

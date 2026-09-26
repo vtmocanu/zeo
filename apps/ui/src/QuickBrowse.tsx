@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import type { TabsState } from "@zeo/core";
-import "./App.css";
 
 /**
  * The quick-browse chrome bar, mounted in its own WebContentsView (selected by

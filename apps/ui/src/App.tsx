@@ -22,7 +22,6 @@ import {
   siteKeyForUrl,
 } from "@zeo/core";
 import { Favicon } from "./Favicon.js";
-import "./App.css";
 
 // Pointer travel (px) required before a press turns into a drag. Below this a
 // press stays a plain click, so click-to-activate / click-to-close keep working.

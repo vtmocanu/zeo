@@ -21,7 +21,6 @@ import {
   type TabsState,
   type UpdateState,
 } from "@zeo/core";
-import "./App.css";
 
 /**
  * The settings surface, mounted in its own WebContentsView (selected by
