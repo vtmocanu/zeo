@@ -4063,6 +4063,54 @@ test.describe("zeo desktop app", () => {
     expect(closeRejected).toBe(true);
     await expect.poll(readResync).toBeGreaterThan(beforeClose);
   });
+
+  // Issue #34 / #141 — on macOS the app + application menu stay alive after the
+  // last window closes (other platforms quit), so a menu accelerator can fire with
+  // NO window open. Main's ensureWindow() recreates exactly one window first (never
+  // seeding — the in-memory store already reflects the user's state), then runs the
+  // command. This documents that contract: firing a Tabs-menu item with no window
+  // recreates a SINGLE window and accumulates NO hidden/duplicate tabs (the open
+  // tab count is unchanged). Darwin-gated — it is skipped on the Linux CI/sidecar,
+  // where window-all-closed quits the app — but still parses/collects there.
+  test("recreates the window when a menu accelerator fires with no window open (macOS)", async () => {
+    test.skip(
+      process.platform !== "darwin",
+      "macOS keeps the app + menu alive after the last window closes; other platforms quit.",
+    );
+
+    // Baseline open-tab count before the window is closed.
+    const before = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      return (await zeo.tabs.list()).tabs.length;
+    });
+
+    // Close the only window; on darwin the app survives and the menu stays live.
+    await app.evaluate(({ BrowserWindow }) => {
+      BrowserWindow.getAllWindows()[0].close();
+    });
+    await expect
+      .poll(async () => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length))
+      .toBe(0);
+
+    // Fire a Tabs-menu item that acts on the store (Activate Tab 1). ensureWindow()
+    // recreates the window before the command runs — chosen over New Tab, which now
+    // only opens the command bar, so this does not depend on new-tab-creates-a-tab.
+    await clickTabsMenuItem(app, "Activate Tab 1");
+
+    // Exactly one window is recreated.
+    await expect
+      .poll(async () => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length))
+      .toBe(1);
+
+    // No hidden/duplicate tabs accumulated: the recreated window (seed:false) keeps
+    // the same open tabs. Re-acquire the fresh window's sidebar and re-count.
+    const recreated = await sidebarWindow(app);
+    const after = await recreated.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      return (await zeo.tabs.list()).tabs.length;
+    });
+    expect(after).toBe(before);
+  });
 });
 
 // PRD 9.3 §E / AC #3 — the idle-unload timer tears down hidden, silent views left

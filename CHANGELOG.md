@@ -9,6 +9,13 @@ milestone, a minor bump only for very large breakthroughs.
 
 ## [Unreleased]
 
+### Added
+
+- zeo now reopens its main window at the size, position, and maximized state it
+  had when you last quit. A saved position that no longer lands on any connected
+  display falls back to a centered, on-screen window. (Adds a `window_state`
+  table; the on-disk schema is now version 11.)
+
 ### Changed
 
 - Hidden tab views are now unloaded to reclaim memory: switching spaces frees

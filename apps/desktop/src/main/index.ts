@@ -20,7 +20,7 @@ import { startHistoryPruning } from "./history.js";
 import { installDownloadHandler, logDownloadError } from "./downloads.js";
 import { startBlocking } from "./blocking.js";
 import { buildMenu } from "./menu.js";
-import { createWindow } from "./window.js";
+import { createWindow, flushWindowStateSave } from "./window.js";
 import { sweepIdle } from "./tabs.js";
 import { unloadIdleViews, viewUnloadIntervalMs } from "./views.js";
 import { handleExternalLink, drainExternalLinks } from "./quick-browse.js";
@@ -136,4 +136,5 @@ app.on("window-all-closed", () => {
 app.on("before-quit", () => {
   flush(runtime.store);
   flushLayoutSave();
+  flushWindowStateSave();
 });
