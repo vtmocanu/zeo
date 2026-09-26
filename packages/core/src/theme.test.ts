@@ -7,6 +7,7 @@ import {
   normalizeTheme,
   themeReport,
   themeTokens,
+  toHex,
   type SpaceTheme,
   type Appearance,
 } from "./theme.js";
@@ -17,6 +18,11 @@ describe("oklchToRgb", () => {
     expect(white).toEqual([255, 255, 255]);
     const black = oklchToRgb(0, 0, 0).map(Math.round);
     expect(black).toEqual([0, 0, 0]);
+  });
+
+  test("chromatic reference: oklch(0.7 0.1 200) is #40b1b7", () => {
+    expect(toHex(oklchToRgb(0.7, 0.1, 200))).toBe("#40b1b7");
+    expect(toHex(oklchToRgb(0.627955, 0.257683, 29.2339))).toBe("#ff0000");
   });
 
   test("out-of-gamut input stays within 0-255", () => {
@@ -30,7 +36,7 @@ describe("oklchToRgb", () => {
 
 describe("contrastRatio", () => {
   test("black vs white is 21", () => {
-    expect(contrastRatio([0, 0, 0], [255, 255, 255])).toBeCloseTo(21, 1);
+    expect(contrastRatio([0, 0, 0], [255, 255, 255])).toBeCloseTo(21, 2);
   });
 
   test("identical colors is 1", () => {
@@ -105,6 +111,12 @@ describe("themeTokens tint edge cases", () => {
     expect(a["--tint-opacity"]).toBe(b["--tint-opacity"]);
   });
 
+  test("Infinity intensity clamps to 1", () => {
+    const a = themeTokens({ stops: ["iris"], intensity: Infinity }, "light");
+    const b = themeTokens({ stops: ["iris"], intensity: 1 }, "light");
+    expect(a).toEqual(b);
+  });
+
   test("two stops render a gradient", () => {
     const tokens = themeTokens({ stops: ["iris", "rose"], intensity: 1 }, "light");
     expect(tokens["--tint"]).toMatch(
@@ -124,6 +136,52 @@ describe("determinism and shape", () => {
   test("returned object has exactly the SEMANTIC_TOKENS keys", () => {
     const tokens = themeTokens(null, "light");
     expect(Object.keys(tokens).sort()).toEqual([...SEMANTIC_TOKENS].sort());
+  });
+});
+
+describe("tokens follow the report", () => {
+  test.each([
+    [null, "light"],
+    [null, "dark"],
+    [{ stops: ["amber", "lime"], intensity: 1 }, "light"],
+    [{ stops: ["rose", "teal"], intensity: 0.5 }, "dark"],
+  ] as [SpaceTheme | null, Appearance][])("%j %s", (theme, appearance) => {
+    const report = themeReport(theme, appearance);
+    const tokens = themeTokens(theme, appearance);
+    expect(tokens["--ink-primary"]).toBe(toHex(report.ink));
+    expect(tokens["--ink-secondary"]).toBe(toHex(report.inkSecondary));
+    expect(tokens["--accent"]).toBe(toHex(report.accent));
+    expect(tokens["--focus-ring"]).toBe(toHex(report.accent));
+  });
+});
+
+describe("null-theme golden values", () => {
+  test("light", () => {
+    expect(themeTokens(null, "light")).toMatchObject({
+      "--surface-window": "rgb(234 234 238 / 0.88)",
+      "--surface-card": "#ffffff",
+      "--hairline": "rgb(26 26 31 / 0.12)",
+      "--ink-primary": "#1a1a1f",
+      "--ink-secondary": "#69696e",
+      "--accent": "#585dd4",
+      "--ink-on-accent": "#ffffff",
+      "--danger": "#cc2827",
+      "--ink-popover-secondary": "#6f6f73",
+    });
+  });
+
+  test("dark", () => {
+    expect(themeTokens(null, "dark")).toMatchObject({
+      "--surface-window": "rgb(32 32 36 / 0.88)",
+      "--surface-card": "#1b1b1f",
+      "--hairline": "rgb(245 245 247 / 0.12)",
+      "--ink-primary": "#f5f5f7",
+      "--ink-secondary": "#97979a",
+      "--accent": "#96a2ff",
+      "--ink-on-accent": "#1a1a1f",
+      "--danger": "#f66d67",
+      "--ink-popover-secondary": "#959598",
+    });
   });
 });
 

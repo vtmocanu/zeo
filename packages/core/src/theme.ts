@@ -13,7 +13,7 @@
  * here is a "nice" decimal (0.06, 0.1, 0.88, ...) whose JS `String()`
  * form is stable and round-trips exactly, so this stays deterministic
  * across runs — required because these strings are copied verbatim into
- * `tokens.css` and compared for exact equality by a later PRD's tests.
+ * `tokens.css` and compared for exact equality by the `apps/ui` parity test.
  */
 
 export type SpaceHue =
@@ -247,7 +247,7 @@ function minContrast(candidate: Rgb, grounds: Rgb[]): number {
 }
 
 function clampIntensity(raw: number): number {
-  if (!Number.isFinite(raw)) return 0;
+  if (Number.isNaN(raw)) return 0;
   return clamp01(raw);
 }
 
