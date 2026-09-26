@@ -13,15 +13,16 @@
   },
   "dependencies": {
     "@ghostery/adblocker-electron": "^2.11.3",
-    "@zeo/adblock": "workspace:*",
-    "@zeo/core": "workspace:*",
-    "@zeo/ui": "workspace:*",
     "better-sqlite3": "^13.0.3"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^9.6.0",
     "@types/node": "^24.5.2",
+    "@zeo/adblock": "workspace:*",
+    "@zeo/core": "workspace:*",
+    "@zeo/ui": "workspace:*",
     "electron": "^44.0.0",
+    "electron-builder": "^26.15.3",
     "electron-vite": "^5.0.0",
     "madge": "^8.0.0",
     "typescript": "^5.9.2",

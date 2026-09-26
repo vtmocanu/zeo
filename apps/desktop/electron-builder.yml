@@ -1,0 +1,33 @@
+# electron-builder config, run with apps/desktop as the project directory.
+# Consumes the pre-built out/ tree produced by `electron-vite build` +
+# copy-renderer.mjs; it never owns the transpile/bundle step (see PRD 8.1 §1).
+appId: com.zeo.browser
+productName: zeo
+directories:
+  # Resolved relative to apps/desktop: repo-root release/ and apps/desktop/build/.
+  output: ../../release
+  buildResources: build
+files:
+  - out/**/*
+  - package.json
+asar: true
+asarUnpack:
+  # Native binding (better-sqlite3) must load as a real file, not from the asar.
+  - "**/*.node"
+  # Registered as an Electron session preload (a real file path, not asar-safe).
+  - out/preload/cosmetic-preload.cjs
+# Rebuilds better-sqlite3 against Electron's ABI at package time, since
+# pnpm-workspace.yaml sets allowBuilds.better-sqlite3: false at install time.
+npmRebuild: true
+mac:
+  category: public.app-category.productivity
+  icon: build/icon.png
+  # Ad-hoc signing only (no Developer ID, no notarization) per PRD 8.1 §2.
+  identity: "-"
+  hardenedRuntime: false
+  target:
+    - target: dmg
+      arch: [arm64]
+    - target: zip
+      arch: [arm64]
+artifactName: ${productName}-${version}-${arch}.${ext}
