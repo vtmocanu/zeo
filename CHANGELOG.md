@@ -9,7 +9,7 @@ milestone, a minor bump only for very large breakthroughs.
 
 ## [Unreleased]
 
-## [0.0.26] - 2026-09-26
+## [0.0.27] - 2026-09-26
 
 ### Added
 
@@ -29,6 +29,22 @@ milestone, a minor bump only for very large breakthroughs.
   `pnpm release:check` is the local pre-flight check before tagging.
 
 - Settings has a new About section showing the running zeo version.
+
+## [0.0.26] - 2026-09-26
+
+### Added
+
+- zeo now checks GitHub Releases for a newer version: a few seconds after launch
+  when the last check is over a day old, then at most once a day (automatic
+  checks run in packaged builds only), plus on demand with **Check for Updates**
+  or **Settings → General → Check now**. A newer release shows a sidebar banner;
+  Homebrew installs are told to run `brew upgrade --cask zeo` (with a Copy
+  button) and direct installs get a button that opens the release page. A
+  version can be dismissed until a newer one ships, automatic checks can be
+  turned off in Settings, and a failed check shows its error on the settings
+  status line without ever interrupting browsing. The check is anonymous and
+  read-only: no token, no telemetry, no download. (Adds three `meta` columns;
+  the on-disk schema is now version 12.)
 
 - zeo now reopens its main window at the size, position, and maximized state it
   had when you last quit. A saved position that no longer lands on any connected

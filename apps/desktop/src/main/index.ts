@@ -17,6 +17,7 @@ import "./spaces.js";
 import "./command-bar.js";
 import "./commands.js";
 import { startHistoryPruning } from "./history.js";
+import { initUpdateState, startUpdateChecks } from "./update.js";
 import { installDownloadHandler, logDownloadError } from "./downloads.js";
 import { startBlocking } from "./blocking.js";
 import { buildMenu } from "./menu.js";
@@ -75,6 +76,10 @@ app.whenReady().then(async () => {
   // off" on any failure. Also seeds the settings, default-browser, and zoom slices.
   await startBlocking();
 
+  // Seed the update-check slice (enabled flag, dismissed version, install
+  // origin) from disk before the window opens; never blocks startup.
+  initUpdateState();
+
   // Install the `will-download` handler on every existing profile's session so
   // startup profiles capture downloads, exactly once each (the guard makes the
   // later profilesCreate/remapSpaceProfile calls safe). Placed AFTER the blocking
@@ -93,6 +98,10 @@ app.whenReady().then(async () => {
 
   buildMenu();
   createWindow(!restoredFromDisk);
+  // Packaged builds (or an e2e override) poll the releases feed on a timer;
+  // an unpackaged dev build never checks on its own (update.check still works
+  // manually).
+  startUpdateChecks();
   // Skip the launch sweep on a restored session: its tabs' persisted
   // lastActiveAt are stale by design (the app was closed), so an initial sweep
   // would wrongly auto-archive every non-active restored tab. The recurring

@@ -405,6 +405,72 @@ body {
   width: 100%;
 }
 
+/* In-app update banner (PRD 9.6). Sits between the tab list and the footer;
+   present only while an update is available, so `margin-top: auto` on the
+   footer still keeps the footer pinned to the bottom either way. */
+.update-banner {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-top: 1px solid #2c2c3a;
+  background: #23233080;
+  font-size: 12px;
+  color: #e6e6ee;
+}
+
+.update-banner__text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.update-banner__action {
+  appearance: none;
+  border: none;
+  border-radius: 4px;
+  background: #6b6bff;
+  color: #f4f4ff;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+
+.update-banner__action:hover {
+  background: #7a7aff;
+}
+
+.update-banner__action:focus-visible {
+  outline: 2px solid #6b6bff;
+  outline-offset: 2px;
+}
+
+.update-banner__dismiss {
+  appearance: none;
+  border: none;
+  background: none;
+  color: #a0a0b4;
+  font-size: 14px;
+  line-height: 1;
+  padding: 2px 4px;
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+
+.update-banner__dismiss:hover {
+  color: #e6e6ee;
+}
+
+.update-banner__dismiss:focus-visible {
+  outline: 2px solid #6b6bff;
+  outline-offset: -2px;
+}
+
 /* Archived tabs ----------------------------------------------------------- */
 
 /* Pinned to the bottom of the flex-column sidebar. `margin-top: auto` pushes it
@@ -793,6 +859,41 @@ body {
   margin: 0 0 10px;
   color: #ff6b6b;
   font-size: 12px;
+}
+
+.settings__status {
+  margin: 0 0 10px;
+  color: #a0a0b4;
+  font-size: 13px;
+}
+
+.settings__update-action {
+  align-items: center;
+  gap: 10px;
+}
+
+.settings__update-action code {
+  padding: 4px 8px;
+  background: #14141c;
+  border: 1px solid #3a3a4c;
+  border-radius: 6px;
+  font-size: 12px;
+  color: #e6e6ee;
+}
+
+.settings__link-button {
+  appearance: none;
+  border: none;
+  background: none;
+  padding: 0;
+  color: #8a8aff;
+  font-size: 12px;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.settings__link-button:hover {
+  color: #a0a0ff;
 }
 
 .settings__empty {

@@ -13,6 +13,7 @@ import type {
   QuickBrowseState,
   Settings,
   SettingsSectionId,
+  UpdateState,
   WindowLayout,
   ZoomState,
 } from "@zeo/core";
@@ -130,6 +131,10 @@ export interface RuntimeState {
   rebuildMenu: (() => void) | null;
   createWindow: ((seed: boolean) => void) | null;
   openPopupAsTab: ((ownerTabId: string, url: string) => void) | null;
+  update: UpdateState;
+  updateDismissedVersion: string | null;
+  updateCheckInFlight: Promise<void> | null;
+  updateWriteErrorLogged: boolean;
 }
 
 /**
@@ -169,7 +174,7 @@ export const runtime: RuntimeState = {
   refreshInFlight: null,
   settingsView: null,
   settingsOpen: false,
-  settings: { searchEngine: "duckduckgo", quickBrowseExternal: true },
+  settings: { searchEngine: "duckduckgo", quickBrowseExternal: true, updateCheckEnabled: true },
   settingsSection: "general",
   settingsSectionNonce: 0,
   blockingBroadcastTimer: null,
@@ -209,4 +214,15 @@ export const runtime: RuntimeState = {
   rebuildMenu: null,
   createWindow: null,
   openPopupAsTab: null,
+  update: {
+    enabled: true,
+    origin: "direct",
+    available: null,
+    checking: false,
+    lastCheckedAt: null,
+    error: null,
+  },
+  updateDismissedVersion: null,
+  updateCheckInFlight: null,
+  updateWriteErrorLogged: false,
 };

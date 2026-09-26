@@ -11,6 +11,7 @@ import type { FindState } from "./page-search.js";
 import type { SettingsSectionId, SearchEngineId } from "./settings.js";
 import type { QuickBrowse } from "./quick-browse.js";
 import type { PaneSide, WindowLayout } from "./split-view.js";
+import type { UpdateState } from "./update.js";
 
 /**
  * A single space's tab payload, in the pre-space shape. This is what
@@ -75,6 +76,10 @@ export interface StoreSnapshot extends SpacesState, TabsSlice {}
  * a two-pane split) and rides the `stateChange` broadcast exactly like
  * `blocking`, `zoom`, and `find` — main attaches it before every broadcast, so
  * it is never absent.
+ *
+ * `update` carries the in-app update-check slice (see {@link UpdateState}) and
+ * rides the `stateChange` broadcast exactly like `zoom` and `find` — main
+ * attaches it before every broadcast, so it is never absent.
  */
 export interface TabsState extends StoreSnapshot {
   blocking: BlockingState;
@@ -85,6 +90,7 @@ export interface TabsState extends StoreSnapshot {
   settingsSection: SettingsSectionId;
   settingsSectionNonce: number;
   find: FindState;
+  update: UpdateState;
   /** The current quick-browse entry, or `null` when no quick-browse window is open. */
   quickBrowse: QuickBrowse | null;
   /** Whether zeo is currently the OS default browser (drives the set-default affordance). */
@@ -364,6 +370,8 @@ export interface Settings {
    * rather than a new tab in the active space.
    */
   quickBrowseExternal: boolean;
+  /** Whether main polls the releases feed on startup and every 24h. */
+  updateCheckEnabled: boolean;
 }
 
 /**
@@ -386,6 +394,33 @@ export interface SettingsApi {
    * persistence failure rejects and changes nothing.
    */
   setQuickBrowseExternal(enabled: boolean): Promise<void>;
+  /**
+   * Sets whether main checks the releases feed on startup and every 24h: it
+   * resolves without side effects when `enabled` is already current, rejects
+   * with a `TypeError` (changing nothing) when `enabled` is not a boolean,
+   * otherwise persists the new value then updates the in-memory state and
+   * broadcasts — a persistence failure rejects and changes nothing. Turning
+   * it on does not itself trigger a check.
+   */
+  setUpdateCheckEnabled(enabled: boolean): Promise<void>;
+}
+
+/**
+ * Update-check commands the renderer invokes over IPC, handled in main
+ * against the single releases-feed poll. `check()` runs a manual check
+ * (never rate-limited); `dismiss()` hides the currently available update
+ * until a newer one appears; `openRelease()` opens the release page in the
+ * default browser for a direct install; `copyUpgradeCommand()` copies the
+ * Homebrew upgrade command to the clipboard. `state()` reads back the
+ * current {@link UpdateState}. Update rides the `stateChange` broadcast on
+ * `TabsState.update` — there is no dedicated change channel.
+ */
+export interface UpdateApi {
+  check(): Promise<void>;
+  dismiss(): Promise<void>;
+  openRelease(): Promise<void>;
+  copyUpgradeCommand(): Promise<void>;
+  state(): Promise<UpdateState>;
 }
 
 /**
@@ -493,6 +528,7 @@ export interface ZeoApi {
   quickBrowse: QuickBrowseApi;
   find: FindApi;
   splitView: SplitViewApi;
+  update: UpdateApi;
   onStateChange(listener: (state: TabsState) => void): () => void;
   /** Registers a listener for main-pushed command-bar state updates and returns
    *  an unsubscribe function, mirroring onStateChange. */
@@ -575,6 +611,7 @@ export const IPC = {
   settingsGet: "zeo:settings:get",
   settingsSetSearchEngine: "zeo:settings:set-search-engine",
   settingsSetQuickBrowseExternal: "zeo:settings:set-quick-browse-external",
+  settingsSetUpdateCheckEnabled: "zeo:settings:set-update-check-enabled",
   quickBrowseState: "zeo:quick-browse:state",
   quickBrowsePromote: "zeo:quick-browse:promote",
   quickBrowseDismiss: "zeo:quick-browse:dismiss",
@@ -588,5 +625,10 @@ export const IPC = {
   splitViewDividerGeometry: "zeo:split-view:divider-geometry",
   splitViewState: "zeo:split-view:state",
   splitViewDividerLayout: "zeo:split-view:divider-layout",
+  updateCheck: "zeo:update:check",
+  updateDismiss: "zeo:update:dismiss",
+  updateOpenRelease: "zeo:update:open-release",
+  updateCopyCommand: "zeo:update:copy-command",
+  updateState: "zeo:update:state",
   stateChange: "zeo:state-change",
 } as const;

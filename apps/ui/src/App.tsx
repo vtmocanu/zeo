@@ -570,6 +570,7 @@ export function App() {
     settings: {
       searchEngine: DEFAULT_SEARCH_ENGINE_ID,
       quickBrowseExternal: true,
+      updateCheckEnabled: true,
     },
     settingsSection: "general",
     settingsSectionNonce: 0,
@@ -594,6 +595,14 @@ export function App() {
     isDefaultBrowser: false,
     appVersion: "",
     layout: SINGLE_LAYOUT,
+    update: {
+      enabled: true,
+      origin: "direct",
+      available: null,
+      checking: false,
+      lastCheckedAt: null,
+      error: null,
+    },
   });
   const [showArchived, setShowArchived] = useState(false);
   const [now, setNow] = useState(() => Date.now());
@@ -914,6 +923,35 @@ export function App() {
               {renderList(unpinned, "unpinned", unpinnedListRef)}
             </section>
           )}
+        </div>
+      )}
+
+      {state.update.available !== null && (
+        <div className="update-banner" data-testid="update-banner">
+          <span className="update-banner__text">
+            Update available: zeo {state.update.available.version}
+          </span>
+          <button
+            type="button"
+            className="update-banner__action"
+            data-testid="update-banner-action"
+            onClick={() =>
+              void (state.update.origin === "homebrew"
+                ? window.zeo?.commands.run("settings.openGeneral")
+                : window.zeo?.update.openRelease()
+              )?.catch(() => {})
+            }
+          >
+            {state.update.origin === "homebrew" ? "How to upgrade" : "Open release"}
+          </button>
+          <button
+            type="button"
+            className="update-banner__dismiss"
+            aria-label="Dismiss update"
+            onClick={() => void window.zeo?.update.dismiss().catch(() => {})}
+          >
+            ×
+          </button>
         </div>
       )}
 

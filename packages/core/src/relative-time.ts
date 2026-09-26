@@ -26,3 +26,13 @@ export function formatRelativeArchived(archivedAt: number, now: number): string 
   }
   return `${Math.floor(deltaMs / 86_400_000)}d ago`;
 }
+
+/**
+ * Same bucketing as {@link formatRelativeArchived}, but with the argument
+ * order callers reach for when the "current time" comes first: `now` then
+ * `at`. Delegates to `formatRelativeArchived` rather than duplicating the
+ * bucketing rules.
+ */
+export function formatRelativeTime(now: number, at: number): string {
+  return formatRelativeArchived(at, now);
+}

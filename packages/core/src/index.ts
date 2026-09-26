@@ -126,7 +126,28 @@ export { defaultSpaceName } from "./space-name.js";
 export { buildSpaceContextMenu } from "./space-menu.js";
 export type { SpaceContextMenuInput } from "./space-menu.js";
 export { titleForUrl } from "./tab-title.js";
-export { formatRelativeArchived } from "./relative-time.js";
+export { formatRelativeArchived, formatRelativeTime } from "./relative-time.js";
+export {
+  UPDATE_FEED_URL,
+  UPDATE_CHECK_INTERVAL_MS,
+  UPDATE_CHECK_STARTUP_DELAY_MS,
+  UPDATE_FETCH_TIMEOUT_MS,
+  HOMEBREW_UPGRADE_COMMAND,
+  CASKROOM_PATHS,
+  parseVersion,
+  compareVersions,
+  parseLatestRelease,
+  installOrigin,
+  updateDecision,
+} from "./update.js";
+export type {
+  ParsedVersion,
+  LatestRelease,
+  ParsedFeed,
+  InstallOrigin,
+  AvailableUpdate,
+  UpdateState,
+} from "./update.js";
 export { parseChangelogSection } from "./release.js";
 export type { ChangelogSection } from "./release.js";
 export {

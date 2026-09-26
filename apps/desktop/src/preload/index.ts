@@ -23,6 +23,7 @@ import type {
   Tab,
   TabContextMenuResult,
   TabsState,
+  UpdateState,
   WindowLayout,
   ZeoApi,
   ZoomState,
@@ -120,6 +121,8 @@ const api = {
       ipcRenderer.invoke(IPC.settingsSetSearchEngine, id),
     setQuickBrowseExternal: (enabled: boolean): Promise<void> =>
       ipcRenderer.invoke(IPC.settingsSetQuickBrowseExternal, enabled),
+    setUpdateCheckEnabled: (enabled: boolean): Promise<void> =>
+      ipcRenderer.invoke(IPC.settingsSetUpdateCheckEnabled, enabled),
   },
   quickBrowse: {
     state: (): Promise<QuickBrowse | null> => ipcRenderer.invoke(IPC.quickBrowseState),
@@ -154,6 +157,13 @@ const api = {
     dividerGeometry: (): Promise<DividerGeometry> =>
       ipcRenderer.invoke(IPC.splitViewDividerGeometry),
     state: (): Promise<WindowLayout> => ipcRenderer.invoke(IPC.splitViewState),
+  },
+  update: {
+    check: (): Promise<void> => ipcRenderer.invoke(IPC.updateCheck),
+    dismiss: (): Promise<void> => ipcRenderer.invoke(IPC.updateDismiss),
+    openRelease: (): Promise<void> => ipcRenderer.invoke(IPC.updateOpenRelease),
+    copyUpgradeCommand: (): Promise<void> => ipcRenderer.invoke(IPC.updateCopyCommand),
+    state: (): Promise<UpdateState> => ipcRenderer.invoke(IPC.updateState),
   },
   onStateChange: (listener: (state: TabsState) => void): (() => void) => {
     const handler = (_event: Electron.IpcRendererEvent, state: TabsState): void => listener(state);
