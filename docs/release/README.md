@@ -105,7 +105,8 @@ codesign -dv release/mac-arm64/zeo.app
 Because the app is un-notarized, a `dmg`/`zip` downloaded through a browser
 carries the `com.apple.quarantine` attribute and macOS Gatekeeper blocks the
 first open ("zeo cannot be opened because the developer cannot be verified" /
-"is damaged"). Work around it locally with a right-click → Open, or:
+"is damaged"). Allow it under System Settings → Privacy & Security → Open
+Anyway (older macOS also accepts a right-click → Open), or clear the attribute:
 
 ```sh
 xattr -dr com.apple.quarantine /path/to/zeo.app

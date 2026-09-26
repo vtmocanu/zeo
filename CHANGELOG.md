@@ -16,8 +16,10 @@ milestone, a minor bump only for very large breakthroughs.
 - zeo can now be packaged for macOS: `pnpm package` builds an ad-hoc signed
   Apple Silicon (arm64) `zeo.app` plus `zeo-<version>-arm64.dmg` and `.zip` in
   `release/`, stamped with the root `package.json` version. There is no
-  Developer ID signing or notarization, so a build downloaded through a browser
-  needs a right-click → Open on first launch.
+  Developer ID signing or notarization, so macOS Gatekeeper blocks the first
+  open of a build downloaded through a browser: allow it under System Settings
+  → Privacy & Security → Open Anyway, or run
+  `xattr -dr com.apple.quarantine /path/to/zeo.app`.
 
 - A tag-driven release workflow (`docs/release/release.yml.template`, with
   `docs/release/README.md` for a maintainer to commit it): pushing a `v*` tag
