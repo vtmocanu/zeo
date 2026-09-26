@@ -479,11 +479,22 @@ test.describe("PRD 9.5 window-state restore", () => {
         screen.getPrimaryDisplay().workArea,
       );
       // The 900×700 size was on-screen-sized, so it is preserved; only the
-      // off-screen position is dropped, and Electron centers the window.
+      // off-screen position is dropped, and main centers it explicitly on
+      // the primary work area (see createWindow's centerInWorkArea).
       expect(bounds.x).toBeGreaterThanOrEqual(workArea.x);
       expect(bounds.y).toBeGreaterThanOrEqual(workArea.y);
       expect(bounds.x + bounds.width).toBeLessThanOrEqual(workArea.x + workArea.width);
       expect(bounds.y + bounds.height).toBeLessThanOrEqual(workArea.y + workArea.height);
+      // "restores on-screen and centered" (PRD 9.5): the window's center
+      // should match the work area's center within a few pixels of rounding.
+      const centerXDelta = Math.abs(
+        bounds.x + bounds.width / 2 - (workArea.x + workArea.width / 2),
+      );
+      const centerYDelta = Math.abs(
+        bounds.y + bounds.height / 2 - (workArea.y + workArea.height / 2),
+      );
+      expect(centerXDelta).toBeLessThanOrEqual(4);
+      expect(centerYDelta).toBeLessThanOrEqual(4);
     } finally {
       await second.app.close();
     }
