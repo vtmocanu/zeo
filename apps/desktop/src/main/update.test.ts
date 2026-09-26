@@ -59,12 +59,14 @@ function jsonResponse(status: number, body: unknown): Response {
 }
 
 /**
- * A `Response` whose declared `Content-Length` header exceeds
- * {@link MAX_FEED_BYTES}, regardless of the actual (small) body — exercises
- * the early, no-body-read rejection path.
+ * A `Response` carrying a VALID, newer-version release body, but whose
+ * declared `Content-Length` header exceeds {@link MAX_FEED_BYTES} — exercises
+ * the early, no-body-read rejection path in isolation: since the body itself
+ * would otherwise successfully decide a new `available`, only the declared
+ * length can be what triggers rejection here.
  */
 function oversizedByHeaderResponse(): Response {
-  return new Response("{}", {
+  return new Response(JSON.stringify(release("v2.0.0")), {
     status: 200,
     headers: { "content-length": String(MAX_FEED_BYTES + 1) },
   });
@@ -342,6 +344,69 @@ describe("checkForUpdates — error paths", () => {
     resolveFetch(jsonResponse(200, release("v2.0.0")));
     await promise;
     expect(runtime.update.available).toBeNull();
+  });
+});
+
+describe("checkForUpdates — broadcast throws never leak out", () => {
+  afterEach(() => {
+    runtime.win = null;
+  });
+
+  test("a broadcast that throws while starting a check (step 3) is logged, does not throw synchronously, and does not leave checking stuck", async () => {
+    let sendCalls = 0;
+    runtime.win = {
+      webContents: {
+        send: () => {
+          sendCalls += 1;
+          if (sendCalls === 1) {
+            throw new Error("boom at start");
+          }
+        },
+      },
+    } as unknown as typeof runtime.win;
+    h.fetch.mockResolvedValue(jsonResponse(200, release("v2.0.0")));
+
+    // Calling this must not itself throw synchronously.
+    const promise = checkForUpdates("manual");
+    await expect(promise).resolves.toBeUndefined();
+
+    expect(runtime.update.checking).toBe(false);
+    expect(runtime.updateCheckInFlight).toBeNull();
+    expect(runtime.update.available).toEqual({
+      version: "2.0.0",
+      url: "https://example.com/releases/v2.0.0",
+    });
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("broadcast failed while starting a check"),
+      expect.anything(),
+    );
+  });
+
+  test("a broadcast that throws while completing a check (the finally path) still clears checking/updateCheckInFlight and the promise resolves", async () => {
+    let sendCalls = 0;
+    runtime.win = {
+      webContents: {
+        send: () => {
+          sendCalls += 1;
+          // Let the step-3 "checking = true" broadcast succeed; only the
+          // completion broadcast (inside the finally) throws.
+          if (sendCalls > 1) {
+            throw new Error("boom at completion");
+          }
+        },
+      },
+    } as unknown as typeof runtime.win;
+    h.fetch.mockResolvedValue(jsonResponse(200, release("v2.0.0")));
+
+    const promise = checkForUpdates("manual");
+    await expect(promise).resolves.toBeUndefined();
+
+    expect(runtime.update.checking).toBe(false);
+    expect(runtime.updateCheckInFlight).toBeNull();
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("broadcast failed while completing a check"),
+      expect.anything(),
+    );
   });
 });
 

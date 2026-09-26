@@ -38,10 +38,11 @@ export type CheckReason = "startup" | "timer" | "manual";
  * Hard cap on the releases-feed response body. A compromised or misbehaving
  * feed (or a MITM on a non-pinned connection) must not be able to stream an
  * unbounded number of bytes into memory just because `checkForUpdates` awaits
- * the response; 256 KiB is generously larger than any real GitHub release
- * payload.
+ * the response. 1 MiB is generously larger than any real GitHub release
+ * payload: GitHub release bodies can run up to 125k characters, and JSON
+ * escaping plus multibyte encoding can inflate that well past 256 KiB.
  */
-export const MAX_FEED_BYTES = 256 * 1024;
+export const MAX_FEED_BYTES = 1024 * 1024;
 
 /**
  * The setInterval tick granularity for the recurring automatic-check timer.
@@ -76,9 +77,11 @@ function logUpdateWriteError(err: unknown): void {
  * without a real Caskroom directory. Any read failure is logged and leaves
  * the seeded defaults (enabled, direct origin) in place — never blocks
  * startup. Also seeds `runtime.settings.updateCheckEnabled` from this SAME
- * `readUpdateSettings()` read (`startBlocking` no longer re-reads it); this
- * runs after `startBlocking()` (see index.ts), so this seed is not
- * overwritten.
+ * `readUpdateSettings()` read (`startBlocking` no longer re-reads it):
+ * `startBlocking`'s own settings seed carries `runtime.settings.updateCheckEnabled`
+ * forward unchanged, so this seed survives regardless of call order relative
+ * to `startBlocking()` (index.ts happens to call this after, but that is not
+ * what protects it).
  */
 export function initUpdateState(): void {
   try {
@@ -152,8 +155,11 @@ async function readCappedText(res: Response): Promise<string | null> {
   }
   const reader = res.body?.getReader();
   if (!reader) {
-    // No streaming body reader available (e.g. a stubbed Response in tests):
-    // fall back to buffering it whole, still capping on the decoded length.
+    // No streaming body reader available — the real case is a null-body
+    // response (e.g. a 204), whose `.text()` resolves to `""`; that empty
+    // string then fails `JSON.parse` in the caller and is reported as
+    // "network error", not "malformed feed". Still cap on the decoded length
+    // for whatever body (if any) is actually present.
     const text = await res.text();
     return text.length > MAX_FEED_BYTES ? null : text;
   }
@@ -182,7 +188,11 @@ async function readCappedText(res: Response): Promise<string | null> {
  *    A manual check is never rate-limited.
  * 2. A check already in flight returns the SAME promise (coalesced) rather
  *    than issuing a second request.
- * 3. Sets `checking = true`, clears `error`, broadcasts.
+ * 3. Sets `checking = true`, clears `error`, broadcasts — guarded by its own
+ *    try/catch so a throwing broadcast here is logged and swallowed rather
+ *    than propagating synchronously out of `checkForUpdates` itself (which
+ *    would leave `checking` stuck at `true`, since step 6's finally would
+ *    never run) or rejecting the returned promise.
  * 4. Fetches the feed with a timeout; a non-2xx status, an over-cap body
  *    (see {@link readCappedText}), or a rejection (network, timeout, JSON
  *    parse) sets `error` and leaves `available` unchanged. An over-cap body
@@ -199,8 +209,11 @@ async function readCappedText(res: Response): Promise<string | null> {
  *    never resurrected by a subsequent error/malformed response.
  *    `lastCheckedAt` is stamped and persisted (a write failure is logged
  *    once, not fatal), `checking = false`, broadcast, all inside a `finally`
- *    so a throw anywhere above (including from `broadcast()`) still clears
- *    `checking`/`updateCheckInFlight`. Never rejects.
+ *    so a throw anywhere above (including from this closing `broadcast()`)
+ *    still clears `checking`/`updateCheckInFlight`. Combined with step 3's
+ *    own guard, no `broadcast()` call anywhere in this function can leave
+ *    `checking`/`updateCheckInFlight` stuck or make `checkForUpdates` reject
+ *    or throw synchronously. Never rejects.
  */
 export function checkForUpdates(reason: CheckReason): Promise<void> {
   if (reason !== "manual") {
@@ -217,7 +230,18 @@ export function checkForUpdates(reason: CheckReason): Promise<void> {
   }
 
   runtime.update = { ...runtime.update, checking: true, error: null };
-  broadcast();
+  try {
+    broadcast();
+  } catch (err) {
+    // A throwing broadcast here must not propagate synchronously out of
+    // `checkForUpdates` (which would leave `checking` stuck at `true` forever,
+    // since the async IIFE below — whose `finally` resets it — would never
+    // even be constructed) and must not reject the returned promise either;
+    // logged and swallowed, then execution falls through to start the fetch
+    // as normal, so completion still runs the finally below and clears
+    // `checking`/`updateCheckInFlight`.
+    console.error("[update] broadcast failed while starting a check:", err);
+  }
 
   const promise = (async (): Promise<void> => {
     let error: string | null = null;
@@ -243,8 +267,11 @@ export function checkForUpdates(reason: CheckReason): Promise<void> {
         } else {
           // A JSON.parse throw here propagates to the outer catch below,
           // which reports "network error", per PRD (a parse error is not
-          // distinguished from a network failure).
-          const json: unknown = JSON.parse(text);
+          // distinguished from a network failure). Strip a leading UTF-8 BOM
+          // first: some servers/proxies prepend one, and JSON.parse rejects
+          // it outright even though the remaining text is valid JSON.
+          const withoutBom = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
+          const json: unknown = JSON.parse(withoutBom);
           const parsed = parseLatestRelease(json);
           if (parsed.kind === "malformed") {
             error = "malformed feed";
