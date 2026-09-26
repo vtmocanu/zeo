@@ -11,9 +11,15 @@ import type { AddressInfo } from "node:net";
 // PRD 9.6 — in-app update check, driven end to end against a loopback releases
 // feed. Nothing here touches the network beyond 127.0.0.1.
 
-// Absolute path to the built Electron main entry, resolved from this test file
-// (e2e is ESM, so no __dirname). Same layout as zoom.spec.ts / settings.spec.ts.
-const mainPath = fileURLToPath(new URL("../../apps/desktop/out/main/index.js", import.meta.url));
+// Absolute path to the desktop app DIRECTORY, resolved from this test file (e2e
+// is ESM, so no __dirname). Unlike zoom.spec.ts / settings.spec.ts, which launch
+// the built main entry file directly, this suite launches the directory: Electron
+// then reads apps/desktop/package.json, whose `main` is the same built
+// ./out/main/index.js and whose `version` ("0.0.0") becomes `app.getVersion()`.
+// Launching the bare entry file leaves no package.json beside the app path, so
+// `app.getVersion()` falls back to Electron's own version (e.g. "44.0.0"), which
+// is newer than every fixture release below, so no update would ever be offered.
+const appDir = fileURLToPath(new URL("../../apps/desktop", import.meta.url));
 
 // --- Minimal typed view of the preload-injected `window.zeo` bridge. ------------
 // e2e deliberately does NOT depend on @zeo/core's runtime; we redeclare only the
@@ -226,7 +232,7 @@ async function launch(
   }
   const app = await electron.launch({
     args: [
-      mainPath,
+      appDir,
       "--user-data-dir=" + userDataDir,
       ...(process.env.ZEO_E2E_NO_SANDBOX === "1" ? ["--no-sandbox"] : []),
     ],
