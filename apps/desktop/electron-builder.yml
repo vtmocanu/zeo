@@ -7,9 +7,26 @@ directories:
   # Resolved relative to apps/desktop: repo-root release/ and apps/desktop/build/.
   output: ../../release
   buildResources: build
+# Top-level productName only names the bundle/artifacts; electron-builder writes
+# only extraMetadata into the packaged package.json, and Electron derives
+# app.getName() and the userData dir (~/Library/Application Support/<name>) from
+# package.json productName. Without this the packaged app is "@zeo/desktop"
+# (menu "Quit @zeo/desktop") and shares userData with dev builds, so a dev build
+# with a newer schema would migrate the released app's database.
+# apps/desktop/package.json stays unchanged, so dev builds are unaffected.
+# scripts/package.mjs's -c.extraMetadata.version is deep-merged with this, not
+# a replacement.
+extraMetadata:
+  productName: zeo
 files:
   - out/**/*
   - package.json
+  # Exclude unneeded better-sqlite3 payload: keep lib/ and the darwin-arm64
+  # prebuild (lib/binding.js loads prebuilds/<platform>-<arch>.node first,
+  # falling back to build/Release/better_sqlite3.node, which is kept too).
+  - "!node_modules/better-sqlite3/{deps,src}{,/**}"
+  - "!node_modules/better-sqlite3/prebuilds/{linux,linuxmusl,win32}-*.node"
+  - "!node_modules/better-sqlite3/prebuilds/darwin-x64.node"
 asar: true
 asarUnpack:
   # Native bindings (better-sqlite3) must load as real files, not from the asar.

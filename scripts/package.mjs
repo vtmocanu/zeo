@@ -1,7 +1,8 @@
 // Packages the desktop app with electron-builder, invoked as the root
 // `pnpm package` script (after `pnpm build`). Hard-checks the electron-vite
-// build output exists before invoking electron-builder, and threads the root
-// package.json version into the packaged bundle via extraMetadata.version.
+// build output and the app icon exist before invoking electron-builder, and
+// threads the root package.json version into the packaged bundle via
+// extraMetadata.version.
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,6 +24,14 @@ for (const outputPath of requiredOutputs) {
     );
     process.exit(1);
   }
+}
+
+const iconPath = resolve(desktopRoot, "build", "icon.png");
+if (!existsSync(iconPath)) {
+  console.error(
+    `Missing app icon ${iconPath} – electron-builder would silently fall back to the default Electron icon; restore apps/desktop/build/icon.png.`,
+  );
+  process.exit(1);
 }
 
 const rootPackageJson = JSON.parse(
