@@ -9,6 +9,9 @@ import { join } from "node:path";
 import { createServer } from "node:http";
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
+// The one @zeo/core value import: the y at which main lays the page view over the
+// chrome, so the chrome-bar geometry check can never drift from the real layout.
+import { QUICK_BROWSE_CHROME_HEIGHT } from "@zeo/core";
 
 // Absolute path to the built Electron main entry, resolved from this test file
 // (e2e is ESM, so no __dirname). Layout mirrors blocking.spec.ts / settings.spec.ts /
@@ -17,7 +20,7 @@ import type { AddressInfo } from "node:net";
 const mainPath = fileURLToPath(new URL("../../apps/desktop/out/main/index.js", import.meta.url));
 
 // --- Minimal typed view of the preload-injected `window.zeo` bridge. ------------
-// e2e deliberately does NOT depend on @zeo/core; we redeclare only the slice these
+// The bridge types are not imported from @zeo/core; we redeclare only the slice these
 // PRD 7.2 quick-browse tests touch (structurally compatible with @zeo/core's ZeoApi).
 // Only the fields we assert on are load-bearing.
 interface QuickBrowseEntry {
@@ -456,11 +459,6 @@ async function waitForDebouncedSave(): Promise<void> {
 // so nothing reaches the network and the suite stays deterministic under headless
 // xvfb with one worker. Assertions poll slice-specific state (quickBrowse.state(),
 // tabs.list()) rather than a global broadcast counter, which unrelated pushes flake.
-// Mirrors @zeo/core's QUICK_BROWSE_CHROME_HEIGHT (packages/core/src/layout.ts):
-// the page view starts at this y, so the chrome bar must fit above it. Redeclared
-// because e2e deliberately does not depend on @zeo/core.
-const QUICK_BROWSE_CHROME_HEIGHT = 44;
-
 test.describe("PRD 7.2 quick-browse window (offline)", () => {
   // Scenario 1 (OPEN): the handoff opens exactly one quick-browse window on the
   // link, the pure entry reports the link, the untrusted page view loaded it, and
@@ -678,6 +676,13 @@ test.describe("PRD 7.2 quick-browse window (offline)", () => {
       await emitOpenUrl(app, fixture);
       const chrome = await waitForQuickBrowseChrome(app);
       await expect(chrome.getByTestId("quick-browse-title")).toBeVisible({ timeout: 15_000 });
+
+      // The bar itself spans exactly [0, QUICK_BROWSE_CHROME_HEIGHT], meeting the
+      // page view with no gap.
+      const bar = await chrome.getByTestId("quick-browse").boundingBox();
+      expect(bar, "quick-browse bar has a bounding box").not.toBeNull();
+      expect(bar!.y).toBe(0);
+      expect(bar!.height).toBe(QUICK_BROWSE_CHROME_HEIGHT);
 
       for (const testId of [
         "quick-browse-title",
