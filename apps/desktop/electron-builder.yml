@@ -1,0 +1,51 @@
+# electron-builder config, run with apps/desktop as the project directory.
+# Consumes the pre-built out/ tree produced by `electron-vite build` +
+# copy-renderer.mjs; it never owns the transpile/bundle step (see PRD 8.1 §1).
+appId: com.zeo.browser
+productName: zeo
+directories:
+  # Resolved relative to apps/desktop: repo-root release/ and apps/desktop/build/.
+  output: ../../release
+  buildResources: build
+# Top-level productName only names the bundle/artifacts; electron-builder writes
+# only extraMetadata into the packaged package.json, and Electron derives
+# app.getName() and the userData dir (~/Library/Application Support/<name>) from
+# package.json productName. Without this the packaged app is "@zeo/desktop"
+# (menu "Quit @zeo/desktop") and shares userData with dev builds, so a dev build
+# with a newer schema would migrate the released app's database.
+# apps/desktop/package.json stays unchanged, so dev builds are unaffected.
+# scripts/package.mjs's -c.extraMetadata.version is deep-merged with this, not
+# a replacement.
+extraMetadata:
+  productName: zeo
+files:
+  - out/**/*
+  - package.json
+  # Exclude unneeded better-sqlite3 payload: keep lib/ and the darwin-arm64
+  # prebuild (lib/binding.js loads prebuilds/<platform>-<arch>.node first,
+  # falling back to build/Release/better_sqlite3.node, which is kept too).
+  - "!node_modules/better-sqlite3/{deps,src}{,/**}"
+  - "!node_modules/better-sqlite3/prebuilds/{linux,linuxmusl,win32}-*.node"
+  - "!node_modules/better-sqlite3/prebuilds/darwin-x64.node"
+asar: true
+asarUnpack:
+  # Native bindings (better-sqlite3) must load as real files, not from the asar.
+  # Preloads (including the adblocker's cosmetic session preload) stay packed:
+  # Electron reads preload scripts through its asar-aware loader.
+  - "**/*.node"
+# electron-builder's default: run @electron/rebuild over native deps at package
+# time (pnpm never builds better-sqlite3 on install, see allowBuilds). The
+# current better-sqlite3 also ships N-API prebuilds, which load under Electron.
+npmRebuild: true
+mac:
+  category: public.app-category.productivity
+  icon: build/icon.png
+  # Ad-hoc signing only (no Developer ID, no notarization) per PRD 8.1 §2.
+  identity: "-"
+  hardenedRuntime: false
+  target:
+    - target: dmg
+      arch: [arm64]
+    - target: zip
+      arch: [arm64]
+artifactName: ${productName}-${version}-${arch}.${ext}

@@ -8,3 +8,4 @@ test-results/
 .DS_Store
 /e2e/.cache
 .claude/settings.local.json
+/release/

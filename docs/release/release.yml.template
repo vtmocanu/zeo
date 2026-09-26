@@ -1,0 +1,104 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: macos-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - id: version
+        name: Verify tag matches package.json version
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "Tag $GITHUB_REF_NAME (version $TAG_VERSION) != package.json version $PKG_VERSION" >&2
+            exit 1
+          fi
+          echo "version=$PKG_VERSION" >> "$GITHUB_OUTPUT"
+
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm build
+      - run: pnpm test
+      - run: pnpm package
+
+      - name: Generate SHA256SUMS
+        working-directory: release
+        run: |
+          shasum -a 256 \
+            "zeo-${{ steps.version.outputs.version }}-arm64.dmg" \
+            "zeo-${{ steps.version.outputs.version }}-arm64.zip" > SHA256SUMS
+
+      - name: Smoke-test the packaged bundle
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          APP="release/mac-arm64/zeo.app"
+          PLIST="$APP/Contents/Info.plist"
+          test -d "$APP" || { echo "Packaged app not found at $APP" >&2; exit 1; }
+          BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$PLIST")"
+          SHORT="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$PLIST")"
+          [ "$BUNDLE_ID" = "com.zeo.browser" ] || { echo "CFBundleIdentifier $BUNDLE_ID != com.zeo.browser" >&2; exit 1; }
+          [ "$SHORT" = "$VERSION" ] || { echo "CFBundleShortVersionString $SHORT != $VERSION" >&2; exit 1; }
+          codesign -dv "$APP" 2>&1 | grep -q 'Signature=adhoc' || { echo "Packaged app is not ad-hoc signed (expected Signature=adhoc)" >&2; exit 1; }
+
+      - name: Build release notes from CHANGELOG
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: node scripts/changelog-section.mjs "$VERSION" > release/RELEASE_NOTES.md
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zeo-${{ steps.version.outputs.version }}-arm64
+          path: |
+            release/zeo-${{ steps.version.outputs.version }}-arm64.dmg
+            release/zeo-${{ steps.version.outputs.version }}-arm64.zip
+            release/SHA256SUMS
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "zeo $VERSION" \
+            --notes-file release/RELEASE_NOTES.md \
+            "release/zeo-$VERSION-arm64.dmg" \
+            "release/zeo-$VERSION-arm64.zip" \
+            "release/SHA256SUMS"
+
+  # PRD 8.2 appends a `cask` job here:
+  #   cask:
+  #     needs: [release]
+  #     runs-on: ubuntu-latest
+  #     steps: render the Homebrew cask template with
+  #       needs.release.outputs.version, the release artifact download URL,
+  #       and the dmg sha256, then push the rendered cask to
+  #       vtmocanu/homebrew-tap using ${{ secrets.HOMEBREW_TAP_TOKEN }}.
+  # 8.1 uses only the built-in GITHUB_TOKEN and never reads HOMEBREW_TAP_TOKEN.

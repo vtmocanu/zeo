@@ -10,18 +10,20 @@ import {
 } from "./settings.js";
 
 describe("SETTINGS_SECTIONS", () => {
-  test("has the four sections in registry order with their titles", () => {
+  test("has the five sections in registry order with their titles", () => {
     expect(SETTINGS_SECTIONS.map((s) => s.id)).toEqual([
       "general",
       "blocking",
       "profiles",
       "history",
+      "about",
     ]);
     expect(SETTINGS_SECTIONS.map((s) => s.title)).toEqual([
       "General",
       "Blocking",
       "Profiles",
       "History",
+      "About",
     ]);
   });
 });
@@ -31,13 +33,15 @@ describe("nextSection / prevSection", () => {
     expect(nextSection("general")).toBe("blocking");
     expect(nextSection("blocking")).toBe("profiles");
     expect(nextSection("profiles")).toBe("history");
+    expect(nextSection("history")).toBe("about");
   });
 
   test("nextSection clamps at the last section (no wrap)", () => {
-    expect(nextSection("history")).toBe("history");
+    expect(nextSection("about")).toBe("about");
   });
 
   test("prevSection walks the registry order backward", () => {
+    expect(prevSection("about")).toBe("history");
     expect(prevSection("history")).toBe("profiles");
     expect(prevSection("profiles")).toBe("blocking");
     expect(prevSection("blocking")).toBe("general");

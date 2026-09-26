@@ -9,4 +9,7 @@ overrides:
 allowBuilds:
   better-sqlite3: false
   electron: true
+  # Transitive dep of electron-builder, used only for its Windows installer
+  # target; zeo packages macOS-only, so its build script is never needed.
+  electron-winstaller: false
   esbuild: true

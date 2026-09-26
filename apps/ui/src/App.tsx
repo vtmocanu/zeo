@@ -593,6 +593,7 @@ export function App() {
     },
     quickBrowse: null,
     isDefaultBrowser: false,
+    appVersion: "",
     layout: SINGLE_LAYOUT,
     update: {
       enabled: true,

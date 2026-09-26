@@ -148,6 +148,8 @@ export type {
   AvailableUpdate,
   UpdateState,
 } from "./update.js";
+export { parseChangelogSection } from "./release.js";
+export type { ChangelogSection } from "./release.js";
 export {
   SIDEBAR_WIDTH,
   SPACE_ACTIVATE_DELAY_MS,
