@@ -12,12 +12,13 @@ files:
   - package.json
 asar: true
 asarUnpack:
-  # Native binding (better-sqlite3) must load as a real file, not from the asar.
+  # Native bindings (better-sqlite3) must load as real files, not from the asar.
+  # Preloads (including the adblocker's cosmetic session preload) stay packed:
+  # Electron reads preload scripts through its asar-aware loader.
   - "**/*.node"
-  # Registered as an Electron session preload (a real file path, not asar-safe).
-  - out/preload/cosmetic-preload.cjs
-# Rebuilds better-sqlite3 against Electron's ABI at package time, since
-# pnpm-workspace.yaml sets allowBuilds.better-sqlite3: false at install time.
+# electron-builder's default: run @electron/rebuild over native deps at package
+# time (pnpm never builds better-sqlite3 on install, see allowBuilds). The
+# current better-sqlite3 also ships N-API prebuilds, which load under Electron.
 npmRebuild: true
 mac:
   category: public.app-category.productivity

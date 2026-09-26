@@ -58,6 +58,30 @@ which:
 PRD 8.2 appends a `cask` job (`needs: [release]`) that renders and pushes the
 Homebrew cask to `vtmocanu/homebrew-tap`; that job is not part of 8.1.
 
+## Hardening to consider before activating
+
+The template is the workflow as specified by PRD 8.1. A security review of it
+suggested these changes for the human who commits it (none are applied, so the
+committed file matches the spec unless you choose otherwise):
+
+- **Split build from publish.** Dependency code (install, lint, build, test,
+  package) runs in the same job that later hands `GH_TOKEN` (contents: write)
+  to `gh`. A `build` job with `contents: read` that uploads the artifacts, plus
+  a `publish` job with `contents: write` that only downloads them, re-checks
+  `SHA256SUMS`, and runs `gh release create`, keeps the write token away from
+  third-party code.
+- **Pin actions to commit SHAs** (with a version comment) rather than moving
+  tags such as `@v7`, at least in this write-scoped workflow.
+- **Pass the version through `env:`** in the "Generate SHA256SUMS" step
+  (`"zeo-$VERSION-arm64.dmg"`) like the other steps, instead of interpolating
+  `${{ steps.version.outputs.version }}` into the script.
+- **Drop `cache: pnpm`** from `setup-node` here, so a release build never
+  restores a dependency cache written by another workflow run.
+- **Electron fuses.** `electron-builder.yml` sets no `electronFuses`, so the
+  packaged app keeps Electron defaults (e.g. `ELECTRON_RUN_AS_NODE`). Consider
+  disabling `runAsNode`, `enableNodeOptionsEnvironmentVariable`, and
+  `enableNodeCliInspectArguments`.
+
 ## Local packaging on macOS
 
 `pnpm package` (which runs `pnpm build` first) produces:
