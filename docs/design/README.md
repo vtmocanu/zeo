@@ -21,7 +21,7 @@ Styling uses plain CSS with custom-property tokens and one CSS file per componen
 | Window row     | 44 px tall at the top of the sidebar: traffic lights, then sidebar toggle, back, forward, reload as 28 px icon buttons. Drag region except for its buttons.                               |
 | Sidebar        | 240 px default, resizable 200–360 px by dragging the card's left edge.                                                                                                                    |
 | Sidebar toggle | New command `view.toggleSidebar`, ⌘S, in the View menu.                                                                                                                                   |
-| Collapsed      | Card inset 8 px on all four sides. Touching the left 6 px of the window slides the sidebar in over the card; it hides 400 ms after the pointer leaves.                                     |
+| Collapsed      | Card inset 8 px on all four sides; traffic lights hidden. Touching the left 6 px of the window slides the sidebar back in and pushes the card right; it hides 400 ms after the pointer leaves the sidebar. The sidebar renders in the window's own webContents beneath the native page views, so it cannot float over the card. |
 | Content card   | Inset 8 px from top, right and bottom; left edge at the sidebar width. Radius 10, 1 px hairline, card shadow.                                                                             |
 | Split view     | Two cards with an 8 px gap. The gap is the existing divider hit area. The focused pane adds a 2 px `--accent-soft` ring.                                                                   |
 | View bounds    | WebContentsView bounds: x = sidebar width, y = 8, width = W − sidebar − 8, height = H − 16. Corner radius 10 on the view (confirm `setBorderRadius` against the pinned Electron version). |
@@ -163,11 +163,11 @@ SF Pro through `-apple-system`. Web content keeps its own fonts.
 
 ### Command bar
 
-Floats centered about 20% from the top of the window, 680 px wide, over a blurred scrim. 22 px input. Results group as Tabs, History and Commands in 40 px rows with right-aligned shortcut hints. The selected row uses `--accent-soft`.
+Floats centered about 20% from the top of the window, 680 px wide (`min(680, W − 48)`), over a dimming scrim. The scrim does not blur the page: native page views cannot be backdrop-blurred by another view. 22 px input. Results group as Tabs, History and Commands in 40 px rows with right-aligned shortcut hints. The selected row uses `--accent-soft`.
 
 ### Settings
 
-A 760 × 500 sheet over the scrim with a section list on the left: General (search engine, external links, updates), Content blocking (including allowlisted sites), Profiles, History, About. Groups sit in wells with hairline row separators.
+A `min(760, W − 48)` × `min(500, H − 48)` sheet over the scrim with a section list on the left: General (search engine, external links, updates), Content blocking (including allowlisted sites), Profiles, History, About. Groups sit in wells with hairline row separators.
 
 ### Find bar
 
@@ -175,11 +175,11 @@ A floating pill at the top right of the content card, inset 8 px: query, match c
 
 ### Space theme picker
 
-Opens from Edit Theme… in a space's context menu, anchored to its dot in the bottom bar. Solid or gradient, ten swatches, intensity slider, and a contrast readout for both appearances.
+Opens from Edit Theme… in a space's context menu, anchored above the bottom bar and as wide as the sidebar minus 16 px, because it renders inside the sidebar. Solid or gradient, ten swatches, intensity slider, and a contrast readout for both appearances.
 
 ### Popovers, dialogs, menus
 
-Downloads, quick-browse, the update banner and dialogs share the popover tokens (radius 10 or 14). Tab and space context menus stay native macOS `Menu` popups.
+Quick-browse, the update banner and dialogs share the popover tokens (radius 10 or 14). Downloads and history remain command bar modes and take the command bar styling. Tab and space context menus stay native macOS `Menu` popups.
 
 ## 7. Motion
 
