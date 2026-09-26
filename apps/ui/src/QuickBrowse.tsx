@@ -8,8 +8,8 @@ import "./App.css";
  * The quick-browse chrome bar, rendered in the quick-browse window's own
  * webContents (selected by `?view=quick-browse` in {@link "./main.js"}), which
  * fills the window; main lays the page view over it below the bar. A thin
- * renderer with no business logic: it mirrors main's full {@link TabsState} and reaches main exclusively
- * through `window.zeo`.
+ * renderer with no business logic: it mirrors main's full {@link TabsState} and
+ * reaches main exclusively through `window.zeo`.
  *
  * State ownership: main pushes the full `TabsState` over `onStateChange`, and
  * `tabs.list()` returns the same shape for the initial seed. This component keeps
