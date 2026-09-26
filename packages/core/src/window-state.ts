@@ -55,8 +55,8 @@ function overlap(aStart: number, aEnd: number, bStart: number, bEnd: number): nu
  * The bounds a restored window should open with.
  *
  * When `saved` is `null` or `workAreas` is empty there is nothing to restore, so
- * the default size is returned with NO `x`/`y` — Electron then centers the window
- * on the primary display.
+ * the default size is returned with NO `x`/`y` — the caller then centers the
+ * window on the primary display (see {@link centerInWorkArea}).
  *
  * Otherwise `width`/`height` are the saved size clamped into
  * `[MIN_WINDOW_SIZE, largest work area by area]` (the low bound applied first, so
@@ -64,7 +64,7 @@ function overlap(aStart: number, aEnd: number, bStart: number, bEnd: number): nu
  * exceeds the largest work area). The saved `x`/`y` are kept only when both are non-null
  * AND the saved rect overlaps at least one work area by at least
  * {@link MIN_VISIBLE_PX} on BOTH axes of the SAME work area; otherwise they are
- * omitted and the window centers. `maximized` passes through unchanged.
+ * omitted and the caller centers the window. `maximized` passes through unchanged.
  */
 export function resolveWindowBounds(
   saved: WindowState | null,
@@ -120,7 +120,8 @@ function keepsPosition(
 }
 
 /**
- * The top-left corner that centers a `width`x`height` window within `area`.
+ * The top-left corner that centers a `width`x`height` window within `area`,
+ * floored at the area's origin when the window is larger than the area.
  * Pure arithmetic — no Electron — so a caller with no saved position can center
  * explicitly on a chosen work area rather than relying on platform defaults.
  */
@@ -129,8 +130,10 @@ export function centerInWorkArea(
   height: number,
   area: Rect,
 ): { x: number; y: number } {
+  // Never place the corner before the area's origin: a window larger than the
+  // area keeps its title bar on-screen and overhangs to the right/bottom only.
   return {
-    x: area.x + Math.round((area.width - width) / 2),
-    y: area.y + Math.round((area.height - height) / 2),
+    x: area.x + Math.max(0, Math.round((area.width - width) / 2)),
+    y: area.y + Math.max(0, Math.round((area.height - height) / 2)),
   };
 }

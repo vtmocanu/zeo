@@ -88,13 +88,13 @@ export function createWindow(seed: boolean): void {
   const { maximized, ...frame } = resolved;
   // Electron's own centering (when x/y are omitted) centers on the full screen
   // frame on macOS, not the work area, so center explicitly here on the primary
-  // display's work area whenever there is no saved position to restore.
+  // display's work area whenever there is no saved position to restore. The size
+  // is first fitted to that same area so the centered window never overhangs it.
   if (frame.x === undefined || frame.y === undefined) {
-    const center = centerInWorkArea(
-      frame.width,
-      frame.height,
-      screen.getPrimaryDisplay().workArea,
-    );
+    const primary = screen.getPrimaryDisplay().workArea;
+    frame.width = Math.min(frame.width, primary.width);
+    frame.height = Math.min(frame.height, primary.height);
+    const center = centerInWorkArea(frame.width, frame.height, primary);
     frame.x = center.x;
     frame.y = center.y;
   }

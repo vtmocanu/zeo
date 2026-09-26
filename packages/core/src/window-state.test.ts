@@ -187,4 +187,9 @@ describe("centerInWorkArea", () => {
       y: Math.round((1920 - 600) / 2),
     });
   });
+
+  test("floors at the area origin when the window is larger than the area", () => {
+    const area: Rect = { x: 0, y: 25, width: 1200, height: 677 };
+    expect(centerInWorkArea(1280, 800, area)).toEqual({ x: 0, y: 25 });
+  });
 });
