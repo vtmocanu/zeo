@@ -28,6 +28,7 @@ import { openFindSession, findNext, findPrevious, closeFindSession } from "./fin
 import { teardownQuickBrowse, setAsDefaultBrowser } from "./quick-browse.js";
 import { doSplit, doUnsplit, doFocusOther, doSwap } from "./layout.js";
 import { downloadsDir, logDownloadError } from "./downloads.js";
+import { checkForUpdates } from "./update.js";
 import { clearFinishedDownloadsSequenced } from "./download-ops.js";
 
 /**
@@ -269,6 +270,12 @@ const commandHandlers: Record<CommandId, () => void> = {
   "view.unsplit": () => doUnsplit(),
   "view.focusOtherPane": () => doFocusOther(),
   "view.swapPanes": () => doSwap(),
+  "update.check": () => {
+    void checkForUpdates("manual");
+    if (!runtime.settingsOpen) {
+      openSettingsAt("general");
+    }
+  },
 };
 
 /**

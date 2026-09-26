@@ -11,12 +11,15 @@ import {
   prevSection,
   SEARCH_ENGINES,
   HISTORY_RETENTION_MS,
+  HOMEBREW_UPGRADE_COMMAND,
+  formatRelativeTime,
   type BlockingState,
   type Profile,
   type Space,
   type SettingsSectionId,
   type SearchEngineId,
   type TabsState,
+  type UpdateState,
 } from "@zeo/core";
 import "./App.css";
 
@@ -203,6 +206,8 @@ export function Settings() {
             searchEngine={state.settings.searchEngine}
             quickBrowseExternal={state.settings.quickBrowseExternal}
             isDefaultBrowser={state.isDefaultBrowser}
+            updateCheckEnabled={state.settings.updateCheckEnabled}
+            update={state.update}
           />
         )}
         {selected === "blocking" && state !== null && (
@@ -228,10 +233,14 @@ function GeneralSection({
   searchEngine,
   quickBrowseExternal,
   isDefaultBrowser,
+  updateCheckEnabled,
+  update,
 }: {
   searchEngine: SearchEngineId;
   quickBrowseExternal: boolean;
   isDefaultBrowser: boolean;
+  updateCheckEnabled: boolean;
+  update: UpdateState;
 }) {
   // Error text for a rejected setSearchEngine call.
   const [error, setError] = useState<string | null>(null);
@@ -284,6 +293,64 @@ function GeneralSection({
     });
   };
 
+  // Error text for a rejected setUpdateCheckEnabled call.
+  const [updateCheckError, setUpdateCheckError] = useState<string | null>(
+    null,
+  );
+  // Refreshed every minute so the relative "checked N ago" wording in the
+  // status line advances without requiring a fresh broadcast.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const interval = setInterval(() => setNow(Date.now()), 60_000);
+    return () => clearInterval(interval);
+  }, []);
+
+  /**
+   * Toggles automatic update checking. The checkbox stays bound to the
+   * broadcast value, so a rejected call falls back to the persisted value on
+   * the next render (no optimistic keep) and the error message is surfaced.
+   */
+  const onToggleUpdateCheck = (event: ChangeEvent<HTMLInputElement>): void => {
+    const next = event.target.checked;
+    const api = window.zeo;
+    if (!api) {
+      return;
+    }
+    setUpdateCheckError(null);
+    void api.settings.setUpdateCheckEnabled(next).catch((err: unknown) => {
+      setUpdateCheckError(err instanceof Error ? err.message : String(err));
+    });
+  };
+
+  const onCheckNow = (): void => {
+    void window.zeo?.update.check().catch(() => {});
+  };
+
+  const onCopyUpgradeCommand = (): void => {
+    void window.zeo?.update.copyUpgradeCommand().catch(() => {});
+  };
+
+  const onOpenRelease = (): void => {
+    void window.zeo?.update.openRelease().catch(() => {});
+  };
+
+  const onDismissUpdate = (): void => {
+    void window.zeo?.update.dismiss().catch(() => {});
+  };
+
+  let updateStatus: string;
+  if (update.checking) {
+    updateStatus = "Checking…";
+  } else if (update.error !== null) {
+    updateStatus = `Could not check for updates (${update.error})`;
+  } else if (update.available !== null) {
+    updateStatus = `zeo ${update.available.version} is available`;
+  } else if (update.lastCheckedAt !== null) {
+    updateStatus = `You're up to date (checked ${formatRelativeTime(now, update.lastCheckedAt)})`;
+  } else {
+    updateStatus = "Never checked";
+  }
+
   return (
     <>
       <section className="settings__group">
@@ -313,6 +380,87 @@ function GeneralSection({
           >
             {error}
           </p>
+        )}
+      </section>
+
+      <section className="settings__group">
+        <h2 className="settings__group-title">Updates</h2>
+
+        <div className="settings__row">
+          <label className="settings__toggle-label">
+            <input
+              type="checkbox"
+              className="settings__checkbox"
+              data-testid="update-auto-check"
+              checked={updateCheckEnabled}
+              onChange={onToggleUpdateCheck}
+            />
+            <span>Check for updates automatically</span>
+          </label>
+        </div>
+        {updateCheckError !== null && (
+          <p
+            className="settings__error"
+            data-testid="update-auto-check-error"
+            role="alert"
+          >
+            {updateCheckError}
+          </p>
+        )}
+
+        <div className="settings__row">
+          <button
+            type="button"
+            className="settings__button"
+            data-testid="update-check-now"
+            disabled={update.checking}
+            onClick={onCheckNow}
+          >
+            Check now
+          </button>
+        </div>
+
+        <p className="settings__status" data-testid="update-status">
+          {updateStatus}
+        </p>
+
+        {update.available !== null &&
+          (update.origin === "homebrew" ? (
+            <div className="settings__row settings__update-action">
+              <code>{HOMEBREW_UPGRADE_COMMAND}</code>
+              <button
+                type="button"
+                className="settings__button"
+                data-testid="update-copy-command"
+                onClick={onCopyUpgradeCommand}
+              >
+                Copy
+              </button>
+            </div>
+          ) : (
+            <div className="settings__row settings__update-action">
+              <button
+                type="button"
+                className="settings__button"
+                data-testid="update-open-release"
+                onClick={onOpenRelease}
+              >
+                Open release page
+              </button>
+            </div>
+          ))}
+
+        {update.available !== null && (
+          <div className="settings__row">
+            <button
+              type="button"
+              className="settings__link-button"
+              data-testid="update-dismiss"
+              onClick={onDismissUpdate}
+            >
+              Dismiss this version
+            </button>
+          </div>
         )}
       </section>
 
