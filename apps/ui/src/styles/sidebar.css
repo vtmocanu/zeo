@@ -66,9 +66,7 @@
   position: sticky;
   top: 0;
   z-index: 1;
-  background:
-    linear-gradient(var(--surface-window), var(--surface-window)),
-    var(--surface-card);
+  background: linear-gradient(var(--surface-window), var(--surface-window)), var(--surface-card);
   border-bottom: 1px solid var(--hairline);
 }
 

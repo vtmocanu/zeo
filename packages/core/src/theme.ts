@@ -221,8 +221,12 @@ export function toHex(c: Rgb): string {
   );
 }
 
+function roundRgb(c: Rgb): Rgb {
+  return c.map((channel) => Math.round(Math.min(255, Math.max(0, channel)))) as unknown as Rgb;
+}
+
 function rgba(c: Rgb, alpha: number): string {
-  const [r, g, b] = c.map((channel) => Math.round(Math.min(255, Math.max(0, channel))));
+  const [r, g, b] = roundRgb(c);
   return `rgb(${r} ${g} ${b} / ${alpha})`;
 }
 
@@ -247,18 +251,31 @@ function minContrast(candidate: Rgb, grounds: Rgb[]): number {
 }
 
 /**
- * Alpha-composite `overlay` (at `alpha`) over `background`, using the
- * *rounded* integer channel values for both colors — i.e. the same
- * channels that `rgba()` above actually emits into `rgb(r g b / a)`
- * strings. Backgrounds like `--surface-raised` are rendered as their own
- * CSS layer sitting on top of an integer-channel color, so compositing
- * against the unrounded float would silently diverge from what actually
- * renders in the browser.
+ * The alpha each token layer is emitted at (design book §3 / the token
+ * table). Shared between the background-compositing helpers below (used to
+ * build the contrast-sweep backgrounds) and `themeTokens` (which emits the
+ * literal `rgb(r g b / a)` strings) so the two never drift apart.
+ */
+const SURFACE_RAISED_ALPHA = (isInkDark: boolean): number => (isInkDark ? 0.8 : 0.15);
+const SURFACE_HOVER_ALPHA = (isDark: boolean): number => (isDark ? 0.1 : 0.08);
+const FILL_SUBTLE_ALPHA = (isDark: boolean): number => (isDark ? 0.09 : 0.06);
+const POPOVER_WELL_ALPHA = 0.035;
+const POPOVER_HOVER_ALPHA = 0.07;
+const CONTROL_RAISED_ALPHA = (isDark: boolean): number => (isDark ? 0.14 : 1);
+
+/**
+ * Alpha-composite `overlay` (at `alpha`) over `background`: the token
+ * color's channels rounded to the integers CSS actually emits (matching
+ * `rgba()`/`toHex()` above), alpha-blended over the *float* background, per
+ * the spec ("alpha blend of the token color at its alpha"). The background
+ * is never rounded — grounds are floats derived from OKLCH mixes, and only
+ * the compositing itself should introduce rounding, matching what the
+ * browser renders when a rounded-channel CSS layer sits over an arbitrary
+ * backdrop.
  */
 function compositeOver(overlay: Rgb, alpha: number, background: Rgb): Rgb {
-  const bg = background.map((c) => Math.round(Math.min(255, Math.max(0, c)))) as unknown as Rgb;
-  const ov = overlay.map((c) => Math.round(Math.min(255, Math.max(0, c)))) as unknown as Rgb;
-  return [0, 1, 2].map((i) => ov[i] * alpha + bg[i] * (1 - alpha)) as unknown as Rgb;
+  const ov = roundRgb(overlay);
+  return [0, 1, 2].map((i) => ov[i] * alpha + background[i] * (1 - alpha)) as unknown as Rgb;
 }
 
 /**
@@ -272,9 +289,9 @@ function windowBackgrounds(
   isInkDark: boolean,
   isDark: boolean,
 ): Rgb[] {
-  const raisedAlpha = isInkDark ? 0.8 : 0.15;
-  const hoverAlpha = isDark ? 0.1 : 0.08;
-  const subtleAlpha = isDark ? 0.09 : 0.06;
+  const raisedAlpha = SURFACE_RAISED_ALPHA(isInkDark);
+  const hoverAlpha = SURFACE_HOVER_ALPHA(isDark);
+  const subtleAlpha = FILL_SUBTLE_ALPHA(isDark);
   const backgrounds: Rgb[] = [];
   for (const ground of grounds) {
     backgrounds.push(ground);
@@ -291,13 +308,11 @@ function windowBackgrounds(
  * `--control-raised` composited over it.
  */
 function popoverBackgrounds(popoverBase: Rgb, popoverInk: Rgb, isDark: boolean): Rgb[] {
-  const wellAlpha = 0.035;
-  const hoverAlpha = 0.07;
-  const controlRaisedAlpha = isDark ? 0.14 : 1;
+  const controlRaisedAlpha = CONTROL_RAISED_ALPHA(isDark);
   return [
     popoverBase,
-    compositeOver(popoverInk, wellAlpha, popoverBase),
-    compositeOver(popoverInk, hoverAlpha, popoverBase),
+    compositeOver(popoverInk, POPOVER_WELL_ALPHA, popoverBase),
+    compositeOver(popoverInk, POPOVER_HOVER_ALPHA, popoverBase),
     compositeOver(WHITE, controlRaisedAlpha, popoverBase),
   ];
 }
@@ -401,7 +416,9 @@ function computeInternalReport(theme: SpaceTheme | null, appearance: Appearance)
   let inkSecondaryContrast = minContrast(ink, windowBgs);
   for (let step = 56; step <= 100; step += 2) {
     const m = step / 100;
-    const candidate = mix(avgGround, ink, m);
+    // Round the candidate before measuring: toHex emits the rounded color,
+    // so what gets measured here must be what CSS actually renders.
+    const candidate = roundRgb(mix(avgGround, ink, m));
     const candidateContrast = minContrast(candidate, windowBgs);
     if (candidateContrast >= 4.5) {
       inkSecondary = candidate;
@@ -441,7 +458,9 @@ function computeInternalReport(theme: SpaceTheme | null, appearance: Appearance)
   let popoverSecondaryContrast = minContrast(popoverInk, popoverBgs);
   for (let step = 50; step <= 100; step += 2) {
     const m = step / 100;
-    const candidate = mix(popoverBase, popoverInk, m);
+    // Round the candidate before measuring, for the same reason as above:
+    // toHex emits the rounded color.
+    const candidate = roundRgb(mix(popoverBase, popoverInk, m));
     const candidateContrast = minContrast(candidate, popoverBgs);
     if (candidateContrast >= 4.5) {
       popoverSecondaryInk = candidate;
@@ -541,9 +560,9 @@ export function themeTokens(
     "--tint": tint,
     "--tint-opacity": report.tintOpacity.toFixed(3),
     "--surface-card": toHex(report.card),
-    "--surface-raised": report.isInkDark ? rgba(WHITE, 0.8) : rgba(WHITE, 0.15),
-    "--surface-hover": isDark ? rgba(report.ink, 0.1) : rgba(report.ink, 0.08),
-    "--fill-subtle": isDark ? rgba(report.ink, 0.09) : rgba(report.ink, 0.06),
+    "--surface-raised": rgba(WHITE, SURFACE_RAISED_ALPHA(report.isInkDark)),
+    "--surface-hover": rgba(report.ink, SURFACE_HOVER_ALPHA(isDark)),
+    "--fill-subtle": rgba(report.ink, FILL_SUBTLE_ALPHA(isDark)),
     "--hairline": rgba(report.ink, 0.12),
     "--ink-primary": toHex(report.ink),
     "--ink-secondary": toHex(report.inkSecondary),
@@ -558,9 +577,9 @@ export function themeTokens(
     "--ink-popover-secondary": toHex(report.popoverSecondaryInk),
     "--popover-hairline": rgba(report.popoverInk, 0.1),
     "--popover-hairline-strong": rgba(report.popoverInk, 0.28),
-    "--popover-hover": rgba(report.popoverInk, 0.07),
-    "--popover-well": rgba(report.popoverInk, 0.035),
-    "--control-raised": isDark ? rgba(WHITE, 0.14) : "#ffffff",
+    "--popover-hover": rgba(report.popoverInk, POPOVER_HOVER_ALPHA),
+    "--popover-well": rgba(report.popoverInk, POPOVER_WELL_ALPHA),
+    "--control-raised": isDark ? rgba(WHITE, CONTROL_RAISED_ALPHA(true)) : "#ffffff",
     "--scrim": isDark ? rgba(BLACK, 0.34) : rgba([24, 24, 32], 0.14),
     "--shadow-raised": shadowRaised,
     "--shadow-card": shadowCard,

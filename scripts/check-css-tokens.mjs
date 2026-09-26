@@ -29,8 +29,8 @@ const FUNC = /\b(?:rgba?|hsla?|hwb|lab|lch|oklab|oklch|color)\(/gi;
 // lowercased, as CSS keywords are case-insensitive.
 const NAMED_COLORS = new Set(
   (
-    "canvas canvastext buttonface buttontext field fieldtext highlight " +
-    "highlighttext linktext visitedtext activetext graytext mark marktext " +
+    "canvas canvastext buttonface buttontext fieldtext " +
+    "highlighttext linktext visitedtext activetext graytext marktext " +
     "accentcolor accentcolortext selecteditem selecteditemtext " +
     "aliceblue antiquewhite aqua aquamarine azure beige bisque black " +
     "blanchedalmond blue blueviolet brown burlywood cadetblue chartreuse " +
@@ -95,8 +95,11 @@ function valueText(line) {
     const declaration = /^\s*[\w-]+\s*:(.*)$/.exec(part);
     if (declaration) values.push(declaration[1]);
     // A continuation line may also close the rule (`    red; }`): only the
-    // text before the `}` is in `body`, so it is still a value.
-    else if (!opened && /^\s+\S/.test(part)) values.push(part);
+    // text before the `}` is in `body`, so it is still a value. But an
+    // indented line that is itself a selector-list continuation (e.g.
+    // `  mark,` or `  mark {` ahead of a multi-line selector list) is not a
+    // declaration value, so it must not be scanned for named colors.
+    else if (!opened && /^\s+\S/.test(part) && !/[,{]\s*$/.test(part)) values.push(part);
   }
   return values.join(" ");
 }

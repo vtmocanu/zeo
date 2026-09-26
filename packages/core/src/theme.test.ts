@@ -17,6 +17,32 @@ function hexToRgb(hex: string): [number, number, number] {
   return [(n >> 16) & 0xff, (n >> 8) & 0xff, n & 0xff];
 }
 
+// The popover base colors from design book §3 / PRD 10.1 §1, duplicated
+// here (not exported from theme.ts) so the oracle below is independent of
+// the module under test.
+const POPOVER_BASE_ORACLE: Record<Appearance, [number, number, number]> = {
+  light: [250, 250, 252],
+  dark: [44, 44, 49],
+};
+
+/** Parse a `#rrggbb` or `rgb(r g b / a)` token string into rgb + alpha. */
+function parseColorToken(value: string): { rgb: [number, number, number]; alpha: number } {
+  if (value.startsWith("#")) return { rgb: hexToRgb(value), alpha: 1 };
+  const m = /^rgb\((\d+) (\d+) (\d+) \/ ([\d.]+)\)$/.exec(value);
+  if (!m) throw new Error(`unexpected color token: ${value}`);
+  return { rgb: [Number(m[1]), Number(m[2]), Number(m[3])], alpha: Number(m[4]) };
+}
+
+/** Alpha-composite a parsed token layer over a float ground, unrounded. */
+function compositeTokenOverGround(
+  layer: { rgb: [number, number, number]; alpha: number },
+  ground: readonly number[],
+): [number, number, number] {
+  return [0, 1, 2].map(
+    (i) => layer.rgb[i] * layer.alpha + ground[i] * (1 - layer.alpha),
+  ) as [number, number, number];
+}
+
 describe("oklchToRgb", () => {
   test("white and black", () => {
     const white = oklchToRgb(1, 0, 0).map(Math.round);
@@ -91,6 +117,42 @@ describe("themeTokens sweep", () => {
             hexToRgb(tokens["--danger"]),
           );
           expect(dangerContrast).toBeGreaterThanOrEqual(4.5);
+
+          // Independent oracle: recompute the window/popover backgrounds
+          // from the *emitted* tokens (not from theme.ts's internal
+          // report) and re-measure contrast here, so a reduced background
+          // set or a swapped alpha in theme.ts fails this test even if the
+          // internal report's own bookkeeping still claims 4.5:1.
+          const inkSecondary = hexToRgb(tokens["--ink-secondary"]);
+          const surfaceRaised = parseColorToken(tokens["--surface-raised"]);
+          const surfaceHover = parseColorToken(tokens["--surface-hover"]);
+          const fillSubtle = parseColorToken(tokens["--fill-subtle"]);
+          for (const ground of report.grounds) {
+            const windowBackgrounds = [
+              ground,
+              compositeTokenOverGround(surfaceRaised, ground),
+              compositeTokenOverGround(surfaceHover, ground),
+              compositeTokenOverGround(fillSubtle, ground),
+            ];
+            for (const bg of windowBackgrounds) {
+              expect(contrastRatio(inkSecondary, bg)).toBeGreaterThanOrEqual(4.5);
+            }
+          }
+
+          const popoverSecondary = hexToRgb(tokens["--ink-popover-secondary"]);
+          const popoverBase = POPOVER_BASE_ORACLE[appearance];
+          const popoverWell = parseColorToken(tokens["--popover-well"]);
+          const popoverHover = parseColorToken(tokens["--popover-hover"]);
+          const controlRaised = parseColorToken(tokens["--control-raised"]);
+          const popoverBackgrounds = [
+            popoverBase,
+            compositeTokenOverGround(popoverWell, popoverBase),
+            compositeTokenOverGround(popoverHover, popoverBase),
+            compositeTokenOverGround(controlRaised, popoverBase),
+          ];
+          for (const bg of popoverBackgrounds) {
+            expect(contrastRatio(popoverSecondary, bg)).toBeGreaterThanOrEqual(4.5);
+          }
         });
       }
     }
@@ -188,7 +250,7 @@ describe("null-theme golden values", () => {
       "--surface-card": "#1b1b1f",
       "--hairline": "rgb(245 245 247 / 0.12)",
       "--ink-primary": "#f5f5f7",
-      "--ink-secondary": "#b1b1b3",
+      "--ink-secondary": "#adadaf",
       "--accent": "#96a2ff",
       "--ink-on-accent": "#1a1a1f",
       "--danger": "#f66d67",
