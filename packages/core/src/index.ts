@@ -127,6 +127,8 @@ export { buildSpaceContextMenu } from "./space-menu.js";
 export type { SpaceContextMenuInput } from "./space-menu.js";
 export { titleForUrl } from "./tab-title.js";
 export { formatRelativeArchived } from "./relative-time.js";
+export { parseChangelogSection } from "./release.js";
+export type { ChangelogSection } from "./release.js";
 export {
   SIDEBAR_WIDTH,
   SPACE_ACTIVATE_DELAY_MS,

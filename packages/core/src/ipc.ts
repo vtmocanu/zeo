@@ -98,6 +98,13 @@ export interface TabsState extends StoreSnapshot {
    * rows.
    */
   unloadedTabIds: string[];
+  /**
+   * The app version main reads once from `app.getVersion()` and attaches to
+   * every snapshot — the root package.json version in a packaged build, or
+   * the desktop package's "0.0.0" unpackaged. Shown in the settings About
+   * section.
+   */
+  appVersion: string;
 }
 
 /**
