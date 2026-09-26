@@ -178,3 +178,12 @@ export {
   selectViewsToUnload,
 } from "./view-unload.js";
 export type { UnloadCandidate } from "./view-unload.js";
+export {
+  DEFAULT_WINDOW_SIZE,
+  MIN_WINDOW_SIZE,
+  MIN_VISIBLE_PX,
+  resolveWindowBounds,
+  centerInWorkArea,
+  fitAndCenterInWorkArea,
+} from "./window-state.js";
+export type { WindowState, Rect } from "./window-state.js";

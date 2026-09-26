@@ -9,6 +9,13 @@ milestone, a minor bump only for very large breakthroughs.
 
 ## [Unreleased]
 
+### Added
+
+- zeo now reopens its main window at the size, position, and maximized state it
+  had when you last quit. A saved position that no longer lands on any connected
+  display falls back to a centered, on-screen window. (Adds a `window_state`
+  table; the on-disk schema is now version 11.)
+
 ### Changed
 
 - Hidden tab views are now unloaded to reclaim memory: switching spaces frees
@@ -30,6 +37,11 @@ milestone, a minor bump only for very large breakthroughs.
   (a new database schema column records that it ran).
 
 ### Fixed
+
+- The pre-profiles default-session cookie migration now derives its target
+  partition from the store's default profile id (`persist:<id>`) instead of a
+  hard-coded `persist:default`, and a retry after a partial failure skips cookies
+  already present in the target, so a newer value there is never overwritten.
 
 - A tab command issued from the sidebar that the main process rejects (for
   example, activating a tab the idle sweep just archived) now re-broadcasts

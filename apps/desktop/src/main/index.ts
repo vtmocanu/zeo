@@ -20,7 +20,7 @@ import { startHistoryPruning } from "./history.js";
 import { installDownloadHandler, logDownloadError } from "./downloads.js";
 import { startBlocking } from "./blocking.js";
 import { buildMenu } from "./menu.js";
-import { createWindow } from "./window.js";
+import { createWindow, flushWindowStateSave } from "./window.js";
 import { sweepIdle } from "./tabs.js";
 import { unloadIdleViews, viewUnloadIntervalMs } from "./views.js";
 import { handleExternalLink, drainExternalLinks } from "./quick-browse.js";
@@ -80,11 +80,12 @@ app.whenReady().then(async () => {
     installDownloadHandler(p.id);
   }
 
-  // One-shot migration of the legacy default Electron session onto the
-  // persist:default partition (PRD 9.4 §8). Resolves in every case (never rejects),
-  // so a migration failure is logged and startup proceeds regardless. Runs after
-  // the store is restored/rebased and before the window opens.
-  await migrateDefaultSession();
+  // One-shot migration of the legacy default Electron session onto the default
+  // profile's partition (PRD 9.4 §8), the target derived from the store's default
+  // profile rather than a hard-coded literal. Resolves in every case (never
+  // rejects), so a migration failure is logged and startup proceeds regardless.
+  // Runs after the store is restored/rebased and before the window opens.
+  await migrateDefaultSession(runtime.store.defaultProfileId);
 
   buildMenu();
   createWindow(!restoredFromDisk);
@@ -135,4 +136,5 @@ app.on("window-all-closed", () => {
 app.on("before-quit", () => {
   flush(runtime.store);
   flushLayoutSave();
+  flushWindowStateSave();
 });

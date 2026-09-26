@@ -1,37 +1,54 @@
 import { session } from "electron";
 import { cookieUrlFor } from "@zeo/core";
-import { readDefaultSessionMigratedAt, writeDefaultSessionMigratedAt } from "./db.js";
+import {
+  clearDefaultSessionMigratedAt,
+  readDefaultSessionMigratedAt,
+  writeDefaultSessionMigratedAt,
+} from "./db.js";
 
 /**
- * One-shot migration of the legacy default Electron session onto the
- * `persist:default` partition (PRD 9.4 §8). Early builds ran tabs on the implicit
- * default session; spaces now always run on an explicit profile partition, the
- * default profile being `persist:default`. This copies every cookie from the old
- * default session into that partition, then clears those cookies from the old session.
+ * One-shot migration of the legacy default Electron session onto the default
+ * profile's partition (PRD 9.4 §8). Early builds ran tabs on the implicit default
+ * session; spaces now always run on an explicit profile partition. The target is
+ * derived from the store's default profile id (`persist:<defaultProfileId>`)
+ * rather than a hard-coded literal. This copies every cookie from the old default
+ * session into that partition, then clears those cookies from the old session.
  *
  * The whole body is wrapped in a single try/catch so the function RESOLVES in
  * every case (it never rejects) — a migration failure must never block startup:
  *
  * - Idempotent: a non-null marker means it already ran, so it returns immediately
  *   without reading cookies or clearing anything.
- * - Best-effort per cookie: a cookie with no addressable url is skipped; a single
- *   `cookies.set` rejection is collected, and if ANY cookie failed the source
- *   session is left intact (nothing cleared, marker unwritten) so the next launch
- *   retries the whole copy.
+ * - Best-effort per cookie: a cookie with no addressable url is skipped; a cookie
+ *   whose `(name, domain, path)` identity already exists in the target partition
+ *   is skipped so a retry never overwrites a value the user changed there since;
+ *   a single `cookies.set` rejection is collected, and if ANY cookie failed the
+ *   source session is left intact (nothing cleared, marker unwritten) so the next
+ *   launch retries copying only the cookies still missing from the target.
  * - The marker is written ONLY after the clear succeeds, so a crash between copy
- *   and clear re-copies (cookie.set is an upsert) rather than losing data.
+ *   and clear re-copies (skipping what the target already holds) rather than
+ *   losing data.
  */
-export async function migrateDefaultSession(): Promise<void> {
+export async function migrateDefaultSession(defaultProfileId: string): Promise<void> {
   try {
     if (readDefaultSessionMigratedAt() !== null) {
       return;
     }
     const cookies = await session.defaultSession.cookies.get({});
-    const target = session.fromPartition("persist:default");
+    const target = session.fromPartition("persist:" + defaultProfileId);
+    // Snapshot the target's existing cookies so the copy is non-destructive: a
+    // cookie already present by (name, domain, path) is left as the target has it
+    // (possibly newer than the stale default-session copy) instead of overwritten.
+    const cookieKey = (c: { name: string; domain?: string; path?: string }): string =>
+      `${c.name}\t${c.domain ?? ""}\t${c.path ?? "/"}`;
+    const present = new Set((await target.cookies.get({})).map(cookieKey));
     const rejections: unknown[] = [];
     for (const cookie of cookies) {
       const url = cookieUrlFor(cookie);
       if (url === null) {
+        continue;
+      }
+      if (present.has(cookieKey(cookie))) {
         continue;
       }
       try {
@@ -69,4 +86,13 @@ export async function migrateDefaultSession(): Promise<void> {
   } catch (err) {
     console.error("[session-migration] default session migration failed:", err);
   }
+}
+
+// e2e-only: reset the one-shot marker so the NEXT launch re-runs the migration,
+// letting a test seed a cookie in the legacy default session and prove it is
+// migrated onto the default profile. Gated strictly on ZEO_E2E === "1" (the
+// established main-process test-hook pattern); a packaged build never defines it.
+if (process.env.ZEO_E2E === "1") {
+  (globalThis as Record<string, unknown>).__zeoResetDefaultSessionMigration = (): void =>
+    clearDefaultSessionMigratedAt();
 }

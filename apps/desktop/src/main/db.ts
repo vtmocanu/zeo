@@ -37,6 +37,7 @@ import type {
   HistoryVisit,
   SearchEngineId,
   WindowLayout,
+  WindowState,
   Download,
 } from "@zeo/core";
 
@@ -46,10 +47,12 @@ import type {
  * tables (history_entries, history_visits) added at schema version 4, the
  * searchEngine column added at schema version 5, the site_zoom table added
  * at schema version 6, plus the downloads table added at schema version 7 —
- * nine tables in all. Schema version 8 adds the five window-layout columns to
+ * ten tables in all. Schema version 8 adds the five window-layout columns to
  * `meta` (layoutMode, layoutLeftTabId, layoutRightTabId, layoutRatio,
- * layoutFocused) that persist the active space's split-view layout, and schema
- * version 9 adds the quickBrowseExternal column to `meta`.
+ * layoutFocused) that persist the active space's split-view layout, schema
+ * version 9 adds the quickBrowseExternal column to `meta`, schema version 10
+ * adds the defaultSessionMigratedAt column to `meta`, and schema version 11
+ * adds the window_state table (persisted window bounds + maximized state).
  * The PRIMARY KEYs (no duplicate ids), the foreign
  * keys, and `PRAGMA foreign_keys=ON` are the well-formedness contract the core
  * codec relies on: every on-disk state is guaranteed loadable. `spaces.activeTabId`
@@ -69,6 +72,18 @@ const SITE_ZOOM_DDL =
  */
 const DOWNLOADS_DDL =
   "CREATE TABLE downloads (id TEXT PRIMARY KEY, url TEXT NOT NULL, filename TEXT NOT NULL, path TEXT NOT NULL, totalBytes INTEGER NOT NULL, receivedBytes INTEGER NOT NULL, state TEXT NOT NULL, startedAt INTEGER NOT NULL, completedAt INTEGER, spaceId TEXT);";
+
+/**
+ * The window_state table (schema version 11): one row (id = 0) holding the last
+ * window bounds — `x`/`y` nullable (the platform chose the position), `width`/
+ * `height` always set — plus the `maximized` flag. There is deliberately NO seed
+ * row: its absence means "never saved", so a first run opens with platform
+ * defaults. Like the other non-store tables it lives OUTSIDE the
+ * {@link writeState} full-state flush, managed only by {@link readWindowState}
+ * and {@link writeWindowState}.
+ */
+const WINDOW_STATE_DDL =
+  "CREATE TABLE window_state (id INTEGER PRIMARY KEY CHECK (id = 0), x INTEGER, y INTEGER, width INTEGER NOT NULL, height INTEGER NOT NULL, maximized INTEGER NOT NULL DEFAULT 0);";
 
 const DDL = `
 CREATE TABLE profiles (
@@ -115,6 +130,7 @@ CREATE INDEX history_visits_visitedAt ON history_visits(visitedAt);
 CREATE INDEX history_entries_lastVisitedAt ON history_entries(lastVisitedAt);
 ${SITE_ZOOM_DDL}
 ${DOWNLOADS_DDL}
+${WINDOW_STATE_DDL}
 `;
 
 /**
@@ -161,6 +177,7 @@ const MIGRATION_STEPS: Record<number, string> = {
   10:
     "ALTER TABLE meta ADD COLUMN defaultSessionMigratedAt INTEGER;" +
     "UPDATE meta SET schemaVersion = 10 WHERE id = 0;",
+  11: WINDOW_STATE_DDL + "UPDATE meta SET schemaVersion = 11 WHERE id = 0;",
 };
 
 /** The module-level database handle, `null` until {@link loadStore} opens it. */
@@ -180,7 +197,7 @@ function dbPath(): string {
 /**
  * Reads the schema version currently on disk and applies {@link migrationAction}:
  * `"abort"` throws {@link UnsupportedSchemaVersionError}, `"create"` builds the
- * fresh schema (all nine tables) and seeds the single meta row, `"migrate"` runs the
+ * fresh schema (all ten tables) and seeds the single meta row, `"migrate"` runs the
  * ordered {@link MIGRATION_STEPS} from the on-disk version + 1 through
  * {@link SCHEMA_VERSION} inside a single transaction (so a partially-applied
  * upgrade never lands), and `"noop"` leaves an up-to-date database untouched.
@@ -342,6 +359,23 @@ export function writeDefaultSessionMigratedAt(at: number): void {
 }
 
 /**
+ * Resets the default-session migration marker back to `null`, so the NEXT launch
+ * re-runs {@link migrateDefaultSession}. The null-inverse of
+ * {@link writeDefaultSessionMigratedAt}; it exists ONLY to let the e2e simulate an
+ * upgraded (pre-migration) database — a fresh install seeds the marker non-null,
+ * which would otherwise short-circuit the migration. Reachable solely through the
+ * `ZEO_E2E`-gated hook in {@link migrateDefaultSession}'s module, never from
+ * production paths. Throws when the database is not open.
+ */
+export function clearDefaultSessionMigratedAt(): void {
+  const database = requireDb();
+  const info = database.prepare("UPDATE meta SET defaultSessionMigratedAt=NULL WHERE id=0").run();
+  if (info.changes === 0) {
+    throw new Error("clearDefaultSessionMigratedAt: no meta row (id=0) to update");
+  }
+}
+
+/**
  * Reads the persisted "open external links in quick-browse" flag from the meta
  * row, mapping SQLite's integer to a boolean. Returns `true` (the default) when
  * the row is absent or the value is null/undefined. Managed ONLY here and by
@@ -441,6 +475,59 @@ export function writeWindowLayout(layout: WindowLayout): void {
       "UPDATE meta SET layoutMode='single', layoutLeftTabId=NULL, layoutRightTabId=NULL WHERE id=0",
     )
     .run();
+}
+
+/**
+ * Reads the persisted window {@link WindowState} from the `window_state` row 0,
+ * mapping SQLite's integer `maximized` to a boolean. Returns `null` when no row
+ * has been saved yet (its absence means the bounds were never persisted — a first
+ * run), so the caller opens with platform defaults; `x`/`y` stay `null` as `null`.
+ * Managed ONLY here and by {@link writeWindowState}; like the other window/meta
+ * helpers it is kept out of the {@link writeState} full-state flush. Throws when
+ * the database is not open.
+ */
+export function readWindowState(): WindowState | null {
+  const database = requireDb();
+  // SQLite-row boundary: .get() is typed `unknown`, cast to the known shape.
+  const row = database
+    .prepare("SELECT x, y, width, height, maximized FROM window_state WHERE id=0")
+    .get() as
+    | {
+        x: number | null;
+        y: number | null;
+        width: number;
+        height: number;
+        maximized: number;
+      }
+    | undefined;
+  if (row === undefined) {
+    return null;
+  }
+  return {
+    x: row.x,
+    y: row.y,
+    width: row.width,
+    height: row.height,
+    maximized: row.maximized !== 0,
+  };
+}
+
+/**
+ * Persists the window {@link WindowState} to the `window_state` row 0, upserting
+ * the single row (`ON CONFLICT(id)` overwrites every column) and mapping the
+ * boolean `maximized` to SQLite's integer; `x`/`y` pass through as `number | null`.
+ * Synchronous (better-sqlite3). Throws when the database is not open, so a caller's
+ * ordered window-state-write contract sees the failure before it changes anything
+ * else.
+ */
+export function writeWindowState(state: WindowState): void {
+  const database = requireDb();
+  database
+    .prepare(
+      "INSERT INTO window_state (id, x, y, width, height, maximized) VALUES (0, ?, ?, ?, ?, ?) " +
+        "ON CONFLICT(id) DO UPDATE SET x=excluded.x, y=excluded.y, width=excluded.width, height=excluded.height, maximized=excluded.maximized",
+    )
+    .run(state.x, state.y, state.width, state.height, state.maximized ? 1 : 0);
 }
 
 /**
