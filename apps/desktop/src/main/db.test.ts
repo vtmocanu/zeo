@@ -25,6 +25,10 @@ import {
   writeSearchEngine,
   readQuickBrowseExternal,
   writeQuickBrowseExternal,
+  readUpdateSettings,
+  writeUpdateCheckEnabled,
+  writeUpdateDismissedVersion,
+  writeUpdateLastCheckedAt,
   readDefaultSessionMigratedAt,
   writeDefaultSessionMigratedAt,
   readAllowlist,
@@ -165,10 +169,19 @@ const V9_DDL =
 const V10_DDL =
   V9_DDL + "ALTER TABLE meta ADD COLUMN defaultSessionMigratedAt INTEGER;";
 
-/** The current (schema v11) DDL: v10 plus the window_state table. */
+/** The schema v11 DDL: v10 plus the window_state table. A historical fixture
+ *  predating the meta.updateCheckEnabled/updateDismissedVersion/
+ *  updateLastCheckedAt columns. */
 const V11_DDL =
   V10_DDL +
   "CREATE TABLE window_state (id INTEGER PRIMARY KEY CHECK (id = 0), x INTEGER, y INTEGER, width INTEGER NOT NULL, height INTEGER NOT NULL, maximized INTEGER NOT NULL DEFAULT 0);";
+
+/** The current (schema v12) DDL: v11 plus the three update-check meta columns. */
+const V12_DDL =
+  V11_DDL +
+  "ALTER TABLE meta ADD COLUMN updateCheckEnabled INTEGER NOT NULL DEFAULT 1;" +
+  "ALTER TABLE meta ADD COLUMN updateDismissedVersion TEXT;" +
+  "ALTER TABLE meta ADD COLUMN updateLastCheckedAt INTEGER;";
 
 /** True when the `history_visits` table exists in the database. */
 function hasHistoryTable(db: Database.Database): boolean {
@@ -320,7 +333,7 @@ describe("migrate", () => {
       searchEngine: string;
       quickBrowseExternal: number;
     };
-    expect(meta.schemaVersion).toBe(11);
+    expect(meta.schemaVersion).toBe(12);
     expect(hasEnabledColumn(db)).toBe(true);
     expect(hasAllowlistTable(db)).toBe(true);
     expect(meta.enabled).toBe(1);
@@ -368,7 +381,7 @@ describe("migrate", () => {
       enabled: number;
       quickBrowseExternal: number;
     };
-    expect(meta.schemaVersion).toBe(11);
+    expect(meta.schemaVersion).toBe(12);
     expect(hasAllowlistTable(db)).toBe(true);
     expect(hasHistoryTable(db)).toBe(true);
     expect(hasSearchEngineColumn(db)).toBe(true);
@@ -423,7 +436,7 @@ describe("migrate", () => {
       enabled: number;
       quickBrowseExternal: number;
     };
-    expect(meta.schemaVersion).toBe(11);
+    expect(meta.schemaVersion).toBe(12);
     expect(hasHistoryTable(db)).toBe(true);
     expect(hasSearchEngineColumn(db)).toBe(true);
     expect(hasSiteZoomTable(db)).toBe(true);
@@ -470,7 +483,7 @@ describe("migrate", () => {
       searchEngine: string;
       quickBrowseExternal: number;
     };
-    expect(meta.schemaVersion).toBe(11);
+    expect(meta.schemaVersion).toBe(12);
     expect(hasSearchEngineColumn(db)).toBe(true);
     // The new column defaults to duckduckgo on the existing row.
     expect(meta.searchEngine).toBe("duckduckgo");
@@ -518,7 +531,7 @@ describe("migrate", () => {
       searchEngine: string;
       quickBrowseExternal: number;
     };
-    expect(meta.schemaVersion).toBe(11);
+    expect(meta.schemaVersion).toBe(12);
     expect(hasSiteZoomTable(db)).toBe(true);
     expect(hasLayoutColumns(db)).toBe(true);
     expect(hasDownloadsTable(db)).toBe(true);
@@ -578,7 +591,7 @@ describe("migrate", () => {
       layoutRatio: number;
       layoutFocused: string;
     };
-    expect(meta.schemaVersion).toBe(11);
+    expect(meta.schemaVersion).toBe(12);
     // The downloads table is present and empty.
     expect(hasDownloadsTable(db)).toBe(true);
     const downloadCount = db
@@ -648,7 +661,7 @@ describe("migrate", () => {
       layoutRatio: number;
       layoutFocused: string;
     };
-    expect(meta.schemaVersion).toBe(11);
+    expect(meta.schemaVersion).toBe(12);
     // The window_state table is present.
     expect(hasWindowStateTable(db)).toBe(true);
     // The quick-browse toggle column is added and defaults to 1 (ON).
@@ -718,7 +731,7 @@ describe("migrate", () => {
       layoutRatio: number;
       layoutFocused: string;
     };
-    expect(meta.schemaVersion).toBe(11);
+    expect(meta.schemaVersion).toBe(12);
     // Step 11 adds the window_state table.
     expect(hasWindowStateTable(db)).toBe(true);
     // Step 9 adds the quick-browse toggle column, defaulting to 1 (ON).
@@ -761,7 +774,7 @@ describe("migrate", () => {
       layoutFocused: string;
       defaultSessionMigratedAt: number | null;
     };
-    expect(meta.schemaVersion).toBe(11);
+    expect(meta.schemaVersion).toBe(12);
     expect(hasEnabledColumn(db)).toBe(true);
     expect(hasAllowlistTable(db)).toBe(true);
     expect(meta.enabled).toBe(1);
@@ -822,7 +835,7 @@ describe("migrate", () => {
       layoutFocused: string;
       defaultSessionMigratedAt: number | null;
     };
-    expect(meta.schemaVersion).toBe(11);
+    expect(meta.schemaVersion).toBe(12);
     // The window_state table is present after the upgrade.
     expect(hasWindowStateTable(db)).toBe(true);
     // The new column exists and, for an UPGRADED database, reads null (unmigrated).
@@ -861,7 +874,7 @@ describe("migrate", () => {
     const meta = db
       .prepare("SELECT schemaVersion, activeSpaceId FROM meta WHERE id=0")
       .get() as { schemaVersion: number; activeSpaceId: string };
-    expect(meta.schemaVersion).toBe(11);
+    expect(meta.schemaVersion).toBe(12);
     // The window_state table is created and starts EMPTY (no seed row).
     expect(hasWindowStateTable(db)).toBe(true);
     const windowStateCount = db
@@ -876,18 +889,55 @@ describe("migrate", () => {
     db.close();
   });
 
-  test("is a no-op on a database already at the current version (v11) with non-default layout values, quickBrowseExternal, and a set default-session marker, leaving the site_zoom and downloads rows untouched", () => {
-    const path = join(tempDir, "v11.db");
+  test("upgrades a v11 database to the current version (v12), adding the three update-check columns and preserving prior state", () => {
+    const path = join(tempDir, "v11-to-v12.db");
     const db = new Database(path);
     db.exec(V11_DDL);
+    db.prepare(
+      "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled,searchEngine,defaultSessionMigratedAt) VALUES (0, 11, 'space-11', 0, 'google', 12345)",
+    ).run();
+    seedRows(db, "space-11");
+
+    migrate(db);
+
+    const meta = db
+      .prepare(
+        "SELECT schemaVersion, activeSpaceId, updateCheckEnabled, updateDismissedVersion, updateLastCheckedAt FROM meta WHERE id=0",
+      )
+      .get() as {
+      schemaVersion: number;
+      activeSpaceId: string;
+      updateCheckEnabled: number;
+      updateDismissedVersion: string | null;
+      updateLastCheckedAt: number | null;
+    };
+    expect(meta.schemaVersion).toBe(12);
+    // The updateCheckEnabled column defaults to 1 (on); the two nullable
+    // columns default to null (never dismissed, never checked).
+    expect(meta.updateCheckEnabled).toBe(1);
+    expect(meta.updateDismissedVersion).toBeNull();
+    expect(meta.updateLastCheckedAt).toBeNull();
+    // Pre-existing rows preserved (no re-create wiped them).
+    expect(meta.activeSpaceId).toBe("space-11");
+    expect(db.prepare("SELECT id FROM profiles").get()).toEqual({ id: "p1" });
+    expect(db.prepare("SELECT id FROM spaces").get()).toEqual({ id: "space-11" });
+    expect(db.prepare("SELECT id FROM tabs").get()).toEqual({ id: "t1" });
+    db.close();
+  });
+
+  test("is a no-op on a database already at the current version (v12) with non-default layout values, quickBrowseExternal, updateCheckEnabled, and a set default-session marker, leaving the site_zoom and downloads rows untouched", () => {
+    const path = join(tempDir, "v12.db");
+    const db = new Database(path);
+    db.exec(V12_DDL);
     // Seed enabled=0, a non-default searchEngine, NON-default layout values,
-    // quickBrowseExternal=0, and a NON-null default-session marker so a spurious
+    // quickBrowseExternal=0, updateCheckEnabled=0 with a dismissed version and a
+    // set last-checked time, and a NON-null default-session marker so a spurious
     // re-create/migrate (which would reset them to their defaults / null) is
     // detectable, plus site_zoom, downloads, and window_state rows so a re-create
     // would be observable.
     db.prepare(
-      "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled,searchEngine,layoutMode,layoutLeftTabId,layoutRightTabId,layoutRatio,layoutFocused,quickBrowseExternal,defaultSessionMigratedAt) " +
-        "VALUES (0, 11, 'space-10', 0, 'google', 'split', 'tL', 'tR', 0.35, 'right', 0, 12345)",
+      "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled,searchEngine,layoutMode,layoutLeftTabId,layoutRightTabId,layoutRatio,layoutFocused,quickBrowseExternal,defaultSessionMigratedAt,updateCheckEnabled,updateDismissedVersion,updateLastCheckedAt) " +
+        "VALUES (0, 12, 'space-10', 0, 'google', 'split', 'tL', 'tR', 0.35, 'right', 0, 12345, 0, '9.9.9', 55555)",
     ).run();
     db.prepare(
       "INSERT INTO site_zoom(host,factor,updatedAt) VALUES ('example.com', 1.5, 42)",
@@ -904,7 +954,7 @@ describe("migrate", () => {
 
     const meta = db
       .prepare(
-        "SELECT schemaVersion, activeSpaceId, enabled, searchEngine, quickBrowseExternal, layoutMode, layoutLeftTabId, layoutRightTabId, layoutRatio, layoutFocused, defaultSessionMigratedAt FROM meta WHERE id=0",
+        "SELECT schemaVersion, activeSpaceId, enabled, searchEngine, quickBrowseExternal, layoutMode, layoutLeftTabId, layoutRightTabId, layoutRatio, layoutFocused, defaultSessionMigratedAt, updateCheckEnabled, updateDismissedVersion, updateLastCheckedAt FROM meta WHERE id=0",
       )
       .get() as {
       schemaVersion: number;
@@ -918,8 +968,11 @@ describe("migrate", () => {
       layoutRatio: number;
       layoutFocused: string;
       defaultSessionMigratedAt: number | null;
+      updateCheckEnabled: number;
+      updateDismissedVersion: string | null;
+      updateLastCheckedAt: number | null;
     };
-    expect(meta.schemaVersion).toBe(11);
+    expect(meta.schemaVersion).toBe(12);
     expect(meta.activeSpaceId).toBe("space-10");
     expect(meta.enabled).toBe(0);
     expect(meta.searchEngine).toBe("google");
@@ -927,6 +980,11 @@ describe("migrate", () => {
     expect(meta.quickBrowseExternal).toBe(0);
     // The seeded default-session marker is left untouched (no re-create reset it).
     expect(meta.defaultSessionMigratedAt).toBe(12345);
+    // The seeded update-check settings are left untouched (no re-create reset
+    // them to their defaults).
+    expect(meta.updateCheckEnabled).toBe(0);
+    expect(meta.updateDismissedVersion).toBe("9.9.9");
+    expect(meta.updateLastCheckedAt).toBe(55555);
     // The non-default layout values are left untouched (no re-run of step 8).
     expect(meta.layoutMode).toBe("split");
     expect(meta.layoutLeftTabId).toBe("tL");
@@ -1134,15 +1192,15 @@ describe("readWindowLayout / writeWindowLayout", () => {
 });
 
 describe("readWindowState / writeWindowState", () => {
-  /** Hand-builds a valid current (v11) database at the loadStore path and opens
+  /** Hand-builds a valid current (v12) database at the loadStore path and opens
    *  the module-level handle the accessors use. The fresh window_state table has
    *  no row, so readWindowState reads null until writeWindowState saves one. */
   function seedAndLoad(): void {
     const path = join(tempDir, "zeo.db");
     const seed = new Database(path);
-    seed.exec(V11_DDL);
+    seed.exec(V12_DDL);
     seed.prepare(
-      "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled) VALUES (0, 11, 'space-x', 1)",
+      "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled) VALUES (0, 12, 'space-x', 1)",
     ).run();
     seedRows(seed, "space-x");
     seed.close();
@@ -1206,9 +1264,9 @@ describe("readBlockingEnabled / writeBlockingEnabled", () => {
     // Hand-build a valid current (v11) database at the path loadStore will open.
     const path = join(tempDir, "zeo.db");
     const seed = new Database(path);
-    seed.exec(V11_DDL);
+    seed.exec(V12_DDL);
     seed.prepare(
-      "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled) VALUES (0, 11, 'space-x', 1)",
+      "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled) VALUES (0, 12, 'space-x', 1)",
     ).run();
     seedRows(seed, "space-x");
     seed.close();
@@ -1225,7 +1283,7 @@ describe("readBlockingEnabled / writeBlockingEnabled", () => {
     const meta = inspect
       .prepare("SELECT schemaVersion, activeSpaceId, enabled FROM meta WHERE id=0")
       .get() as { schemaVersion: number; activeSpaceId: string; enabled: number };
-    expect(meta.schemaVersion).toBe(11);
+    expect(meta.schemaVersion).toBe(12);
     expect(meta.activeSpaceId).toBe("space-x");
     expect(meta.enabled).toBe(0);
     inspect.close();
@@ -1233,15 +1291,15 @@ describe("readBlockingEnabled / writeBlockingEnabled", () => {
 });
 
 describe("readDefaultSessionMigratedAt / writeDefaultSessionMigratedAt", () => {
-  /** Hand-builds a valid current (v11) database at the loadStore path (seeding the
+  /** Hand-builds a valid current (v12) database at the loadStore path (seeding the
    *  marker column to `migratedAt`) and opens the module handle the accessors use. */
   function seedAndLoad(migratedAt: number | null): void {
     const path = join(tempDir, "zeo.db");
     const seed = new Database(path);
-    seed.exec(V11_DDL);
+    seed.exec(V12_DDL);
     seed
       .prepare(
-        "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled,defaultSessionMigratedAt) VALUES (0, 11, 'space-x', 1, ?)",
+        "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled,defaultSessionMigratedAt) VALUES (0, 12, 'space-x', 1, ?)",
       )
       .run(migratedAt);
     seedRows(seed, "space-x");
@@ -1431,6 +1489,93 @@ describe("readQuickBrowseExternal / writeQuickBrowseExternal", () => {
     expect(() => writeQuickBrowseExternal(false)).toThrow();
 
     // No meta row was resurrected: the zero-row UPDATE persisted nothing.
+    const inspect = new Database(path, { readonly: true });
+    const count = inspect
+      .prepare("SELECT COUNT(*) AS n FROM meta")
+      .get() as { n: number };
+    expect(count.n).toBe(0);
+    inspect.close();
+  });
+});
+
+describe("readUpdateSettings / writeUpdateCheckEnabled / writeUpdateDismissedVersion / writeUpdateLastCheckedAt", () => {
+  /** Hand-builds a valid current (v12) database at the loadStore path, opens the
+   *  module-level handle the accessors use, and returns the db file path. */
+  function seedAndLoad(): string {
+    const path = join(tempDir, "zeo.db");
+    const seed = new Database(path);
+    seed.exec(V12_DDL);
+    seed.prepare(
+      "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled) VALUES (0, 12, 'space-x', 1)",
+    ).run();
+    seedRows(seed, "space-x");
+    seed.close();
+    loadStore();
+    return path;
+  }
+
+  test("readUpdateSettings defaults to enabled=true, dismissedVersion=null, lastCheckedAt=null", () => {
+    seedAndLoad();
+    expect(readUpdateSettings()).toEqual({
+      enabled: true,
+      dismissedVersion: null,
+      lastCheckedAt: null,
+    });
+  });
+
+  test("readUpdateSettings defaults to true when the meta row is absent", () => {
+    const path = seedAndLoad();
+    const raw = new Database(path);
+    raw.prepare("DELETE FROM meta WHERE id=0").run();
+    raw.close();
+    expect(readUpdateSettings()).toEqual({
+      enabled: true,
+      dismissedVersion: null,
+      lastCheckedAt: null,
+    });
+  });
+
+  test("writeUpdateCheckEnabled round-trips true -> false -> true", () => {
+    seedAndLoad();
+    expect(readUpdateSettings().enabled).toBe(true);
+
+    writeUpdateCheckEnabled(false);
+    expect(readUpdateSettings().enabled).toBe(false);
+
+    writeUpdateCheckEnabled(true);
+    expect(readUpdateSettings().enabled).toBe(true);
+  });
+
+  test("writeUpdateDismissedVersion round-trips a version and clears it back to null", () => {
+    seedAndLoad();
+    expect(readUpdateSettings().dismissedVersion).toBeNull();
+
+    writeUpdateDismissedVersion("1.2.3");
+    expect(readUpdateSettings().dismissedVersion).toBe("1.2.3");
+
+    writeUpdateDismissedVersion(null);
+    expect(readUpdateSettings().dismissedVersion).toBeNull();
+  });
+
+  test("writeUpdateLastCheckedAt round-trips a timestamp", () => {
+    seedAndLoad();
+    expect(readUpdateSettings().lastCheckedAt).toBeNull();
+
+    writeUpdateLastCheckedAt(123456);
+    expect(readUpdateSettings().lastCheckedAt).toBe(123456);
+  });
+
+  test("each write throws (and changes nothing) when the meta row is absent", () => {
+    const path = seedAndLoad();
+    const raw = new Database(path);
+    raw.prepare("DELETE FROM meta WHERE id=0").run();
+    raw.close();
+
+    expect(() => writeUpdateCheckEnabled(false)).toThrow();
+    expect(() => writeUpdateDismissedVersion("1.2.3")).toThrow();
+    expect(() => writeUpdateLastCheckedAt(1)).toThrow();
+
+    // No meta row was resurrected: the zero-row UPDATEs persisted nothing.
     const inspect = new Database(path, { readonly: true });
     const count = inspect
       .prepare("SELECT COUNT(*) AS n FROM meta")

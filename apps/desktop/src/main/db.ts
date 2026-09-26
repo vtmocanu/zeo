@@ -51,8 +51,10 @@ import type {
  * `meta` (layoutMode, layoutLeftTabId, layoutRightTabId, layoutRatio,
  * layoutFocused) that persist the active space's split-view layout, schema
  * version 9 adds the quickBrowseExternal column to `meta`, schema version 10
- * adds the defaultSessionMigratedAt column to `meta`, and schema version 11
- * adds the window_state table (persisted window bounds + maximized state).
+ * adds the defaultSessionMigratedAt column to `meta`, schema version 11
+ * adds the window_state table (persisted window bounds + maximized state),
+ * and schema version 12 adds the updateCheckEnabled, updateDismissedVersion,
+ * and updateLastCheckedAt columns to `meta` (the in-app update check).
  * The PRIMARY KEYs (no duplicate ids), the foreign
  * keys, and `PRAGMA foreign_keys=ON` are the well-formedness contract the core
  * codec relies on: every on-disk state is guaranteed loadable. `spaces.activeTabId`
@@ -111,7 +113,8 @@ CREATE TABLE meta (
   layoutRightTabId TEXT,
   layoutRatio REAL NOT NULL DEFAULT 0.5,
   layoutFocused TEXT NOT NULL DEFAULT 'left',
-  defaultSessionMigratedAt INTEGER
+  defaultSessionMigratedAt INTEGER,
+  updateCheckEnabled INTEGER NOT NULL DEFAULT 1, updateDismissedVersion TEXT, updateLastCheckedAt INTEGER
 );
 CREATE TABLE blocking_allowlist (host TEXT PRIMARY KEY, createdAt INTEGER NOT NULL);
 CREATE TABLE history_entries (
@@ -178,6 +181,10 @@ const MIGRATION_STEPS: Record<number, string> = {
     "ALTER TABLE meta ADD COLUMN defaultSessionMigratedAt INTEGER;" +
     "UPDATE meta SET schemaVersion = 10 WHERE id = 0;",
   11: WINDOW_STATE_DDL + "UPDATE meta SET schemaVersion = 11 WHERE id = 0;",
+  12:
+    "ALTER TABLE meta ADD COLUMN updateCheckEnabled INTEGER NOT NULL DEFAULT 1;" +
+    "ALTER TABLE meta ADD COLUMN updateDismissedVersion TEXT;" +
+    "ALTER TABLE meta ADD COLUMN updateLastCheckedAt INTEGER;" + "UPDATE meta SET schemaVersion = 12 WHERE id = 0;",
 };
 
 /** The module-level database handle, `null` until {@link loadStore} opens it. */
@@ -406,6 +413,59 @@ export function writeQuickBrowseExternal(enabled: boolean): void {
   if (info.changes === 0) {
     throw new Error("writeQuickBrowseExternal: no meta row (id=0) to update");
   }
+}
+
+/** The persisted update-check settings, read from the meta row in one shot. */
+interface UpdateSettingsRow { enabled: boolean; dismissedVersion: string | null; lastCheckedAt: number | null }
+
+/**
+ * Reads the update-check settings in one shot, mirroring {@link readQuickBrowseExternal}'s
+ * integer-to-boolean mapping and absent-row default. Managed ONLY here and by the
+ * three `writeUpdate*` helpers below; kept out of the {@link writeState} flush.
+ */
+export function readUpdateSettings(): UpdateSettingsRow {
+  const row = requireDb()
+    .prepare("SELECT updateCheckEnabled, updateDismissedVersion, updateLastCheckedAt FROM meta WHERE id=0")
+    .get() as { updateCheckEnabled: number; updateDismissedVersion: string | null; updateLastCheckedAt: number | null } | undefined;
+  return {
+    enabled: (row?.updateCheckEnabled ?? 1) === 1,
+    dismissedVersion: row?.updateDismissedVersion ?? null,
+    lastCheckedAt: row?.updateLastCheckedAt ?? null,
+  };
+}
+
+/** The three meta columns {@link writeMetaColumn} is allowed to write. */
+type UpdateMetaColumn = "updateCheckEnabled" | "updateDismissedVersion" | "updateLastCheckedAt";
+
+/** Persists one meta column, throwing (like {@link writeQuickBrowseExternal}) when the id=0 row is missing. */
+function writeMetaColumn(column: UpdateMetaColumn, value: number | string | null, fnName: string): void {
+  const info = requireDb().prepare(`UPDATE meta SET ${column}=? WHERE id=0`).run(value);
+  if (info.changes === 0) throw new Error(`${fnName}: no meta row (id=0) to update`);
+}
+
+/**
+ * Persists the update-check-enabled flag. Throws when the database is not
+ * open, or when there is no meta row (id=0) to update.
+ */
+export function writeUpdateCheckEnabled(enabled: boolean): void {
+  writeMetaColumn("updateCheckEnabled", enabled ? 1 : 0, "writeUpdateCheckEnabled");
+}
+
+/**
+ * Persists the dismissed release version (`null` clears it). Throws when the
+ * database is not open, or when there is no meta row (id=0) to update.
+ */
+export function writeUpdateDismissedVersion(version: string | null): void {
+  writeMetaColumn("updateDismissedVersion", version, "writeUpdateDismissedVersion");
+}
+
+/**
+ * Persists the last ATTEMPTED check time — stamped on every check, including
+ * a failed one, not only a successful one. Throws when the database is not
+ * open, or when there is no meta row (id=0) to update.
+ */
+export function writeUpdateLastCheckedAt(at: number): void {
+  writeMetaColumn("updateLastCheckedAt", at, "writeUpdateLastCheckedAt");
 }
 
 /**

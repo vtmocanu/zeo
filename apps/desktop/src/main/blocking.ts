@@ -235,10 +235,12 @@ export async function startBlocking(): Promise<void> {
     const enabled = readBlockingEnabled();
     // Seed the settings slice from the persisted search-engine choice and the
     // quick-browse-external toggle; main is the sole holder threaded into
-    // resolveInput/suggest.
+    // resolveInput/suggest. `updateCheckEnabled` keeps its current value;
+    // `initUpdateState` seeds it.
     runtime.settings = {
       searchEngine: readSearchEngine(),
       quickBrowseExternal: readQuickBrowseExternal(),
+      updateCheckEnabled: runtime.settings.updateCheckEnabled,
     };
     // Cache the OS-default-browser flag once at startup; it is re-read only after
     // browser.setDefault, never in fullSnapshot (which runs on every broadcast).
