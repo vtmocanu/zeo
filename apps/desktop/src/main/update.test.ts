@@ -12,6 +12,14 @@ const h = vi.hoisted(() => ({
   writeUpdateCheckEnabled: vi.fn(),
   writeUpdateDismissedVersion: vi.fn(),
   writeUpdateLastCheckedAt: vi.fn(),
+  existsSync: vi.fn(),
+  statSync: vi.fn(),
+}));
+
+vi.mock("node:fs", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:fs")>()),
+  existsSync: h.existsSync,
+  statSync: h.statSync,
 }));
 
 vi.mock("electron", () => ({
@@ -99,6 +107,7 @@ beforeEach(() => {
   delete process.env.ZEO_UPDATE_ORIGIN;
   delete process.env.ZEO_UPDATE_FEED_URL;
   delete process.env.ZEO_UPDATE_STARTUP_DELAY_MS;
+  h.existsSync.mockReturnValue(false);
   h.readUpdateSettings.mockReturnValue({
     enabled: true,
     dismissedVersion: null,
@@ -145,6 +154,31 @@ describe("initUpdateState", () => {
     initUpdateState();
     expect(runtime.update.enabled).toBe(true);
     expect(errorSpy).toHaveBeenCalled();
+  });
+
+  test("a throwing install-origin probe still applies the persisted settings", () => {
+    h.readUpdateSettings.mockReturnValue({
+      enabled: false,
+      dismissedVersion: "1.2.3",
+      lastCheckedAt: 999,
+    });
+    h.existsSync.mockImplementation(() => {
+      throw new Error("EACCES");
+    });
+    runtime.update = { ...runtime.update, origin: "homebrew" };
+    initUpdateState();
+    expect(runtime.update.enabled).toBe(false);
+    expect(runtime.update.lastCheckedAt).toBe(999);
+    expect(runtime.updateDismissedVersion).toBe("1.2.3");
+    expect(runtime.settings.updateCheckEnabled).toBe(false);
+    expect(runtime.update.origin).toBe("direct");
+    expect(errorSpy).toHaveBeenCalled();
+
+    process.env.ZEO_E2E = "1";
+    process.env.ZEO_UPDATE_ORIGIN = "homebrew";
+    initUpdateState();
+    expect(runtime.update.origin).toBe("homebrew");
+    expect(runtime.update.enabled).toBe(false);
   });
 
   test("ZEO_UPDATE_ORIGIN overrides the probe only under ZEO_E2E=1", () => {
@@ -590,9 +624,7 @@ describe("startUpdateChecks — scheduling", () => {
     await vi.advanceTimersByTimeAsync(10_000);
     expect(h.fetch).toHaveBeenCalledTimes(1);
 
-    // Hourly ticks up to the 24h mark stay rate-limited by the ~10s-old check
-    // (this is the bug: using the 24h interval itself as the timer period
-    // would instead miss this whole window and drift to ~48h between checks).
+    // Hourly ticks before the 24h mark are rate-limited.
     await vi.advanceTimersByTimeAsync(day - 10_000);
     expect(h.fetch).toHaveBeenCalledTimes(1);
 

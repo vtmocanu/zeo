@@ -3399,14 +3399,13 @@ test.describe("zeo desktop app", () => {
     // that trails the registry (the four quickBrowse.* commands sit before it but
     // are disabled with no quick-browse window open, so only this one appears).
     "browser.setDefault",
-    // PRD 7.1 — view.split / view.splitChoose are the last registry rows and are
+    // PRD 7.1 — view.split / view.splitChoose follow browser.setDefault and are
     // enabled in single layout with >=2 open tabs (this host context seeds a
     // loopback tab alongside the initial tab, so >=2). view.unsplit /
     // view.focusOtherPane / view.swapPanes need split mode, so they do NOT appear.
     "view.split",
     "view.splitChoose",
-    // PRD 9.6 — update.check is always enabled and appended after the view.*
-    // rows, so it is now the last registry row and closes out the list.
+    // PRD 9.6 — update.check is always enabled.
     "update.check",
   ];
 

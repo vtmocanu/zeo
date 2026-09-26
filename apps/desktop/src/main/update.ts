@@ -45,16 +45,9 @@ export type CheckReason = "startup" | "timer" | "manual";
 export const MAX_FEED_BYTES = 1024 * 1024;
 
 /**
- * The setInterval tick granularity for the recurring automatic-check timer.
- * The 24h {@link UPDATE_CHECK_INTERVAL_MS} rate limit inside
- * {@link checkForUpdates} — not this timer — decides whether a tick actually
- * fetches. Ticking hourly (rather than using the 24h interval as the timer
- * period itself) means a tick lands within about an hour of the 24h mark even
- * though `lastCheckedAt` is stamped a few seconds after launch by the startup
- * check: using the 24h interval as the *timer* period would instead measure
- * every subsequent tick from that few-seconds-past-launch instant, so each
- * tick before the 24h mark keeps getting rate-limited and the effective cadence
- * drifts to roughly 48h between checks (violating PRD 9.6 AC1's "every 24h").
+ * The recurring automatic-check timer period. Each tick calls
+ * {@link checkForUpdates}, whose 24h {@link UPDATE_CHECK_INTERVAL_MS} rate
+ * limit decides whether the tick fetches.
  */
 export const UPDATE_TIMER_TICK_MS = 60 * 60 * 1000;
 
@@ -71,41 +64,44 @@ function logUpdateWriteError(err: unknown): void {
 }
 
 /**
- * Seeds `runtime.update`/`runtime.updateDismissedVersion` from disk plus a
- * Caskroom probe, at startup. `ZEO_UPDATE_ORIGIN` overrides the probe only
- * under `ZEO_E2E === "1"`, letting e2e tests exercise both install origins
- * without a real Caskroom directory. Any read failure is logged and leaves
- * the seeded defaults (enabled, direct origin) in place — never blocks
- * startup. Also seeds `runtime.settings.updateCheckEnabled` from this SAME
- * `readUpdateSettings()` read (`startBlocking` no longer re-reads it):
- * `startBlocking`'s own settings seed carries `runtime.settings.updateCheckEnabled`
- * forward unchanged, so this seed survives regardless of call order relative
- * to `startBlocking()` (index.ts happens to call this after, but that is not
- * what protects it).
+ * Seeds `runtime.update`, `runtime.updateDismissedVersion` and
+ * `runtime.settings.updateCheckEnabled` from `readUpdateSettings()`, and the
+ * install origin from a Caskroom probe. A failed read keeps the seeded
+ * defaults; a failed probe falls back to "direct". `ZEO_UPDATE_ORIGIN`
+ * overrides the origin only under `ZEO_E2E === "1"`.
  */
 export function initUpdateState(): void {
+  let settings: ReturnType<typeof readUpdateSettings> | null = null;
   try {
-    const settings = readUpdateSettings();
-    let origin: InstallOrigin = installOrigin(
+    settings = readUpdateSettings();
+  } catch (err) {
+    console.error("[update] failed to read update settings; using defaults:", err);
+  }
+  let origin: InstallOrigin;
+  try {
+    origin = installOrigin(
       (path) => existsSync(path) && statSync(path).isDirectory(),
       CASKROOM_PATHS,
     );
-    if (process.env.ZEO_E2E === "1") {
-      const override = process.env.ZEO_UPDATE_ORIGIN;
-      if (override === "homebrew" || override === "direct") {
-        origin = override;
-      }
+  } catch (err) {
+    console.error("[update] install-origin probe failed; assuming direct:", err);
+    origin = "direct";
+  }
+  if (process.env.ZEO_E2E === "1") {
+    const override = process.env.ZEO_UPDATE_ORIGIN;
+    if (override === "homebrew" || override === "direct") {
+      origin = override;
     }
+  }
+  runtime.update = { ...runtime.update, origin };
+  if (settings) {
     runtime.update = {
       ...runtime.update,
       enabled: settings.enabled,
-      origin,
       lastCheckedAt: settings.lastCheckedAt,
     };
     runtime.updateDismissedVersion = settings.dismissedVersion;
     runtime.settings = { ...runtime.settings, updateCheckEnabled: settings.enabled };
-  } catch (err) {
-    console.error("[update] failed to read update settings; using defaults:", err);
   }
 }
 
