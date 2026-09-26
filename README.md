@@ -33,7 +33,8 @@ Add the tap and install with Homebrew:
 
 ```sh
 brew tap vtmocanu/tap
-brew install --cask vtmocanu/tap/zeo --no-quarantine
+brew install --cask vtmocanu/tap/zeo
+xattr -dr com.apple.quarantine /Applications/zeo.app
 ```
 
 Upgrade: `brew upgrade --cask zeo`.
@@ -42,15 +43,11 @@ Uninstall: `brew uninstall --cask zeo`; to also remove app data:
 `brew uninstall --cask --zap zeo`.
 
 zeo ships as an ad-hoc signed build — no Apple Developer ID signature and no
-notarization — so `--no-quarantine` is required: without it macOS Gatekeeper
-blocks the first launch ("zeo can't be opened because Apple cannot check it
-for malicious software"). With `--no-quarantine`, zeo launches directly on
-first run. If you installed without it, recover by right-clicking zeo.app in
-Finder and choosing Open once, or by clearing the quarantine attribute:
-
-```sh
-xattr -dr com.apple.quarantine "/Applications/zeo.app"
-```
+notarization — so macOS Gatekeeper quarantines it and blocks the first launch
+("zeo can't be opened because Apple cannot check it for malicious software").
+The `xattr` command above clears the quarantine attribute; run it again after
+each `brew upgrade`. Alternatively, right-click zeo.app in Finder and choose
+Open once.
 
 Apple Silicon (arm64) only.
 

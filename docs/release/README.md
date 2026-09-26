@@ -81,13 +81,15 @@ and the first publish to the tap is blocked on that same issue.
 
 `pnpm cask:check` runs the render script's unit tests, renders
 `packaging/homebrew/zeo.rb.tmpl` against a committed fixture, and, when
-Homebrew is installed, runs `brew style --cask` on the rendered cask. When
-Homebrew is not installed it prints "Homebrew not found; skipping brew style
-check" and exits `0`.
+Homebrew is installed, copies the rendered cask into a temporary local tap
+(`brew tap-new --no-git zeo-cask-check/local`), runs
+`brew style --cask zeo-cask-check/local/zeo` on it and removes the tap again
+with `brew untap`. When Homebrew is not installed it prints "Homebrew not
+found; skipping brew style check" and exits `0`.
 
-`brew audit` is not run because current Homebrew refuses to audit a cask by
-file path (it must live in a tap); `brew style --cask` is the check that
-accepts a path.
+Current Homebrew accepts neither `brew audit` nor `brew style` on a bare cask
+file path ("Homebrew requires casks to be in a tap"), which is why the check
+goes through a temporary tap. `brew audit` is not run.
 
 ## Hardening to consider before activating
 
@@ -165,11 +167,12 @@ xattr -dr com.apple.quarantine /path/to/zeo.app
 The intended install path for end users is Homebrew:
 
 ```sh
-brew install --cask vtmocanu/tap/zeo --no-quarantine
+brew install --cask vtmocanu/tap/zeo
+xattr -dr com.apple.quarantine /Applications/zeo.app
 ```
 
-which installs the app without the quarantine attribute so Gatekeeper never
-blocks it — see the README's [Installation](../../README.md#installation)
+Homebrew quarantines the downloaded app like a browser does, so the `xattr`
+step (repeated after each `brew upgrade`) is what lets it launch — see the README's [Installation](../../README.md#installation)
 section.
 
 `release/` is git-ignored; packaging artifacts are never committed.

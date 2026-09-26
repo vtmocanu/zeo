@@ -8,6 +8,7 @@ cask "zeo" do
   homepage "https://github.com/vtmocanu/zeo"
 
   depends_on arch: :arm64
+  depends_on :macos
 
   app "zeo.app"
 
@@ -21,17 +22,14 @@ cask "zeo" do
 
   caveats <<~EOS
     zeo is distributed as an ad-hoc signed build — it carries no Apple
-    Developer ID signature and is not notarized. Install it with
-    --no-quarantine so macOS Gatekeeper does not block the first launch:
+    Developer ID signature and is not notarized — so macOS Gatekeeper blocks
+    its first launch ("zeo can't be opened because Apple cannot check it for
+    malicious software"). After installing or upgrading, clear the
+    quarantine attribute once:
 
-      brew install --cask vtmocanu/tap/zeo --no-quarantine
+      xattr -dr com.apple.quarantine /Applications/zeo.app
 
-    If zeo was installed without --no-quarantine, the first launch is
-    blocked with "zeo can't be opened because Apple cannot check it for
-    malicious software." Open it once via Finder (right-click zeo.app →
-    Open), or clear the quarantine attribute:
-
-      xattr -dr com.apple.quarantine "/Applications/zeo.app"
+    Alternatively, open it once via Finder (right-click zeo.app → Open).
 
     zeo is Homebrew-managed here, so update it with:
 
