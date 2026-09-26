@@ -478,9 +478,9 @@ test.describe("PRD 9.5 window-state restore", () => {
       const workArea = await second.app.evaluate(({ screen }) =>
         screen.getPrimaryDisplay().workArea,
       );
-      // The 900×700 size was on-screen-sized, so it is preserved; only the
-      // off-screen position is dropped, and main centers it explicitly on
-      // the primary work area (see createWindow's centerInWorkArea).
+      // The 900×700 size is kept (clamped to the work area on a small display);
+      // only the off-screen position is dropped, and main centers the window
+      // explicitly on the primary work area (see createWindow).
       expect(bounds.x).toBeGreaterThanOrEqual(workArea.x);
       expect(bounds.y).toBeGreaterThanOrEqual(workArea.y);
       expect(bounds.x + bounds.width).toBeLessThanOrEqual(workArea.x + workArea.width);

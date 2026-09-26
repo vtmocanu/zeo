@@ -6,7 +6,7 @@ import {
   reconcileLayout,
   SINGLE_LAYOUT,
   resolveWindowBounds,
-  centerInWorkArea,
+  fitAndCenterInWorkArea,
   MIN_WINDOW_SIZE,
 } from "@zeo/core";
 import type { WindowLayout, WindowState } from "@zeo/core";
@@ -89,14 +89,18 @@ export function createWindow(seed: boolean): void {
   // Electron's own centering (when x/y are omitted) centers on the full screen
   // frame on macOS, not the work area, so center explicitly here on the primary
   // display's work area whenever there is no saved position to restore. The size
-  // is first fitted to that same area so the centered window never overhangs it.
+  // is first fitted to that same area (down to MIN_WINDOW_SIZE, which the window's
+  // min constraints still enforce on a pathologically small display).
   if (frame.x === undefined || frame.y === undefined) {
-    const primary = screen.getPrimaryDisplay().workArea;
-    frame.width = Math.min(frame.width, primary.width);
-    frame.height = Math.min(frame.height, primary.height);
-    const center = centerInWorkArea(frame.width, frame.height, primary);
-    frame.x = center.x;
-    frame.y = center.y;
+    const fitted = fitAndCenterInWorkArea(
+      frame.width,
+      frame.height,
+      screen.getPrimaryDisplay().workArea,
+    );
+    frame.x = fitted.x;
+    frame.y = fitted.y;
+    frame.width = fitted.width;
+    frame.height = fitted.height;
   }
   runtime.win = new BrowserWindow({
     ...frame,

@@ -137,3 +137,14 @@ export function centerInWorkArea(
     y: area.y + Math.max(0, Math.round((area.height - height) / 2)),
   };
 }
+
+/**
+ * A `width`x`height` window shrunk to fit within `area` and then centered in it
+ * (see {@link centerInWorkArea}) — for a window with no saved position, so the
+ * size and the centering use the SAME work area and the window never overhangs it.
+ */
+export function fitAndCenterInWorkArea(width: number, height: number, area: Rect): Rect {
+  const fitWidth = Math.min(width, area.width);
+  const fitHeight = Math.min(height, area.height);
+  return { ...centerInWorkArea(fitWidth, fitHeight, area), width: fitWidth, height: fitHeight };
+}

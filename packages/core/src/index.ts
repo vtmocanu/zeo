@@ -184,5 +184,6 @@ export {
   MIN_VISIBLE_PX,
   resolveWindowBounds,
   centerInWorkArea,
+  fitAndCenterInWorkArea,
 } from "./window-state.js";
 export type { WindowState, Rect } from "./window-state.js";

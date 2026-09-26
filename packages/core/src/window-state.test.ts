@@ -4,6 +4,7 @@ import {
   MIN_WINDOW_SIZE,
   resolveWindowBounds,
   centerInWorkArea,
+  fitAndCenterInWorkArea,
   type Rect,
   type WindowState,
 } from "./window-state.js";
@@ -191,5 +192,27 @@ describe("centerInWorkArea", () => {
   test("floors at the area origin when the window is larger than the area", () => {
     const area: Rect = { x: 0, y: 25, width: 1200, height: 677 };
     expect(centerInWorkArea(1280, 800, area)).toEqual({ x: 0, y: 25 });
+  });
+});
+
+describe("fitAndCenterInWorkArea", () => {
+  test("shrinks an oversized window to the area, then centers it", () => {
+    const area: Rect = { x: 0, y: 25, width: 1200, height: 677 };
+    expect(fitAndCenterInWorkArea(2560, 1440, area)).toEqual({
+      x: 0,
+      y: 25,
+      width: 1200,
+      height: 677,
+    });
+  });
+
+  test("keeps a window that fits and centers it", () => {
+    const area: Rect = { x: 1920, y: 0, width: 2560, height: 1440 };
+    expect(fitAndCenterInWorkArea(1280, 800, area)).toEqual({
+      x: 1920 + 640,
+      y: 320,
+      width: 1280,
+      height: 800,
+    });
   });
 });
