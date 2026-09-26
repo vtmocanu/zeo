@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { TabsState } from "@zeo/core";
+import { useThemeTokens } from "./theme.js";
 
 /**
  * The quick-browse chrome bar, mounted in its own WebContentsView (selected by
@@ -23,6 +24,7 @@ import type { TabsState } from "@zeo/core";
  * other URL-executing sink.
  */
 export function QuickBrowse() {
+  useThemeTokens(null);
   // The mirrored application state; null until the first snapshot/broadcast lands.
   const [state, setState] = useState<TabsState | null>(null);
 

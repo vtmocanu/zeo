@@ -21,6 +21,7 @@ import {
   type TabsState,
   type UpdateState,
 } from "@zeo/core";
+import { useThemeTokens } from "./theme.js";
 
 /**
  * The settings surface, mounted in its own WebContentsView (selected by
@@ -47,6 +48,7 @@ import {
  * `Cmd+,` toggle is owned by the main process, not here.
  */
 export function Settings() {
+  useThemeTokens(null);
   // The mirrored application state; null until the first snapshot/broadcast lands.
   const [state, setState] = useState<TabsState | null>(null);
   // The section whose body is shown, and the renderer-local keyboard cursor.

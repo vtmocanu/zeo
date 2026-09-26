@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { CommandBarState } from "@zeo/core";
 import { CommandBar } from "./CommandBar.js";
 import { FindBar } from "./FindBar.js";
+import { useThemeTokens } from "./theme.js";
 
 /**
  * The single overlay WebContentsView (mounted for `?view=command-bar` in
@@ -15,6 +16,7 @@ import { FindBar } from "./FindBar.js";
  * this wrapper carries only the routing selector.
  */
 export function Overlay() {
+  useThemeTokens(null);
   const [surface, setSurface] = useState<CommandBarState["surface"]>("bar");
 
   useEffect(() => {

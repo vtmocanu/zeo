@@ -69,6 +69,8 @@ export default tseslint.config(
   },
   {
     files: ["apps/ui/**/*.{ts,tsx}"],
+    // Test files run under Node in vitest, so they may use node:fs/node:child_process.
+    ignores: ["apps/ui/**/*.test.ts"],
     rules: {
       "no-restricted-imports": [
         "error",
