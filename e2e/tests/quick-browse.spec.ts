@@ -9,6 +9,9 @@ import { join } from "node:path";
 import { createServer } from "node:http";
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
+// The one @zeo/core value import: the y at which main lays the page view over the
+// chrome, so the chrome-bar geometry check can never drift from the real layout.
+import { QUICK_BROWSE_CHROME_HEIGHT } from "@zeo/core";
 
 // Absolute path to the built Electron main entry, resolved from this test file
 // (e2e is ESM, so no __dirname). Layout mirrors blocking.spec.ts / settings.spec.ts /
@@ -17,7 +20,7 @@ import type { AddressInfo } from "node:net";
 const mainPath = fileURLToPath(new URL("../../apps/desktop/out/main/index.js", import.meta.url));
 
 // --- Minimal typed view of the preload-injected `window.zeo` bridge. ------------
-// e2e deliberately does NOT depend on @zeo/core; we redeclare only the slice these
+// The bridge types are not imported from @zeo/core; we redeclare only the slice these
 // PRD 7.2 quick-browse tests touch (structurally compatible with @zeo/core's ZeoApi).
 // Only the fields we assert on are load-bearing.
 interface QuickBrowseEntry {
@@ -653,6 +656,47 @@ test.describe("PRD 7.2 quick-browse window (offline)", () => {
       });
       expect(await quickBrowseState(sidebar)).toBeNull();
       expect(quickBrowseChromeCount(app)).toBe(0);
+    } finally {
+      await app.close();
+      await server.close();
+      rmSync(userDataDir, { recursive: true, force: true });
+    }
+  });
+
+  // Chrome layout: the chrome renderer fills the whole window and main lays the
+  // page view over it from y = QUICK_BROWSE_CHROME_HEIGHT down, so every visible
+  // chrome control must sit inside the top bar or the page view covers it.
+  // Playwright clicks the chrome's DOM directly, so only a geometry check sees it.
+  test("the chrome's title and action buttons lie within the top chrome bar", async () => {
+    const userDataDir = mkdtempSync(join(tmpdir(), "zeo-qb-"));
+    const server = await startFixtureServer();
+    const { app } = await launch(userDataDir);
+    try {
+      const fixture = `${server.base}/qb-layout.html?probe=qb-layout`;
+      await emitOpenUrl(app, fixture);
+      const chrome = await waitForQuickBrowseChrome(app);
+      await expect(chrome.getByTestId("quick-browse-title")).toBeVisible({ timeout: 15_000 });
+
+      // The bar itself spans exactly [0, QUICK_BROWSE_CHROME_HEIGHT], meeting the
+      // page view with no gap.
+      const bar = await chrome.getByTestId("quick-browse").boundingBox();
+      expect(bar, "quick-browse bar has a bounding box").not.toBeNull();
+      expect(bar!.y).toBe(0);
+      expect(bar!.height).toBe(QUICK_BROWSE_CHROME_HEIGHT);
+
+      for (const testId of [
+        "quick-browse-title",
+        "quick-browse-promote",
+        "quick-browse-promote-space",
+        "quick-browse-dismiss",
+      ]) {
+        const box = await chrome.getByTestId(testId).boundingBox();
+        expect(box, `${testId} has a bounding box`).not.toBeNull();
+        expect(box!.y, `${testId} top`).toBeGreaterThanOrEqual(0);
+        expect(box!.y + box!.height, `${testId} bottom`).toBeLessThanOrEqual(
+          QUICK_BROWSE_CHROME_HEIGHT,
+        );
+      }
     } finally {
       await app.close();
       await server.close();

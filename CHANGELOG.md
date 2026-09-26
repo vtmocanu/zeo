@@ -9,6 +9,13 @@ milestone, a minor bump only for very large breakthroughs.
 
 ## [Unreleased]
 
+### Fixed
+
+- Quick-browse window: the title, url and Promote / Promote to space… / Dismiss
+  buttons now render in a bar pinned to the top of the window instead of around
+  its vertical middle, where the page view covered them and they could not be
+  seen or clicked.
+
 ## [0.0.28] - 2026-09-26
 
 ### Added

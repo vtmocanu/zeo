@@ -1086,11 +1086,13 @@ body {
 /* Quick-browse window ----------------------------------------------------- */
 
 /* The chrome bar of the quick-browse window (selected by `?view=quick-browse`).
-   Main sizes this WebContentsView to a ~44px bar anchored at the top of the
-   window, with the transient page view below it. It is a single horizontal row
-   that FILLS the viewport. Reuses the dark surface tokens. */
+   This renderer fills the whole window, and main lays the transient page view
+   over it from y = QUICK_BROWSE_CHROME_HEIGHT down, so the bar is a single
+   horizontal row pinned to the top at exactly that height (set as
+   --quick-browse-chrome-height by QuickBrowse.tsx). Reuses the dark surface
+   tokens. */
 .quick-browse {
-  height: 100vh;
+  height: var(--quick-browse-chrome-height);
   display: flex;
   align-items: center;
   gap: 12px;
