@@ -5,9 +5,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, test } from "vitest";
 
-const scriptPath = fileURLToPath(
-  new URL("../../../scripts/check-css-tokens.mjs", import.meta.url),
-);
+const scriptPath = fileURLToPath(new URL("../../../scripts/check-css-tokens.mjs", import.meta.url));
 
 let dirs: string[] = [];
 
@@ -58,5 +56,39 @@ describe("check-css-tokens.mjs", () => {
     const { status, stderr } = run(dir);
     expect(status).toBe(1);
     expect(stderr).toContain('literal color "red"');
+  });
+
+  test("reports named colors in nested at-rules and after quoted braces, with line numbers", () => {
+    const dir = makeTempDir();
+    writeFileSync(
+      join(dir, "bad-nested.css"),
+      ".a { color: var(--x); @media (min-width: 1px) { color: red; } }\n" +
+        '.b { content: "}"; color: purple; }\n',
+    );
+
+    const { status, stderr } = run(dir);
+    expect(status).toBe(1);
+    expect(stderr).toMatch(/bad-nested\.css:1: literal color "red"/);
+    expect(stderr).toMatch(/bad-nested\.css:2: literal color "purple"/);
+  });
+
+  test("ignores color words in selectors, strings, url() and identifier properties", () => {
+    const dir = makeTempDir();
+    writeFileSync(
+      join(dir, "names.css"),
+      ".red,\n.mark {\n  animation: highlight 1s;\n  grid-area: mark;\n" +
+        '  content: "white";\n  background-image: url(icons/white.svg);\n' +
+        "  color: currentColor;\n  background: transparent;\n}\n",
+    );
+
+    const { status, stderr } = run(dir);
+    expect(stderr).toBe("");
+    expect(status).toBe(0);
+  });
+
+  test("exits 2 when the target is not a directory", () => {
+    const { status, stderr } = run(join(makeTempDir(), "missing"));
+    expect(status).toBe(2);
+    expect(stderr).toContain("not a directory");
   });
 });

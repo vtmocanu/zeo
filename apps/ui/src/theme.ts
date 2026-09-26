@@ -37,6 +37,8 @@ export function useAppearance(): Appearance {
       setAppearance(event.matches ? "dark" : "light");
     };
     media.addEventListener("change", onChange);
+    // Catch a flip between the initial render and this subscription.
+    setAppearance(media.matches ? "dark" : "light");
     return () => {
       media.removeEventListener("change", onChange);
     };

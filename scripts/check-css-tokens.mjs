@@ -8,7 +8,10 @@
 // (rgb, rgba, hsl, hsla, hwb, lab, lch, oklab, oklch, color), named color and
 // CSS system color (Canvas, ButtonText, ...). `transparent`, `currentColor` and
 // `inherit` are allowed; `color-mix(` is allowed as long as its arguments are
-// tokens. Comments are ignored.
+// tokens. Comments are ignored. Named colors count only inside declaration
+// values, outside strings and `url(...)`, and not in properties whose values
+// are author-chosen names (animation, grid-area, font-family, ...), where a
+// word such as `highlight` is a name rather than a color.
 //
 // Usage: node scripts/check-css-tokens.mjs [dir]
 // Exit code 1 on any finding, 0 otherwise, 2 when the target is not a directory.
@@ -84,11 +87,19 @@ function stripComments(source) {
 // Properties whose values are author-chosen identifiers, not colors: a name
 // such as `highlight` or `mark` there is an animation or grid-area name.
 const IDENT_PROPERTIES = new Set([
+  "-webkit-animation",
+  "-webkit-animation-name",
+  "anchor-name",
   "animation",
   "animation-name",
+  "animation-timeline",
+  "container",
   "container-name",
   "counter-increment",
   "counter-reset",
+  "counter-set",
+  "font",
+  "font-family",
   "grid-area",
   "grid-column",
   "grid-column-end",
@@ -98,7 +109,13 @@ const IDENT_PROPERTIES = new Set([
   "grid-row-start",
   "grid-template-areas",
   "list-style-type",
+  "position-anchor",
+  "scroll-timeline",
+  "scroll-timeline-name",
+  "timeline-scope",
   "transition-property",
+  "view-timeline",
+  "view-timeline-name",
   "view-transition-name",
   "will-change",
 ]);
@@ -117,6 +134,7 @@ function declarationValues(source) {
   let text = "";
   let lines = [];
   let line = 1;
+  let quote = "";
   const flushDeclaration = () => {
     const colon = text.indexOf(":");
     if (stack.at(-1) === "rule" && colon !== -1) {
@@ -128,14 +146,34 @@ function declarationValues(source) {
     text = "";
     lines = [];
   };
-  for (const char of source) {
-    if (char === "{") {
+  // Index by UTF-16 unit, not code point, so `lines` lines up with the
+  // `RegExp` match indices used against the collected text.
+  for (let i = 0; i < source.length; i += 1) {
+    const char = source[i];
+    if (quote) {
+      // Braces and semicolons inside a string are part of the value.
+      if (char === "\\") {
+        text += char + (source[i + 1] ?? "");
+        lines.push(line, line);
+        i += 1;
+        continue;
+      }
+      if (char === quote) quote = "";
+      text += char;
+      lines.push(line);
+    } else if (char === '"' || char === "'") {
+      quote = char;
+      text += char;
+      lines.push(line);
+    } else if (char === "{") {
       const prelude = text.trim();
       text = "";
       lines = [];
-      stack.push(
-        /^@(media|supports|layer|container|document|scope)\b/i.test(prelude) ? "group" : "rule",
-      );
+      // A group at-rule nested inside a rule (CSS nesting) holds declarations.
+      const group =
+        stack.at(-1) === "group" &&
+        /^@(media|supports|layer|container|document|scope)\b/i.test(prelude);
+      stack.push(group ? "group" : "rule");
     } else if (char === "}") {
       flushDeclaration();
       if (stack.length > 1) stack.pop();
@@ -160,7 +198,9 @@ function findings(file) {
   // Named colors only count in declaration values, so selectors such as
   // `.tab-item` or `:hover` and property names never trip the check.
   for (const value of declarationValues(source)) {
-    const scanned = value.text.replace(STRING, (s) => " ".repeat(s.length));
+    const scanned = value.text
+      .replace(STRING, (s) => " ".repeat(s.length))
+      .replace(/\burl\([^)]*\)/gi, (s) => " ".repeat(s.length));
     for (const m of scanned.matchAll(IDENT)) {
       if (NAMED_COLORS.has(m[0].toLowerCase())) {
         found.push({ line: value.lines[m.index], match: m[0] });
