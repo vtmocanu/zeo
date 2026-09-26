@@ -11,6 +11,17 @@ milestone, a minor bump only for very large breakthroughs.
 
 ### Added
 
+- zeo now checks GitHub Releases for a newer version: shortly after launch and
+  automatically at most once a day, plus on demand with **Check for Updates**
+  or **Settings → General → Check now**. A newer release shows a sidebar banner;
+  Homebrew installs are told to run `brew upgrade --cask zeo` (with a Copy
+  button) and direct installs get a button that opens the release page. A
+  version can be dismissed until a newer one ships, automatic checks can be
+  turned off in Settings, and a failed check shows its error on the settings
+  status line without ever interrupting browsing. The check is anonymous and
+  read-only: no token, no telemetry, no download. (Adds three `meta` columns;
+  the on-disk schema is now version 12.)
+
 - zeo now reopens its main window at the size, position, and maximized state it
   had when you last quit. A saved position that no longer lands on any connected
   display falls back to a centered, on-screen window. (Adds a `window_state`
