@@ -311,6 +311,31 @@ describe("checkForUpdates — error paths", () => {
     expect(runtime.update.error).toBe("network error");
   });
 
+  test("a BOM-prefixed valid feed still decides available (BOM is stripped before JSON.parse)", async () => {
+    // U+FEFF (BOM) prepended to the raw JSON text — real-world proxies/servers
+    // sometimes emit this. Goes through the same streaming reader path as
+    // jsonResponse()'s Response, just with a BOM prefix.
+    const bom = String.fromCharCode(0xfeff);
+    h.fetch.mockResolvedValue(new Response(bom + JSON.stringify(release("v2.0.0")), { status: 200 }));
+    await checkForUpdates("manual");
+    expect(runtime.update.available).toEqual({
+      version: "2.0.0",
+      url: "https://example.com/releases/v2.0.0",
+    });
+    expect(runtime.update.error).toBeNull();
+  });
+
+  test("a valid feed padded to ~512 KiB (under the 1 MiB cap) is still accepted", async () => {
+    const padded = { ...release("v2.0.0"), body: "x".repeat(512 * 1024) };
+    h.fetch.mockResolvedValue(new Response(JSON.stringify(padded), { status: 200 }));
+    await checkForUpdates("manual");
+    expect(runtime.update.available).toEqual({
+      version: "2.0.0",
+      url: "https://example.com/releases/v2.0.0",
+    });
+    expect(runtime.update.error).toBeNull();
+  });
+
   test("dismissing during an in-flight check is not resurrected by a later error response", async () => {
     runtime.update = {
       ...runtime.update,

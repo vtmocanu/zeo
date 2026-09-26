@@ -405,13 +405,6 @@ body {
   width: 100%;
 }
 
-/* Archived tabs ----------------------------------------------------------- */
-
-/* Pinned to the bottom of the flex-column sidebar. `margin-top: auto` pushes it
-   down whether or not a `flex: 1` sibling is present — when every tab is
-   archived (idle sweep), the empty-state `.sidebar__empty` replaces the
-   `flex: 1` `.sidebar__sections`, so the auto margin is what keeps the footer at
-   the bottom in that case. */
 /* In-app update banner (PRD 9.6). Sits between the tab list and the footer;
    present only while an update is available, so `margin-top: auto` on the
    footer still keeps the footer pinned to the bottom either way. */
@@ -478,6 +471,13 @@ body {
   outline-offset: -2px;
 }
 
+/* Archived tabs ----------------------------------------------------------- */
+
+/* Pinned to the bottom of the flex-column sidebar. `margin-top: auto` pushes it
+   down whether or not a `flex: 1` sibling is present — when every tab is
+   archived (idle sweep), the empty-state `.sidebar__empty` replaces the
+   `flex: 1` `.sidebar__sections`, so the auto margin is what keeps the footer at
+   the bottom in that case. */
 .sidebar__footer {
   flex: 0 0 auto;
   margin-top: auto;
