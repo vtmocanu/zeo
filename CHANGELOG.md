@@ -9,6 +9,20 @@ milestone, a minor bump only for very large breakthroughs.
 
 ## [Unreleased]
 
+## [0.0.28] - 2026-09-26
+
+### Added
+
+- zeo is now distributed as a Homebrew cask via the `vtmocanu/tap` tap:
+  `brew install --cask vtmocanu/tap/zeo`, with `brew upgrade --cask zeo` to
+  update and `brew uninstall --cask --zap zeo` to remove app data too. The
+  build is ad-hoc signed, so clear the quarantine attribute after installing
+  (`xattr -dr com.apple.quarantine /Applications/zeo.app`) to avoid Gatekeeper
+  blocking the first launch.
+- The release workflow template gains a `publish-cask` job: after the GitHub
+  Release is created it renders the cask from `packaging/homebrew/` and pushes
+  it to `vtmocanu/homebrew-tap`. `pnpm cask:check` verifies the cask locally.
+
 ## [0.0.27] - 2026-09-26
 
 ### Added
