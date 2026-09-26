@@ -119,12 +119,25 @@ for (const [label, badUrl] of [
   ["containing a #{ ruby interpolation", "https://example.com/0.0.20/#{1+1}"],
   ["containing a space", "https://example.com/0.0.20/zeo 0.0.20.dmg"],
   ["not starting with https://", "http://example.com/0.0.20/zeo-0.0.20-arm64.dmg"],
+  ["containing a $", "https://example.com/0.0.20/$HOME.dmg"],
+  ["containing a backtick", "https://example.com/0.0.20/`id`.dmg"],
+  ["containing a backslash", "https://example.com/0.0.20/a\\b.dmg"],
+  ["containing a control character", "https://example.com/0.0.20/a\x01b.dmg"],
 ]) {
   test(`url ${label} is rejected with code 4`, () => {
     const input = { ...VALID_INPUT, url: badUrl };
     assertRejectedWithCode(input, EXPECTED_VERSION, FIXTURE_TEMPLATE, 4);
   });
 }
+
+test("version dots are matched literally in the url (0a0b28 does not match 0.0.28), code 4", () => {
+  const input = {
+    version: "0.0.28",
+    url: "https://x/v0a0b28/zeo-0a0b28-arm64.dmg",
+    sha256: "a".repeat(64),
+  };
+  assertRejectedWithCode(input, "0.0.28", FIXTURE_TEMPLATE, 4);
+});
 
 test("url with the version present only with a digit on both sides (leading boundary) is rejected with code 4", () => {
   const input = {

@@ -60,8 +60,10 @@ The `publish-cask` job runs after `release` (`needs: [release]`) on
 cask template and render script and downloads `SHA256SUMS` from the Release.
 It reads the arm64 dmg's digest out of `SHA256SUMS`, renders
 `packaging/homebrew/zeo.rb.tmpl` with `packaging/homebrew/render.mjs` (which
-fails closed on a bad sha256, a version that does not match `package.json`, a
-url missing the version, or template placeholder drift), then pushes
+fails closed on a bad sha256, a malformed version or one that does not match
+`package.json`, a non-`https://` url or one containing characters unsafe in a
+Ruby string, a url missing the version, or template placeholder drift), then
+pushes
 `Casks/zeo.rb` to `vtmocanu/homebrew-tap` as `zeo-release-bot` with commit
 message `zeo <version>`. It is idempotent — if the tap already carries an
 identical cask for that version it commits and pushes nothing — fails fast on
@@ -90,9 +92,10 @@ accepts a path.
 ## Hardening to consider before activating
 
 The `release` job is the workflow as specified by PRD 8.1, and `publish-cask`
-is as specified by PRD 8.2. A security review suggested these changes for the
-human who commits it (none are applied, so the committed file matches the
-specs unless you choose otherwise):
+follows PRD 8.2's job with two adjustments: it depends on the real job name
+(`needs: [release]`) and adds a job-level `permissions: contents: read`. A
+security review suggested these further changes for the human who commits it
+(none are applied):
 
 - **Split build from publish.** Dependency code (install, lint, build, test,
   package) runs in the same job that later hands `GH_TOKEN` (contents: write)
@@ -122,10 +125,12 @@ specs unless you choose otherwise):
     later (or malicious) post-step of `checkout`/`setup-node` could read it.
     Authenticate with an `http.extraheader` or a credential helper instead of
     embedding it in the URL, or `rm -rf tap` at the end of the publish step.
-  - **Render before the token step.** "Render the cask" runs repo code
-    (`packaging/homebrew/render.mjs`) in the same job, before
-    `HOMEBREW_TAP_TOKEN` is used. For stronger isolation, render in a separate
-    job that uploads `zeo.rb` as an artifact to a token-only publish job.
+  - **Repo code shares the runner with the publish step.** "Render the cask"
+    runs repo code (`packaging/homebrew/render.mjs`) on the same runner before
+    "Publish to the tap" receives `HOMEBREW_TAP_TOKEN`, so it could tamper
+    with that step's environment. For stronger isolation, render in a
+    separate job that uploads `zeo.rb` as an artifact to a token-only publish
+    job.
 
 ## Local packaging on macOS
 
