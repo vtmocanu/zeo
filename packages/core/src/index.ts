@@ -121,13 +121,38 @@ export {
   downloadDetail,
   DOWNLOADS_CAP,
 } from "./downloads.js";
+export { cookieUrlFor } from "./cookie-url.js";
 export { defaultSpaceName } from "./space-name.js";
 export { buildSpaceContextMenu } from "./space-menu.js";
 export type { SpaceContextMenuInput } from "./space-menu.js";
 export { titleForUrl } from "./tab-title.js";
-export { formatRelativeArchived } from "./relative-time.js";
+export { formatRelativeArchived, formatRelativeTime } from "./relative-time.js";
+export {
+  UPDATE_FEED_URL,
+  UPDATE_CHECK_INTERVAL_MS,
+  UPDATE_CHECK_STARTUP_DELAY_MS,
+  UPDATE_FETCH_TIMEOUT_MS,
+  HOMEBREW_UPGRADE_COMMAND,
+  CASKROOM_PATHS,
+  parseVersion,
+  compareVersions,
+  parseLatestRelease,
+  installOrigin,
+  updateDecision,
+} from "./update.js";
+export type {
+  ParsedVersion,
+  LatestRelease,
+  ParsedFeed,
+  InstallOrigin,
+  AvailableUpdate,
+  UpdateState,
+} from "./update.js";
+export { parseChangelogSection } from "./release.js";
+export type { ChangelogSection } from "./release.js";
 export {
   SIDEBAR_WIDTH,
+  SPACE_ACTIVATE_DELAY_MS,
   COMMAND_BAR_HEIGHT,
   SUGGESTION_ROW_HEIGHT,
   commandBarBounds,
@@ -170,3 +195,18 @@ export {
   layoutsEqual,
 } from "./split-view.js";
 export type { PaneSide, SingleLayout, SplitLayout, WindowLayout } from "./split-view.js";
+export {
+  VIEW_UNLOAD_AFTER_MS,
+  VIEW_UNLOAD_INTERVAL_MS,
+  selectViewsToUnload,
+} from "./view-unload.js";
+export type { UnloadCandidate } from "./view-unload.js";
+export {
+  DEFAULT_WINDOW_SIZE,
+  MIN_WINDOW_SIZE,
+  MIN_VISIBLE_PX,
+  resolveWindowBounds,
+  centerInWorkArea,
+  fitAndCenterInWorkArea,
+} from "./window-state.js";
+export type { WindowState, Rect } from "./window-state.js";

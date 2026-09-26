@@ -3,15 +3,17 @@ import {
   useEffect,
   useRef,
   useState,
+  type MouseEventHandler,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
   type RefObject,
 } from "react";
-import type { PaneSide, Tab, TabsState } from "@zeo/core";
+import type { PaneSide, Space, Tab, TabsState } from "@zeo/core";
 import {
   SIDEBAR_WIDTH,
   DEFAULT_SEARCH_ENGINE_ID,
   SINGLE_LAYOUT,
+  SPACE_ACTIVATE_DELAY_MS,
   defaultSpaceName,
   formatRelativeArchived,
   formatZoomPercent,
@@ -19,6 +21,7 @@ import {
   paneOf,
   siteKeyForUrl,
 } from "@zeo/core";
+import { Favicon } from "./Favicon.js";
 import "./App.css";
 
 // Pointer travel (px) required before a press turns into a drag. Below this a
@@ -291,6 +294,7 @@ function TabRow({
   allowlisted,
   host,
   zoomFactor,
+  unloaded,
   onPointerDown,
 }: {
   tab: Tab;
@@ -304,10 +308,9 @@ function TabRow({
   allowlisted: boolean;
   host: string | null;
   zoomFactor: number;
+  unloaded: boolean;
   onPointerDown: (event: ReactPointerEvent<HTMLLIElement>) => void;
 }) {
-  const hasFavicon =
-    typeof tab.faviconUrl === "string" && tab.faviconUrl.length > 0;
   const paned = paneSide !== null;
   const className = [
     "tab-item",
@@ -316,6 +319,7 @@ function TabRow({
     dragging ? "tab-item--dragging" : "",
     paned ? "tab-item--paned" : "",
     paneFocused ? "tab-item--pane-focused" : "",
+    unloaded ? "tab-item--unloaded" : "",
   ]
     .filter(Boolean)
     .join(" ");
@@ -326,6 +330,7 @@ function TabRow({
       data-testid={paned ? "tab-pane" : "tab-item"}
       data-tab-id={tab.id}
       data-pane={paneSide ?? undefined}
+      data-unloaded={unloaded ? "true" : undefined}
       aria-current={isActive ? "true" : undefined}
       onPointerDown={onPointerDown}
       onContextMenu={(event) => {
@@ -340,16 +345,7 @@ function TabRow({
           .catch(() => {});
       }}
     >
-      {hasFavicon ? (
-        <img className="tab-item__favicon" src={tab.faviconUrl ?? ""} alt="" />
-      ) : (
-        <span
-          className="tab-item__favicon tab-item__favicon--fallback"
-          aria-hidden="true"
-        >
-          ◦
-        </span>
-      )}
+      <Favicon url={tab.faviconUrl} title={tab.title} />
       <button
         type="button"
         className="tab-item__title"
@@ -407,7 +403,7 @@ function TabRow({
       {!pinned && (
         <button
           type="button"
-          className="tab-item__close"
+          className="icon-button tab-item__close"
           aria-label={`Close ${tab.title}`}
           onClick={(event) => {
             event.stopPropagation();
@@ -427,25 +423,13 @@ function TabRow({
  * and shows when the tab was archived. All side effects go through the bridge.
  */
 function ArchivedRow({ tab, now }: { tab: Tab; now: number }) {
-  const hasFavicon =
-    typeof tab.faviconUrl === "string" && tab.faviconUrl.length > 0;
-
   return (
     <li
       className="archived-item"
       data-testid="archived-item"
       data-archived-id={tab.id}
     >
-      {hasFavicon ? (
-        <img className="tab-item__favicon" src={tab.faviconUrl ?? ""} alt="" />
-      ) : (
-        <span
-          className="tab-item__favicon tab-item__favicon--fallback"
-          aria-hidden="true"
-        >
-          ◦
-        </span>
-      )}
+      <Favicon url={tab.faviconUrl} title={tab.title} />
       <button
         type="button"
         className="archived-item__title"
@@ -459,7 +443,7 @@ function ArchivedRow({ tab, now }: { tab: Tab; now: number }) {
       </span>
       <button
         type="button"
-        className="archived-item__delete"
+        className="icon-button archived-item__delete"
         data-testid="archived-delete"
         aria-label={`Delete ${tab.title}`}
         onClick={(event) => {
@@ -512,6 +496,63 @@ function SpaceNameInput({
 }
 
 /**
+ * A single space row in the switcher. A plain click activates the space, but the
+ * activation is deferred by {@link SPACE_ACTIVATE_DELAY_MS} so a double-click
+ * (which opens the rename input) never also switches spaces: the second click
+ * and `onDoubleClick` both clear the pending timer first (PRD 9.4 §6). The timer
+ * is per-row and cleared on unmount.
+ */
+function SpaceItem({
+  space,
+  isActive,
+  onActivate,
+  onRename,
+  onContextMenu,
+}: {
+  space: Space;
+  isActive: boolean;
+  onActivate: () => void;
+  onRename: () => void;
+  onContextMenu: MouseEventHandler<HTMLButtonElement>;
+}) {
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const clear = () => {
+    if (timer.current !== null) {
+      clearTimeout(timer.current);
+      timer.current = null;
+    }
+  };
+  useEffect(() => clear, []);
+  return (
+    <button
+      type="button"
+      className={`space-item${isActive ? " space-item--active" : ""}`}
+      data-testid="space-item"
+      data-space-id={space.id}
+      aria-current={isActive ? "true" : undefined}
+      onClick={(event) => {
+        if (event.detail > 1) {
+          clear();
+          return;
+        }
+        clear();
+        timer.current = setTimeout(() => {
+          timer.current = null;
+          onActivate();
+        }, SPACE_ACTIVATE_DELAY_MS);
+      }}
+      onDoubleClick={() => {
+        clear();
+        onRename();
+      }}
+      onContextMenu={onContextMenu}
+    >
+      {space.name}
+    </button>
+  );
+}
+
+/**
  * Keyboard-first left sidebar listing open tabs. This is the renderer: it
  * reaches the main process ONLY through the injected global `window.zeo`
  * (which implements ZeoApi). No Node or Electron imports.
@@ -524,10 +565,12 @@ export function App() {
     tabs: [],
     activeTabId: null,
     archived: [],
+    unloadedTabIds: [],
     settingsOpen: false,
     settings: {
       searchEngine: DEFAULT_SEARCH_ENGINE_ID,
       quickBrowseExternal: true,
+      updateCheckEnabled: true,
     },
     settingsSection: "general",
     settingsSectionNonce: 0,
@@ -550,7 +593,16 @@ export function App() {
     },
     quickBrowse: null,
     isDefaultBrowser: false,
+    appVersion: "",
     layout: SINGLE_LAYOUT,
+    update: {
+      enabled: true,
+      origin: "direct",
+      available: null,
+      checking: false,
+      lastCheckedAt: null,
+      error: null,
+    },
   });
   const [showArchived, setShowArchived] = useState(false);
   const [now, setNow] = useState(() => Date.now());
@@ -644,10 +696,7 @@ export function App() {
     if (current.mode === "create") {
       void (async () => {
         try {
-          const created = await window.zeo?.spaces.create(name);
-          if (created) {
-            await window.zeo?.spaces.activate(created.id);
-          }
+          await window.zeo?.spaces.createAndActivate(name);
         } catch {
           // Bridge unavailable or the store rejected the name; the buffer is
           // already discarded, so nothing to roll back.
@@ -658,10 +707,7 @@ export function App() {
     const spaceId = current.spaceId;
     void (async () => {
       try {
-        const created = await window.zeo?.profiles.create(name);
-        if (created) {
-          await window.zeo?.spaces.setProfile(spaceId, created.id);
-        }
+        await window.zeo?.profiles.createAndAssign(spaceId, name);
       } catch {
         // As above: buffer discarded, nothing to roll back.
       }
@@ -737,6 +783,7 @@ export function App() {
             allowlisted={allowlisted}
             host={host}
             zoomFactor={zoomFactor}
+            unloaded={state.unloadedTabIds.includes(tab.id)}
             onPointerDown={(event) =>
               onRowPointerDown(event, tab, section === "pinned")
             }
@@ -815,19 +862,12 @@ export function App() {
             );
           }
           return (
-            <button
+            <SpaceItem
               key={space.id}
-              type="button"
-              className={`space-item${isActive ? " space-item--active" : ""}`}
-              data-testid="space-item"
-              data-space-id={space.id}
-              aria-current={isActive ? "true" : undefined}
-              onClick={() =>
-                void window.zeo?.spaces.activate(space.id).catch(() => {})
-              }
-              onDoubleClick={() =>
-                openEdit({ mode: "rename", spaceId: space.id }, space.name)
-              }
+              space={space}
+              isActive={isActive}
+              onActivate={() => window.zeo?.spaces.activate(space.id).catch(() => {})}
+              onRename={() => openEdit({ mode: "rename", spaceId: space.id }, space.name)}
               onContextMenu={(event) => {
                 event.preventDefault();
                 void window.zeo?.spaces
@@ -839,9 +879,7 @@ export function App() {
                   })
                   .catch(() => {});
               }}
-            >
-              {space.name}
-            </button>
+            />
           );
         })}
         {edit?.mode === "create" || edit?.mode === "new-profile" ? (
@@ -885,6 +923,35 @@ export function App() {
               {renderList(unpinned, "unpinned", unpinnedListRef)}
             </section>
           )}
+        </div>
+      )}
+
+      {state.update.available !== null && (
+        <div className="update-banner" data-testid="update-banner">
+          <span className="update-banner__text">
+            Update available: zeo {state.update.available.version}
+          </span>
+          <button
+            type="button"
+            className="update-banner__action"
+            data-testid="update-banner-action"
+            onClick={() =>
+              void (state.update.origin === "homebrew"
+                ? window.zeo?.commands.run("settings.openGeneral")
+                : window.zeo?.update.openRelease()
+              )?.catch(() => {})
+            }
+          >
+            {state.update.origin === "homebrew" ? "How to upgrade" : "Open release"}
+          </button>
+          <button
+            type="button"
+            className="update-banner__dismiss"
+            aria-label="Dismiss update"
+            onClick={() => void window.zeo?.update.dismiss().catch(() => {})}
+          >
+            ×
+          </button>
         </div>
       )}
 

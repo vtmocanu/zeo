@@ -236,14 +236,14 @@ const HIGHLIGHT = (id: string): string =>
   `[data-testid="settings-section-${id}"].settings__section-item--highlight`;
 
 test.describe("PRD 6.5 settings sections + search engine (offline)", () => {
-  // §8 bullet a: the settings view lists the four sections in registry order.
-  test("lists the four sections in registry order", async () => {
+  // §8 bullet a: the settings view lists the five sections in registry order.
+  test("lists the five sections in registry order", async () => {
     const userDataDir = mkdtempSync(join(tmpdir(), "zeo-settings-"));
     const { app, sidebar } = await launch(userDataDir);
     try {
       const settings = await openSettings(app, sidebar, "settings.open");
       const rows = settings.locator('.settings__sections [data-testid^="settings-section-"]');
-      await expect(rows).toHaveCount(4);
+      await expect(rows).toHaveCount(5);
       const ids = await rows.evaluateAll((els) =>
         els.map((el) => el.getAttribute("data-testid")),
       );
@@ -252,7 +252,28 @@ test.describe("PRD 6.5 settings sections + search engine (offline)", () => {
         "settings-section-blocking",
         "settings-section-profiles",
         "settings-section-history",
+        "settings-section-about",
       ]);
+    } finally {
+      await app.close();
+      rmSync(userDataDir, { recursive: true, force: true });
+    }
+  });
+
+  // §7/§8: the About section shows the product name and a non-empty running
+  // version, read straight off the broadcast TabsState.appVersion (set once at
+  // launch from app.getVersion()). The unpackaged e2e build reports the desktop
+  // package's placeholder version, so this asserts shape, not a specific number.
+  test("shows the About section with a non-empty version", async () => {
+    const userDataDir = mkdtempSync(join(tmpdir(), "zeo-settings-"));
+    const { app, sidebar } = await launch(userDataDir);
+    try {
+      const settings = await openSettings(app, sidebar, "settings.open");
+      await settings.getByTestId("settings-section-about").click();
+      await expect(settings.locator(SELECTED("about"))).toHaveCount(1);
+      const version = settings.getByTestId("settings-about-version");
+      await expect(version).toBeVisible();
+      expect(await version.textContent()).toMatch(/\S/);
     } finally {
       await app.close();
       rmSync(userDataDir, { recursive: true, force: true });

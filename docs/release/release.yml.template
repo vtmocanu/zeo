@@ -1,0 +1,168 @@
+# This file is the source for a human-committed `.github/workflows/release.yml`
+# (issue #20): the automation token cannot write workflow files, so it is never
+# copied there automatically. Copy this file to `.github/workflows/release.yml`
+# by hand; see docs/release/README.md.
+
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: macos-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - id: version
+        name: Verify tag matches package.json version
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "Tag $GITHUB_REF_NAME (version $TAG_VERSION) != package.json version $PKG_VERSION" >&2
+            exit 1
+          fi
+          echo "version=$PKG_VERSION" >> "$GITHUB_OUTPUT"
+
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm build
+      - run: pnpm test
+      - run: pnpm package
+
+      - name: Generate SHA256SUMS
+        working-directory: release
+        run: |
+          shasum -a 256 \
+            "zeo-${{ steps.version.outputs.version }}-arm64.dmg" \
+            "zeo-${{ steps.version.outputs.version }}-arm64.zip" > SHA256SUMS
+
+      - name: Smoke-test the packaged bundle
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          APP="release/mac-arm64/zeo.app"
+          PLIST="$APP/Contents/Info.plist"
+          test -d "$APP" || { echo "Packaged app not found at $APP" >&2; exit 1; }
+          BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$PLIST")"
+          SHORT="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$PLIST")"
+          [ "$BUNDLE_ID" = "com.zeo.browser" ] || { echo "CFBundleIdentifier $BUNDLE_ID != com.zeo.browser" >&2; exit 1; }
+          [ "$SHORT" = "$VERSION" ] || { echo "CFBundleShortVersionString $SHORT != $VERSION" >&2; exit 1; }
+          codesign -dv "$APP" 2>&1 | grep -q 'Signature=adhoc' || { echo "Packaged app is not ad-hoc signed (expected Signature=adhoc)" >&2; exit 1; }
+
+      - name: Build release notes from CHANGELOG
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: node scripts/changelog-section.mjs "$VERSION" > release/RELEASE_NOTES.md
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zeo-${{ steps.version.outputs.version }}-arm64
+          path: |
+            release/zeo-${{ steps.version.outputs.version }}-arm64.dmg
+            release/zeo-${{ steps.version.outputs.version }}-arm64.zip
+            release/SHA256SUMS
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "zeo $VERSION" \
+            --notes-file release/RELEASE_NOTES.md \
+            "release/zeo-$VERSION-arm64.dmg" \
+            "release/zeo-$VERSION-arm64.zip" \
+            "release/SHA256SUMS"
+
+  # Runs after the `release` job above has created the GitHub Release, so
+  # SHA256SUMS and the arm64 dmg are already published assets.
+  publish-cask:
+    needs: [release]
+    runs-on: ubuntu-latest
+    # Read-only on this repo (checkout + gh release download); the tap is
+    # written only with HOMEBREW_TAP_TOKEN.
+    permissions:
+      contents: read
+    steps:
+      - name: Check out zeo (cask template + render script only)
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Fail fast when the tap token is absent
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          if [ -z "$HOMEBREW_TAP_TOKEN" ]; then
+            echo "HOMEBREW_TAP_TOKEN is not set; cannot publish the cask." >&2
+            exit 1
+          fi
+
+      - name: Download SHA256SUMS from the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download "${GITHUB_REF_NAME}" \
+            --repo "${GITHUB_REPOSITORY}" --pattern SHA256SUMS --dir .
+
+      - name: Render the cask
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          dmg="zeo-${version}-arm64.dmg"
+          sha256="$(awk -v f="$dmg" '$2 == f || $2 == "*"f {print $1}' SHA256SUMS)"
+          if [ -z "$sha256" ]; then
+            echo "no SHA256SUMS entry for ${dmg}" >&2
+            exit 1
+          fi
+          url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/${dmg}"
+          mkdir -p out
+          node packaging/homebrew/render.mjs \
+            --version "$version" --url "$url" --sha256 "$sha256" --out out/zeo.rb
+
+      - name: Publish to the tap
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          git clone --depth 1 \
+            "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/vtmocanu/homebrew-tap.git" tap
+          mkdir -p tap/Casks
+          cp out/zeo.rb tap/Casks/zeo.rb
+          cd tap
+          git config user.name "zeo-release-bot"
+          git config user.email "zeo-release-bot@users.noreply.github.com"
+          git add Casks/zeo.rb
+          if git diff --cached --quiet; then
+            echo "tap already carries zeo ${version}; nothing to publish."
+            exit 0
+          fi
+          git commit -m "zeo ${version}"
+          git push origin HEAD

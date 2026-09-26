@@ -2,6 +2,9 @@ import { clampRatio } from "./split-view.js";
 
 export const SIDEBAR_WIDTH = 240;
 
+/** Delay before a single click on a space row activates it, so a double-click can cancel it. */
+export const SPACE_ACTIVATE_DELAY_MS = 250;
+
 /** Fixed height of the command bar overlay's input row. */
 export const COMMAND_BAR_HEIGHT = 56;
 

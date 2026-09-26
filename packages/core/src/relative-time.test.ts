@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { formatRelativeArchived } from "./relative-time.js";
+import { formatRelativeArchived, formatRelativeTime } from "./relative-time.js";
 
 describe("formatRelativeArchived", () => {
   test("a zero delta is 'just now'", () => {
@@ -35,5 +35,19 @@ describe("formatRelativeArchived", () => {
 
   test("now earlier than archivedAt clamps to 'just now'", () => {
     expect(formatRelativeArchived(5000, 1000)).toBe("just now");
+  });
+});
+
+describe("formatRelativeTime", () => {
+  test("delegates to formatRelativeArchived with swapped argument order", () => {
+    expect(formatRelativeTime(60_000, 0)).toBe("1m ago");
+  });
+
+  test("a zero delta is 'just now'", () => {
+    expect(formatRelativeTime(1000, 1000)).toBe("just now");
+  });
+
+  test("now earlier than at clamps to 'just now'", () => {
+    expect(formatRelativeTime(1000, 5000)).toBe("just now");
   });
 });

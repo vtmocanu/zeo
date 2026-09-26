@@ -55,7 +55,8 @@ export type CommandId =
   | "view.splitChoose"
   | "view.unsplit"
   | "view.focusOtherPane"
-  | "view.swapPanes";
+  | "view.swapPanes"
+  | "update.check";
 
 /**
  * One registry entry: its {@link CommandId}, human title, search `keywords`,
@@ -160,6 +161,7 @@ export const COMMANDS: readonly CommandDescriptor[] = [
   { id: "view.unsplit", title: "Exit Split View", keywords: ["unsplit", "single", "exit", "split", "pane"], accelerator: "CmdOrCtrl+Shift+\\", menu: "view" },
   { id: "view.focusOtherPane", title: "Focus Other Pane", keywords: ["focus", "pane", "other", "split", "switch"], accelerator: "CmdOrCtrl+Alt+Right", menu: "view" },
   { id: "view.swapPanes", title: "Swap Panes", keywords: ["swap", "panes", "split", "exchange", "sides"], accelerator: "CmdOrCtrl+Alt+S", menu: "view" },
+  { id: "update.check", title: "Check for Updates", keywords: ["update", "upgrade", "version", "release"], accelerator: null, menu: "view" },
 ];
 
 /**
@@ -167,7 +169,8 @@ export const COMMANDS: readonly CommandDescriptor[] = [
  * `tab.new`, `space.new`, `space.rename`, `bar.open-location`,
  * `bar.open-commands`, `blocking.toggle`, `settings.open`, `history.open`,
  * `history.clear`, `settings.openGeneral`, `settings.openProfiles`,
- * `settings.openHistory`, `downloads.open`, `downloads.openFolder`.
+ * `settings.openHistory`, `downloads.open`, `downloads.openFolder`,
+ * `update.check`.
  * `downloads.clearFinished` needs at least one finished download
  * (`hasFinishedDownload`). Every other
  * `tab.*` needs an active tab — `tab.copy-url`, `tab.moveToTop`,
@@ -205,6 +208,7 @@ export function isCommandEnabled(id: CommandId, context: CommandContext): boolea
     case "settings.openHistory":
     case "downloads.open":
     case "downloads.openFolder":
+    case "update.check":
       return true;
     case "downloads.clearFinished":
       return context.hasFinishedDownload;

@@ -9,7 +9,92 @@ milestone, a minor bump only for very large breakthroughs.
 
 ## [Unreleased]
 
+## [0.0.28] - 2026-09-26
+
+### Added
+
+- zeo is now distributed as a Homebrew cask via the `vtmocanu/tap` tap:
+  `brew install --cask vtmocanu/tap/zeo`, with `brew upgrade --cask zeo` to
+  update and `brew uninstall --cask --zap zeo` to remove app data too. The
+  build is ad-hoc signed, so clear the quarantine attribute after installing
+  (`xattr -dr com.apple.quarantine /Applications/zeo.app`) to avoid Gatekeeper
+  blocking the first launch.
+- The release workflow template gains a `publish-cask` job: after the GitHub
+  Release is created it renders the cask from `packaging/homebrew/` and pushes
+  it to `vtmocanu/homebrew-tap`. `pnpm cask:check` verifies the cask locally.
+
+## [0.0.27] - 2026-09-26
+
+### Added
+
+- zeo can now be packaged for macOS: `pnpm package` builds an ad-hoc signed
+  Apple Silicon (arm64) `zeo.app` plus `zeo-<version>-arm64.dmg` and `.zip` in
+  `release/`, stamped with the root `package.json` version. There is no
+  Developer ID signing or notarization, so macOS Gatekeeper blocks the first
+  open of a build downloaded through a browser: allow it under System Settings
+  → Privacy & Security → Open Anyway, or run
+  `xattr -dr com.apple.quarantine /path/to/zeo.app`.
+
+- A tag-driven release workflow (`docs/release/release.yml.template`, with
+  `docs/release/README.md` for a maintainer to commit it): pushing a `v*` tag
+  that matches the `package.json` version runs lint, typecheck, build, test, and
+  package on macOS, smoke-checks the bundle, and publishes a GitHub Release
+  with the dmg, zip, `SHA256SUMS`, and this changelog's section as its notes.
+  `pnpm release:check` is the local pre-flight check before tagging.
+
+- Settings has a new About section showing the running zeo version.
+
+## [0.0.26] - 2026-09-26
+
+### Added
+
+- zeo now checks GitHub Releases for a newer version: a few seconds after launch
+  when the last check is over a day old, then at most once a day (automatic
+  checks run in packaged builds only), plus on demand with **Check for Updates**
+  or **Settings → General → Check now**. A newer release shows a sidebar banner;
+  Homebrew installs are told to run `brew upgrade --cask zeo` (with a Copy
+  button) and direct installs get a button that opens the release page. A
+  version can be dismissed until a newer one ships, automatic checks can be
+  turned off in Settings, and a failed check shows its error on the settings
+  status line without ever interrupting browsing. The check is anonymous and
+  read-only: no token, no telemetry, no download. (Adds three `meta` columns;
+  the on-disk schema is now version 12.)
+
+- zeo now reopens its main window at the size, position, and maximized state it
+  had when you last quit. A saved position that no longer lands on any connected
+  display falls back to a centered, on-screen window. (Adds a `window_state`
+  table; the on-disk schema is now version 11.)
+
+### Changed
+
+- Hidden tab views are now unloaded to reclaim memory: switching spaces frees
+  the outgoing space's views (keeping its own active tab and any audible tab),
+  and a background view left idle past a threshold is torn down by a periodic
+  sweep. The tab always stays in the sidebar and its view is transparently
+  recreated when the tab is next activated; unloaded rows are dimmed to signal
+  this.
+
+- Pages can no longer open native browser windows. `window.open` and
+  `target="_blank"` are now denied and instead open a new tab in the owning
+  space, on that space's profile partition; a non-http(s) target is dropped.
+
+- Upgrading now migrates cookies from the pre-profiles default browser session
+  into the default profile's partition once, then clears those cookies from the
+  old session — so a user upgrading from before profiles is no longer logged out
+  everywhere. The migration runs at most once per user-data directory, never on
+  a fresh install, and retries on the next launch if any cookie fails to copy
+  (a new database schema column records that it ran).
+
 ### Fixed
+
+- The pre-profiles default-session cookie migration now derives its target
+  partition from the store's default profile id (`persist:<id>`) instead of a
+  hard-coded `persist:default`, and a retry after a partial failure skips cookies
+  already present in the target, so a newer value there is never overwritten.
+
+- A tab command issued from the sidebar that the main process rejects (for
+  example, activating a tab the idle sweep just archived) now re-broadcasts
+  state so the stale sidebar row is removed instead of lingering.
 
 - Split view: a split that collapses back to a single view during a session
   (closing, removing or archiving a paned tab, activating a non-paned tab,
@@ -26,6 +111,36 @@ milestone, a minor bump only for very large breakthroughs.
   archived-only session" invariant explicit at the seed guard. The reported
   scenario was already prevented upstream by the persisted-database check, so
   this is a defensive hardening with no change to reachable behavior.
+
+- Downloads: clearing finished downloads now deletes the persisted rows before
+  clearing them from memory and broadcasting; a failed database delete no longer
+  removes the rows from the UI only for them to reappear on the next launch (the
+  command-palette action and the IPC handler now share one implementation).
+
+- Downloads: a persistence failure when a new download starts no longer abandons
+  the live download — its progress/completion listeners, filename reservation,
+  and in-memory record are kept, and only a failure to set the save path aborts
+  the download.
+
+- Content blocking: attaching the blocker to a profile's session when remapping
+  a space's profile or creating a profile is now best-effort — a failure is
+  logged and the remaining lifecycle steps (download-handler install, view
+  recreation, reconcile, broadcast) still run.
+
+- Tab commands (close, pin, archive, activate, and the rest) issued against a
+  tab in an inactive space — for example from a context menu captured before a
+  space switch — now act on that tab's owning space instead of failing
+  silently; activating a tab in another space switches to that space first.
+
+- Double-clicking a space in the sidebar to rename it no longer also activates
+  it. A single click still activates the space (after a short delay, so a
+  double-click can cancel the activation).
+
+- Profile names are now unique, ignoring case and surrounding whitespace, so a
+  duplicate name is rejected. Creating a space and activating it, and creating a
+  profile and assigning it to a space, are each a single atomic action — a
+  failure can no longer leave behind a stray unactivated space or an unassigned
+  profile.
 
 ## [0.0.22] - 2026-09-21
 
