@@ -91,4 +91,33 @@ describe("check-css-tokens.mjs", () => {
     expect(status).toBe(2);
     expect(stderr).toContain("not a directory");
   });
+
+  test.each([
+    ["six-digit hex", "color: #aabbcc;", "#aabbcc"],
+    ["eight-digit hex", "color: #aabbcc80;", "#aabbcc80"],
+    ["rgb()", "color: rgb(0 0 0);", "rgb("],
+    ["hsl()", "color: hsl(0 0% 0%);", "hsl("],
+    ["oklch()", "color: oklch(0.5 0.1 200);", "oklch("],
+    ["color()", "color: color(srgb 0 0 0);", "color("],
+    ["a system color", "color: WindowText;", "WindowText"],
+  ])("exits 1 on %s", (_name, declaration, match) => {
+    const dir = makeTempDir();
+    writeFileSync(join(dir, "bad.css"), `.foo { ${declaration} }\n`);
+
+    const { status, stderr } = run(dir);
+    expect(status).toBe(1);
+    expect(stderr).toContain(`literal color "${match}"`);
+  });
+
+  test("a comment marker inside a string does not hide later colors", () => {
+    const dir = makeTempDir();
+    writeFileSync(
+      join(dir, "bad-string.css"),
+      '.a::before { content: "/*"; }\n.b { background: #fff; }\n.c { content: "*/"; }\n',
+    );
+
+    const { status, stderr } = run(dir);
+    expect(status).toBe(1);
+    expect(stderr).toMatch(/bad-string\.css:2: literal color "#fff"/);
+  });
 });

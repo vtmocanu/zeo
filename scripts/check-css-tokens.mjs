@@ -35,6 +35,12 @@ const NAMED_COLORS = new Set(
     "canvas canvastext buttonface buttontext field fieldtext highlight " +
     "highlighttext mark linktext visitedtext activetext graytext marktext " +
     "accentcolor accentcolortext selecteditem selecteditemtext " +
+    // Deprecated system colors, which Chromium still renders.
+    "activeborder activecaption appworkspace background buttonhighlight " +
+    "buttonshadow captiontext inactiveborder inactivecaption " +
+    "inactivecaptiontext infobackground infotext menu menutext scrollbar " +
+    "threeddarkshadow threedface threedhighlight threedlightshadow " +
+    "threedshadow window windowframe windowtext -webkit-focus-ring-color " +
     "aliceblue antiquewhite aqua aquamarine azure beige bisque black " +
     "blanchedalmond blue blueviolet brown burlywood cadetblue chartreuse " +
     "chocolate coral cornflowerblue cornsilk crimson cyan darkblue darkcyan " +
@@ -62,7 +68,7 @@ const NAMED_COLORS = new Set(
 // A bare identifier: not part of a longer or hyphenated name (so custom
 // properties such as `--ink-primary` never match), not a class, id or pseudo
 // selector, and not a function name.
-const IDENT = /(?<![\w.#:-])[a-z]+(?![\w-]|\()/gi;
+const IDENT = /(?<![\w.#:-])[a-z]+(?![\w-]|\()|-webkit-focus-ring-color\b/gi;
 const STRING = /"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'/g;
 
 /** Recursively list *.css files under `dir`, skipping tokens.css. */
@@ -81,7 +87,12 @@ function cssFiles(dir) {
 
 /** Blank out comments while keeping line breaks, so line numbers hold. */
 function stripComments(source) {
-  return source.replace(/\/\*[\s\S]*?\*\//g, (c) => c.replace(/[^\n]/g, " "));
+  // Strings are matched first and kept, so a `/*` inside `content: "/*"` does
+  // not open a comment.
+  return source.replace(
+    /"(?:[^"\\\n]|\\[\s\S])*"|'(?:[^'\\\n]|\\[\s\S])*'|\/\*[\s\S]*?\*\//g,
+    (c) => (c.startsWith("/*") ? c.replace(/[^\n]/g, " ") : c),
+  );
 }
 
 // Properties whose values are author-chosen identifiers, not colors: a name
@@ -156,6 +167,7 @@ function declarationValues(source) {
         text += char + (source[i + 1] ?? "");
         lines.push(line, line);
         i += 1;
+        if (source[i] === "\n") line += 1;
         continue;
       }
       if (char === quote) quote = "";
