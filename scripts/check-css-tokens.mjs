@@ -6,7 +6,7 @@
 // directory (default apps/ui/src/styles, or the first CLI argument) except
 // files named tokens.css, and reports each hex color, color function call
 // (rgb, rgba, hsl, hsla, hwb, lab, lch, oklab, oklch, color), named color and
-// CSS system color (Canvas, ButtonText, ...). `transparent`, `currentColor` and
+// CSS system color (Canvas, ButtonText, WindowText, -webkit-focus-ring-color, ...). `transparent`, `currentColor` and
 // `inherit` are allowed; `color-mix(` is allowed as long as its arguments are
 // tokens. Comments are ignored. Named colors count only inside declaration
 // values, outside strings and `url(...)`, and not in properties whose values
@@ -68,7 +68,7 @@ const NAMED_COLORS = new Set(
 // A bare identifier: not part of a longer or hyphenated name (so custom
 // properties such as `--ink-primary` never match), not a class, id or pseudo
 // selector, and not a function name.
-const IDENT = /(?<![\w.#:-])[a-z]+(?![\w-]|\()|-webkit-focus-ring-color\b/gi;
+const IDENT = /(?<![\w.#:-])[a-z]+(?![\w-]|\()|(?<![\w-])-webkit-focus-ring-color(?![\w-])/gi;
 const STRING = /"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'/g;
 
 /** Recursively list *.css files under `dir`, skipping tokens.css. */
@@ -124,6 +124,7 @@ const IDENT_PROPERTIES = new Set([
   "scroll-timeline",
   "scroll-timeline-name",
   "timeline-scope",
+  "transition",
   "transition-property",
   "view-timeline",
   "view-timeline-name",
@@ -170,7 +171,8 @@ function declarationValues(source) {
         if (source[i] === "\n") line += 1;
         continue;
       }
-      if (char === quote) quote = "";
+      // A string ends at its closing quote, or (unterminated) at the newline.
+      if (char === quote || char === "\n") quote = "";
       text += char;
       lines.push(line);
     } else if (char === '"' || char === "'") {

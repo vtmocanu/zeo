@@ -100,6 +100,11 @@ describe("check-css-tokens.mjs", () => {
     ["oklch()", "color: oklch(0.5 0.1 200);", "oklch("],
     ["color()", "color: color(srgb 0 0 0);", "color("],
     ["a system color", "color: WindowText;", "WindowText"],
+    [
+      "-webkit-focus-ring-color",
+      "outline-color: -webkit-focus-ring-color;",
+      "-webkit-focus-ring-color",
+    ],
   ])("exits 1 on %s", (_name, declaration, match) => {
     const dir = makeTempDir();
     writeFileSync(join(dir, "bad.css"), `.foo { ${declaration} }\n`);
@@ -119,5 +124,29 @@ describe("check-css-tokens.mjs", () => {
     const { status, stderr } = run(dir);
     expect(status).toBe(1);
     expect(stderr).toMatch(/bad-string\.css:2: literal color "#fff"/);
+  });
+
+  test("line numbers stay right after an escaped newline inside a string", () => {
+    const dir = makeTempDir();
+    writeFileSync(
+      join(dir, "bad-escape.css"),
+      '.a::before { content: "a\\\n b"; }\n.b { color: red; }\n',
+    );
+
+    const { status, stderr } = run(dir);
+    expect(status).toBe(1);
+    expect(stderr).toMatch(/bad-escape\.css:3: literal color "red"/);
+  });
+
+  test("property names in transition values are not colors", () => {
+    const dir = makeTempDir();
+    writeFileSync(
+      join(dir, "transition.css"),
+      ".a { transition: background 120ms ease; outline-color: var(--webkit-focus-ring-color); }\n",
+    );
+
+    const { status, stderr } = run(dir);
+    expect(stderr).toBe("");
+    expect(status).toBe(0);
   });
 });
