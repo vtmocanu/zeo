@@ -59,9 +59,9 @@ function overlap(aStart: number, aEnd: number, bStart: number, bEnd: number): nu
  * on the primary display.
  *
  * Otherwise `width`/`height` are the saved size clamped into
- * `[MIN_WINDOW_SIZE, largest work area]` (the low bound applied first, so on a
- * pathologically tiny display the high bound wins and the window never exceeds
- * the largest work area). The saved `x`/`y` are kept only when both are non-null
+ * `[MIN_WINDOW_SIZE, largest work area by area]` (the low bound applied first, so
+ * on a pathologically tiny display the high bound wins and the window never
+ * exceeds the largest work area). The saved `x`/`y` are kept only when both are non-null
  * AND the saved rect overlaps at least one work area by at least
  * {@link MIN_VISIBLE_PX} on BOTH axes of the SAME work area; otherwise they are
  * omitted and the window centers. `maximized` passes through unchanged.
@@ -78,12 +78,18 @@ export function resolveWindowBounds(
     };
   }
 
-  const maxWidth = Math.max(...workAreas.map((wa) => wa.width));
-  const maxHeight = Math.max(...workAreas.map((wa) => wa.height));
+  // Pick a single work area to clamp into — the largest by area, ties broken by
+  // array order — rather than mixing the widest and tallest work areas, which
+  // could come from different displays and allow a size no single display fits
+  // (e.g. a 1920x1080 display plus a portrait 1080x1920 one would otherwise
+  // allow 1920x1920).
+  const largest = workAreas.reduce((best, wa) =>
+    wa.width * wa.height > best.width * best.height ? wa : best,
+  );
   // Clamp the low bound first, then the high bound, so a min above the largest
   // work area still never exceeds it.
-  const width = Math.min(maxWidth, Math.max(MIN_WINDOW_SIZE.width, saved.width));
-  const height = Math.min(maxHeight, Math.max(MIN_WINDOW_SIZE.height, saved.height));
+  const width = Math.min(largest.width, Math.max(MIN_WINDOW_SIZE.width, saved.width));
+  const height = Math.min(largest.height, Math.max(MIN_WINDOW_SIZE.height, saved.height));
 
   const positioned = keepsPosition(saved, workAreas);
   if (positioned) {
@@ -111,4 +117,20 @@ function keepsPosition(
     return dx >= MIN_VISIBLE_PX && dy >= MIN_VISIBLE_PX;
   });
   return onScreen ? { x, y } : null;
+}
+
+/**
+ * The top-left corner that centers a `width`x`height` window within `area`.
+ * Pure arithmetic — no Electron — so a caller with no saved position can center
+ * explicitly on a chosen work area rather than relying on platform defaults.
+ */
+export function centerInWorkArea(
+  width: number,
+  height: number,
+  area: Rect,
+): { x: number; y: number } {
+  return {
+    x: area.x + Math.round((area.width - width) / 2),
+    y: area.y + Math.round((area.height - height) / 2),
+  };
 }

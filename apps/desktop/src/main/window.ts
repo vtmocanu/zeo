@@ -6,6 +6,7 @@ import {
   reconcileLayout,
   SINGLE_LAYOUT,
   resolveWindowBounds,
+  centerInWorkArea,
   MIN_WINDOW_SIZE,
 } from "@zeo/core";
 import type { WindowLayout, WindowState } from "@zeo/core";
@@ -29,8 +30,8 @@ function saveWindowState(): void {
   if (win === null || win.isDestroyed()) {
     return;
   }
-  const bounds = win.getNormalBounds();
   try {
+    const bounds = win.getNormalBounds();
     writeWindowState({
       x: bounds.x,
       y: bounds.y,
@@ -85,6 +86,18 @@ export function createWindow(seed: boolean): void {
     screen.getAllDisplays().map((d) => d.workArea),
   );
   const { maximized, ...frame } = resolved;
+  // Electron's own centering (when x/y are omitted) centers on the full screen
+  // frame on macOS, not the work area, so center explicitly here on the primary
+  // display's work area whenever there is no saved position to restore.
+  if (frame.x === undefined || frame.y === undefined) {
+    const center = centerInWorkArea(
+      frame.width,
+      frame.height,
+      screen.getPrimaryDisplay().workArea,
+    );
+    frame.x = center.x;
+    frame.y = center.y;
+  }
   runtime.win = new BrowserWindow({
     ...frame,
     minWidth: MIN_WINDOW_SIZE.width,

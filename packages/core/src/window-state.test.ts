@@ -3,6 +3,7 @@ import {
   DEFAULT_WINDOW_SIZE,
   MIN_WINDOW_SIZE,
   resolveWindowBounds,
+  centerInWorkArea,
   type Rect,
   type WindowState,
 } from "./window-state.js";
@@ -140,5 +141,50 @@ describe("resolveWindowBounds", () => {
     const result = resolveWindowBounds(state({ x: null, y: 100 }), [PRIMARY]);
     expect("x" in result).toBe(false);
     expect("y" in result).toBe(false);
+  });
+
+  test("mixed landscape + portrait displays of equal area clamp to a single work area, not a mix of both", () => {
+    // PRIMARY (1920x1080) and a portrait display (1080x1920) have equal area;
+    // mixing max-width with max-height would wrongly allow 1920x1920. Ties
+    // break to the first work area in array order.
+    const portrait: Rect = { x: 1920, y: 0, width: 1080, height: 1920 };
+    const result = resolveWindowBounds(
+      state({ x: null, y: null, width: 99999, height: 99999 }),
+      [PRIMARY, portrait],
+    );
+    expect(result.width).toBe(PRIMARY.width);
+    expect(result.height).toBe(PRIMARY.height);
+  });
+
+  test("a strictly larger portrait work area is chosen over a smaller landscape one", () => {
+    const portrait: Rect = { x: 1920, y: 0, width: 1200, height: 1920 };
+    const result = resolveWindowBounds(
+      state({ x: null, y: null, width: 99999, height: 99999 }),
+      [PRIMARY, portrait],
+    );
+    expect(result.width).toBe(portrait.width);
+    expect(result.height).toBe(portrait.height);
+  });
+});
+
+describe("centerInWorkArea", () => {
+  test("centers exactly within an origin-anchored area with even remainders", () => {
+    const area: Rect = { x: 0, y: 0, width: 1920, height: 1080 };
+    expect(centerInWorkArea(1280, 800, area)).toEqual({ x: 320, y: 140 });
+  });
+
+  test("rounds an odd remainder", () => {
+    // (1921 - 1280) / 2 = 320.5 -> rounds to 321; (801 - 800) / 2 = 0.5 -> 1
+    // (Math.round half-up).
+    const area: Rect = { x: 0, y: 0, width: 1921, height: 801 };
+    expect(centerInWorkArea(1280, 800, area)).toEqual({ x: 321, y: 1 });
+  });
+
+  test("offsets by a non-origin work area", () => {
+    const area: Rect = { x: 1920, y: 0, width: 1080, height: 1920 };
+    expect(centerInWorkArea(800, 600, area)).toEqual({
+      x: 1920 + Math.round((1080 - 800) / 2),
+      y: Math.round((1920 - 600) / 2),
+    });
   });
 });
