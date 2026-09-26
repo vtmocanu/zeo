@@ -29,8 +29,8 @@ const FUNC = /\b(?:rgba?|hsla?|hwb|lab|lch|oklab|oklch|color)\(/gi;
 // lowercased, as CSS keywords are case-insensitive.
 const NAMED_COLORS = new Set(
   (
-    "canvas canvastext buttonface buttontext fieldtext " +
-    "highlighttext linktext visitedtext activetext graytext marktext " +
+    "canvas canvastext buttonface buttontext field fieldtext highlight " +
+    "highlighttext mark linktext visitedtext activetext graytext marktext " +
     "accentcolor accentcolortext selecteditem selecteditemtext " +
     "aliceblue antiquewhite aqua aquamarine azure beige bisque black " +
     "blanchedalmond blue blueviolet brown burlywood cadetblue chartreuse " +
@@ -81,43 +81,93 @@ function stripComments(source) {
   return source.replace(/\/\*[\s\S]*?\*\//g, (c) => c.replace(/[^\n]/g, " "));
 }
 
+// Properties whose values are author-chosen identifiers, not colors: a name
+// such as `highlight` or `mark` there is an animation or grid-area name.
+const IDENT_PROPERTIES = new Set([
+  "animation",
+  "animation-name",
+  "container-name",
+  "counter-increment",
+  "counter-reset",
+  "grid-area",
+  "grid-column",
+  "grid-column-end",
+  "grid-column-start",
+  "grid-row",
+  "grid-row-end",
+  "grid-row-start",
+  "grid-template-areas",
+  "list-style-type",
+  "transition-property",
+  "view-transition-name",
+  "will-change",
+]);
+
 /**
- * The declaration values on a line, joined by spaces: the text after each
- * `property:` inside a rule body (including one-line `a{color:red}` rules), or
- * a whole indented continuation line of a multi-line value (e.g. a font stack).
- * Selector text and property names are never returned.
+ * Every declaration value in `source` (comments already blanked), with the
+ * line each character sits on. Tracks braces across lines, so selectors,
+ * at-rule preludes and property names are never returned, while a value that
+ * wraps over several lines (a font stack, a multi-layer shadow) is.
  */
-function valueText(line) {
-  const opened = line.includes("{");
-  const body = (opened ? line.slice(line.lastIndexOf("{") + 1) : line).split("}")[0];
+function declarationValues(source) {
   const values = [];
-  for (const part of body.split(";")) {
-    const declaration = /^\s*[\w-]+\s*:(.*)$/.exec(part);
-    if (declaration) values.push(declaration[1]);
-    // A continuation line may also close the rule (`    red; }`): only the
-    // text before the `}` is in `body`, so it is still a value. But an
-    // indented line that is itself a selector-list continuation (e.g.
-    // `  mark,` or `  mark {` ahead of a multi-line selector list) is not a
-    // declaration value, so it must not be scanned for named colors.
-    else if (!opened && /^\s+\S/.test(part) && !/[,{]\s*$/.test(part)) values.push(part);
+  // Block kinds on the brace stack: "group" holds rules (`@media`, `@supports`,
+  // the top level), "rule" holds declarations.
+  const stack = ["group"];
+  let text = "";
+  let lines = [];
+  let line = 1;
+  const flushDeclaration = () => {
+    const colon = text.indexOf(":");
+    if (stack.at(-1) === "rule" && colon !== -1) {
+      const property = text.slice(0, colon).trim().toLowerCase();
+      if (!IDENT_PROPERTIES.has(property)) {
+        values.push({ text: text.slice(colon + 1), lines: lines.slice(colon + 1) });
+      }
+    }
+    text = "";
+    lines = [];
+  };
+  for (const char of source) {
+    if (char === "{") {
+      const prelude = text.trim();
+      text = "";
+      lines = [];
+      stack.push(
+        /^@(media|supports|layer|container|document|scope)\b/i.test(prelude) ? "group" : "rule",
+      );
+    } else if (char === "}") {
+      flushDeclaration();
+      if (stack.length > 1) stack.pop();
+    } else if (char === ";") {
+      flushDeclaration();
+    } else {
+      text += char;
+      lines.push(line);
+    }
+    if (char === "\n") line += 1;
   }
-  return values.join(" ");
+  return values;
 }
 
 function findings(file) {
-  const lines = stripComments(readFileSync(file, "utf8")).split("\n");
+  const source = stripComments(readFileSync(file, "utf8"));
   const found = [];
-  lines.forEach((line, index) => {
-    const report = (match) => found.push({ line: index + 1, match });
-    for (const m of line.matchAll(HEX)) report(m[0]);
-    for (const m of line.matchAll(FUNC)) report(m[0]);
-    // Named colors only count in declaration values, so selectors such as
-    // `.tab-item` or `:hover` and property names never trip the check.
-    for (const m of valueText(line).replace(STRING, "").matchAll(IDENT)) {
-      if (NAMED_COLORS.has(m[0].toLowerCase())) report(m[0]);
-    }
+  source.split("\n").forEach((line, index) => {
+    for (const m of line.matchAll(HEX)) found.push({ line: index + 1, match: m[0] });
+    for (const m of line.matchAll(FUNC)) found.push({ line: index + 1, match: m[0] });
   });
-  return found;
+  // Named colors only count in declaration values, so selectors such as
+  // `.tab-item` or `:hover` and property names never trip the check.
+  for (const value of declarationValues(source)) {
+    const scanned = value.text.replace(STRING, (s) => " ".repeat(s.length));
+    for (const m of scanned.matchAll(IDENT)) {
+      if (NAMED_COLORS.has(m[0].toLowerCase())) {
+        found.push({ line: value.lines[m.index], match: m[0] });
+      }
+    }
+  }
+  return found.sort((a, b) => a.line - b.line);
 }
 
 let isDirectory = false;
