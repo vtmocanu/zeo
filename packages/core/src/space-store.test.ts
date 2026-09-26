@@ -815,6 +815,20 @@ describe("SpaceStore.defaultProfileId", () => {
     const restored = SpaceStore.fromPersisted(store.toPersisted());
     expect(restored.defaultProfileId).toBe("default");
   });
+
+  test("resolves to the default profile even when it is not first in order", () => {
+    const store = makeStore();
+    const work = store.createProfile("Work");
+    const state = store.toPersisted();
+    // Put "Work" ahead of the default profile in the persisted order.
+    state.profiles = state.profiles.map((p) => ({
+      ...p,
+      position: p.id === work.id ? 0 : 1,
+    }));
+    const restored = SpaceStore.fromPersisted(state);
+    expect(restored.profiles()[0].id).toBe(work.id);
+    expect(restored.defaultProfileId).toBe("default");
+  });
 });
 
 describe("SpaceStore.createProfile", () => {
