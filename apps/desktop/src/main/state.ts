@@ -92,6 +92,8 @@ export interface RuntimeState {
   blockingBroadcastTimer: Timer;
   quickBrowse: QuickBrowseState;
   isDefaultBrowser: boolean;
+  /** App version string (PRD 8.1 §7), read once via app.getVersion() at launch. */
+  appVersion: string;
   quickBrowseWindow: BrowserWindow | null;
   quickBrowsePageView: WebContentsView | null;
   quickBrowseSession: Electron.Session | null;
@@ -178,6 +180,7 @@ export const runtime: RuntimeState = {
   blockingBroadcastTimer: null,
   quickBrowse: null,
   isDefaultBrowser: false,
+  appVersion: "",
   quickBrowseWindow: null,
   quickBrowsePageView: null,
   quickBrowseSession: null,

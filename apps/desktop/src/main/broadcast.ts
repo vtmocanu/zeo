@@ -35,6 +35,7 @@ export function fullSnapshot(): TabsState {
     // startup and after browser.setDefault).
     quickBrowse: runtime.quickBrowse,
     isDefaultBrowser: runtime.isDefaultBrowser,
+    appVersion: runtime.appVersion,
     layout: runtime.layout,
     update: runtime.update,
   };

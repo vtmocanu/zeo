@@ -1,6 +1,6 @@
 {
   "name": "zeo",
-  "version": "0.0.26",
+  "version": "0.0.27",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@11.25.0",
@@ -14,11 +14,14 @@
     "build": "pnpm -r run build",
     "e2e": "pnpm --filter @zeo/e2e run e2e",
     "dev": "pnpm -r --parallel run dev",
-    "format": "prettier --write ."
+    "format": "prettier --write .",
+    "package": "pnpm build && node scripts/package.mjs",
+    "release:check": "pnpm --filter @zeo/core run build && node scripts/release-check.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.0",
     "@types/node": "^24.5.2",
+    "@zeo/core": "workspace:*",
     "eslint": "^10.0.0",
     "eslint-config-prettier": "^10.1.8",
     "prettier": "^3.6.2",

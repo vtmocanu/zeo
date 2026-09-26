@@ -7,7 +7,12 @@
  */
 
 /** The stable identifier of every settings section, in registry order. */
-export type SettingsSectionId = "general" | "blocking" | "profiles" | "history";
+export type SettingsSectionId =
+  | "general"
+  | "blocking"
+  | "profiles"
+  | "history"
+  | "about";
 
 /** One settings section: its stable {@link SettingsSectionId} and human title. */
 export interface SettingsSection {
@@ -25,12 +30,13 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   { id: "blocking", title: "Blocking" },
   { id: "profiles", title: "Profiles" },
   { id: "history", title: "History" },
+  { id: "about", title: "About" },
 ];
 
 /**
  * The section after `id` in {@link SETTINGS_SECTIONS} order, pure index math;
- * clamped at the last section (no wrap), so `nextSection("history")` is
- * `"history"`.
+ * clamped at the last section (no wrap), so `nextSection("about")` is
+ * `"about"`.
  */
 export function nextSection(id: SettingsSectionId): SettingsSectionId {
   const index = SETTINGS_SECTIONS.findIndex((section) => section.id === id);
