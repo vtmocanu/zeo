@@ -9,7 +9,24 @@ milestone, a minor bump only for very large breakthroughs.
 
 ## [Unreleased]
 
+## [0.0.26] - 2026-09-26
+
 ### Added
+
+- zeo can now be packaged for macOS: `pnpm package` builds an ad-hoc signed
+  Apple Silicon (arm64) `zeo.app` plus `zeo-<version>-arm64.dmg` and `.zip` in
+  `release/`, stamped with the root `package.json` version. There is no
+  Developer ID signing or notarization, so a build downloaded through a browser
+  needs a right-click → Open on first launch.
+
+- A tag-driven release workflow (`docs/release/release.yml.template`, with
+  `docs/release/README.md` for a maintainer to commit it): pushing a `v*` tag
+  that matches the `package.json` version runs lint, typecheck, build, test, and
+  package on macOS, smoke-checks the bundle, and publishes a GitHub Release
+  with the dmg, zip, `SHA256SUMS`, and this changelog's section as its notes.
+  `pnpm release:check` is the local pre-flight check before tagging.
+
+- Settings has a new About section showing the running zeo version.
 
 - zeo now reopens its main window at the size, position, and maximized state it
   had when you last quit. A saved position that no longer lands on any connected
