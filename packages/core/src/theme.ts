@@ -246,6 +246,62 @@ function minContrast(candidate: Rgb, grounds: Rgb[]): number {
   return Math.min(...grounds.map((ground) => contrastRatio(candidate, ground)));
 }
 
+/**
+ * Alpha-composite `overlay` (at `alpha`) over `background`, using the
+ * *rounded* integer channel values for both colors — i.e. the same
+ * channels that `rgba()` above actually emits into `rgb(r g b / a)`
+ * strings. Backgrounds like `--surface-raised` are rendered as their own
+ * CSS layer sitting on top of an integer-channel color, so compositing
+ * against the unrounded float would silently diverge from what actually
+ * renders in the browser.
+ */
+function compositeOver(overlay: Rgb, alpha: number, background: Rgb): Rgb {
+  const bg = background.map((c) => Math.round(Math.min(255, Math.max(0, c)))) as unknown as Rgb;
+  const ov = overlay.map((c) => Math.round(Math.min(255, Math.max(0, c)))) as unknown as Rgb;
+  return [0, 1, 2].map((i) => ov[i] * alpha + bg[i] * (1 - alpha)) as unknown as Rgb;
+}
+
+/**
+ * The four backgrounds secondary text can sit on for each window ground:
+ * the ground itself, and the ground with `--surface-raised`,
+ * `--surface-hover` and `--fill-subtle` composited over it.
+ */
+function windowBackgrounds(
+  grounds: Rgb[],
+  ink: Rgb,
+  isInkDark: boolean,
+  isDark: boolean,
+): Rgb[] {
+  const raisedAlpha = isInkDark ? 0.8 : 0.15;
+  const hoverAlpha = isDark ? 0.1 : 0.08;
+  const subtleAlpha = isDark ? 0.09 : 0.06;
+  const backgrounds: Rgb[] = [];
+  for (const ground of grounds) {
+    backgrounds.push(ground);
+    backgrounds.push(compositeOver(WHITE, raisedAlpha, ground));
+    backgrounds.push(compositeOver(ink, hoverAlpha, ground));
+    backgrounds.push(compositeOver(ink, subtleAlpha, ground));
+  }
+  return backgrounds;
+}
+
+/**
+ * The popover backgrounds secondary popover text can sit on: the popover
+ * base, and the base with `--popover-well`, `--popover-hover` and
+ * `--control-raised` composited over it.
+ */
+function popoverBackgrounds(popoverBase: Rgb, popoverInk: Rgb, isDark: boolean): Rgb[] {
+  const wellAlpha = 0.035;
+  const hoverAlpha = 0.07;
+  const controlRaisedAlpha = isDark ? 0.14 : 1;
+  return [
+    popoverBase,
+    compositeOver(popoverInk, wellAlpha, popoverBase),
+    compositeOver(popoverInk, hoverAlpha, popoverBase),
+    compositeOver(WHITE, controlRaisedAlpha, popoverBase),
+  ];
+}
+
 function clampIntensity(raw: number): number {
   if (Number.isNaN(raw)) return 0;
   return clamp01(raw);
@@ -294,6 +350,7 @@ const DANGER: Record<Appearance, Rgb> = {
 interface InternalReport extends ThemeReport {
   isInkDark: boolean;
   danger: Rgb;
+  inkOnDanger: Rgb;
   inkOnAccent: Rgb;
   popoverInk: Rgb;
   popoverSecondaryInk: Rgb;
@@ -334,14 +391,18 @@ function computeInternalReport(theme: SpaceTheme | null, appearance: Appearance)
   const ink = isInkDark ? INK_DARK : INK_LIGHT;
   const inkContrast = isInkDark ? darkMin : lightMin;
 
-  // Ink secondary: mix the average ground toward the ink until 4.5:1.
+  // Ink secondary: mix the average ground toward the ink until the
+  // candidate holds 4.5:1 against every window background — each ground,
+  // plus each ground with --surface-raised, --surface-hover and
+  // --fill-subtle composited over it.
   const avgGround = average(grounds);
+  const windowBgs = windowBackgrounds(grounds, ink, isInkDark, appearance === "dark");
   let inkSecondary = ink;
-  let inkSecondaryContrast = minContrast(ink, grounds);
+  let inkSecondaryContrast = minContrast(ink, windowBgs);
   for (let step = 56; step <= 100; step += 2) {
     const m = step / 100;
     const candidate = mix(avgGround, ink, m);
-    const candidateContrast = minContrast(candidate, grounds);
+    const candidateContrast = minContrast(candidate, windowBgs);
     if (candidateContrast >= 4.5) {
       inkSecondary = candidate;
       inkSecondaryContrast = candidateContrast;
@@ -370,20 +431,30 @@ function computeInternalReport(theme: SpaceTheme | null, appearance: Appearance)
   const inkOnAccent =
     contrastRatio(WHITE, accent) >= contrastRatio(INK_DARK, accent) ? WHITE : INK_DARK;
 
-  // Popover ink.
+  // Popover ink. Secondary: mix the popover base toward the popover ink
+  // until the candidate holds 4.5:1 against every popover background —
+  // the base, plus the base with --popover-well, --popover-hover and
+  // --control-raised composited over it.
   const popoverInk = appearance === "light" ? INK_DARK : INK_LIGHT;
+  const popoverBgs = popoverBackgrounds(popoverBase, popoverInk, appearance === "dark");
   let popoverSecondaryInk = popoverInk;
-  let popoverSecondaryContrast = contrastRatio(popoverInk, popoverBase);
+  let popoverSecondaryContrast = minContrast(popoverInk, popoverBgs);
   for (let step = 50; step <= 100; step += 2) {
     const m = step / 100;
     const candidate = mix(popoverBase, popoverInk, m);
-    const candidateContrast = contrastRatio(candidate, popoverBase);
+    const candidateContrast = minContrast(candidate, popoverBgs);
     if (candidateContrast >= 4.5) {
       popoverSecondaryInk = candidate;
       popoverSecondaryContrast = candidateContrast;
       break;
     }
   }
+
+  // Ink on danger: white or the dark ink, whichever has higher contrast
+  // on the danger color.
+  const danger = DANGER[appearance];
+  const inkOnDanger =
+    contrastRatio(WHITE, danger) >= contrastRatio(INK_DARK, danger) ? WHITE : INK_DARK;
 
   return {
     grounds,
@@ -395,7 +466,8 @@ function computeInternalReport(theme: SpaceTheme | null, appearance: Appearance)
     accentContrast,
     popoverSecondaryContrast,
     isInkDark,
-    danger: DANGER[appearance],
+    danger,
+    inkOnDanger,
     inkOnAccent,
     popoverInk,
     popoverSecondaryInk,
@@ -480,7 +552,7 @@ export function themeTokens(
     "--ink-on-accent": toHex(report.inkOnAccent),
     "--focus-ring": toHex(report.accent),
     "--danger": toHex(report.danger),
-    "--ink-on-danger": "#ffffff",
+    "--ink-on-danger": toHex(report.inkOnDanger),
     "--surface-popover": rgba(report.popoverBase, 0.94),
     "--ink-popover": toHex(report.popoverInk),
     "--ink-popover-secondary": toHex(report.popoverSecondaryInk),

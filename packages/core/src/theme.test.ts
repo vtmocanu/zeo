@@ -12,6 +12,11 @@ import {
   type Appearance,
 } from "./theme.js";
 
+function hexToRgb(hex: string): [number, number, number] {
+  const n = parseInt(hex.slice(1), 16);
+  return [(n >> 16) & 0xff, (n >> 8) & 0xff, n & 0xff];
+}
+
 describe("oklchToRgb", () => {
   test("white and black", () => {
     const white = oklchToRgb(1, 0, 0).map(Math.round);
@@ -79,6 +84,13 @@ describe("themeTokens sweep", () => {
           expect(report.inkSecondaryContrast).toBeGreaterThanOrEqual(4.5);
           expect(report.accentContrast).toBeGreaterThanOrEqual(3);
           expect(report.popoverSecondaryContrast).toBeGreaterThanOrEqual(4.5);
+
+          const tokens = themeTokens(t, appearance);
+          const dangerContrast = contrastRatio(
+            hexToRgb(tokens["--ink-on-danger"]),
+            hexToRgb(tokens["--danger"]),
+          );
+          expect(dangerContrast).toBeGreaterThanOrEqual(4.5);
         });
       }
     }
@@ -162,11 +174,11 @@ describe("null-theme golden values", () => {
       "--surface-card": "#ffffff",
       "--hairline": "rgb(26 26 31 / 0.12)",
       "--ink-primary": "#1a1a1f",
-      "--ink-secondary": "#69696e",
+      "--ink-secondary": "#5d5d61",
       "--accent": "#585dd4",
       "--ink-on-accent": "#ffffff",
       "--danger": "#cc2827",
-      "--ink-popover-secondary": "#6f6f73",
+      "--ink-popover-secondary": "#66666a",
     });
   });
 
@@ -176,11 +188,11 @@ describe("null-theme golden values", () => {
       "--surface-card": "#1b1b1f",
       "--hairline": "rgb(245 245 247 / 0.12)",
       "--ink-primary": "#f5f5f7",
-      "--ink-secondary": "#97979a",
+      "--ink-secondary": "#b1b1b3",
       "--accent": "#96a2ff",
       "--ink-on-accent": "#1a1a1f",
       "--danger": "#f66d67",
-      "--ink-popover-secondary": "#959598",
+      "--ink-popover-secondary": "#b9b9bc",
     });
   });
 });
