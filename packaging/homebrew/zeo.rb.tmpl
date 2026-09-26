@@ -1,0 +1,40 @@
+cask "zeo" do
+  version "{{VERSION}}"
+  sha256 "{{SHA256}}"
+
+  url "{{URL}}"
+  name "zeo"
+  desc "Keyboard-first, workspace-centric browser for macOS"
+  homepage "https://github.com/vtmocanu/zeo"
+
+  depends_on arch: :arm64
+
+  app "zeo.app"
+
+  zap trash: [
+    "~/Library/Application Support/zeo",
+    "~/Library/Caches/zeo",
+    "~/Library/Logs/zeo",
+    "~/Library/Preferences/com.zeo.browser.plist",
+    "~/Library/Saved Application State/com.zeo.browser.savedState",
+  ]
+
+  caveats <<~EOS
+    zeo is distributed as an ad-hoc signed build — it carries no Apple
+    Developer ID signature and is not notarized. Install it with
+    --no-quarantine so macOS Gatekeeper does not block the first launch:
+
+      brew install --cask vtmocanu/tap/zeo --no-quarantine
+
+    If zeo was installed without --no-quarantine, the first launch is
+    blocked with "zeo can't be opened because Apple cannot check it for
+    malicious software." Open it once via Finder (right-click zeo.app →
+    Open), or clear the quarantine attribute:
+
+      xattr -dr com.apple.quarantine "/Applications/zeo.app"
+
+    zeo is Homebrew-managed here, so update it with:
+
+      brew upgrade --cask zeo
+  EOS
+end

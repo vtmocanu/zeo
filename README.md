@@ -29,8 +29,30 @@ pnpm dev
 
 ## Installation
 
-Planned: Homebrew cask via the `vtmocanu/tap` tap (repository
-`vtmocanu/homebrew-tap`) once the first release ships.
+Add the tap and install with Homebrew:
+
+```sh
+brew tap vtmocanu/tap
+brew install --cask vtmocanu/tap/zeo --no-quarantine
+```
+
+Upgrade: `brew upgrade --cask zeo`.
+
+Uninstall: `brew uninstall --cask zeo`; to also remove app data:
+`brew uninstall --cask --zap zeo`.
+
+zeo ships as an ad-hoc signed build — no Apple Developer ID signature and no
+notarization — so `--no-quarantine` is required: without it macOS Gatekeeper
+blocks the first launch ("zeo can't be opened because Apple cannot check it
+for malicious software"). With `--no-quarantine`, zeo launches directly on
+first run. If you installed without it, recover by right-clicking zeo.app in
+Finder and choosing Open once, or by clearing the quarantine attribute:
+
+```sh
+xattr -dr com.apple.quarantine "/Applications/zeo.app"
+```
+
+Apple Silicon (arm64) only.
 
 ## License
 

@@ -13,9 +13,9 @@ the release workflow:
 1. Copy `docs/release/release.yml.template` to `.github/workflows/release.yml`
    and commit it by hand.
 2. Confirm the `HOMEBREW_TAP_TOKEN` repository/organization Actions secret
-   exists (a fine-grained PAT scoped to `vtmocanu/homebrew-tap`). This is
-   needed by PRD 8.2's Homebrew cask job, appended later — 8.1's workflow
-   never reads it and uses only the built-in `GITHUB_TOKEN`.
+   exists (a fine-grained PAT scoped to `vtmocanu/homebrew-tap`,
+   `contents: write` there only). It is used by the `publish-cask` job below;
+   a missing secret fails that job fast, before it clones the tap.
 3. Add a tag-protection rule (or ruleset) restricting who may push `v*` tags
    to release maintainers. A pushed `v*` tag triggers a `contents: write`
    release build, so tag authorization is a release prerequisite, not
@@ -55,8 +55,30 @@ which:
 7. Creates the GitHub Release **last** — `gh release create` on the pushed
    tag, so any earlier failure means no Release is published.
 
-PRD 8.2 appends a `cask` job (`needs: [release]`) that renders and pushes the
-Homebrew cask to `vtmocanu/homebrew-tap`; that job is not part of 8.1.
+The `publish-cask` job runs after `release` (`needs: [release]`) on
+`ubuntu-latest`, with `contents: read` on this repo — it only checks out the
+cask template and render script and downloads `SHA256SUMS` from the Release.
+It reads the arm64 dmg's digest out of `SHA256SUMS`, renders
+`packaging/homebrew/zeo.rb.tmpl` with `packaging/homebrew/render.mjs` (which
+fails closed on a bad sha256, a version that does not match `package.json`, a
+url missing the version, or template placeholder drift), then pushes
+`Casks/zeo.rb` to `vtmocanu/homebrew-tap` as `zeo-release-bot` with commit
+message `zeo <version>`. It is idempotent — if the tap already carries an
+identical cask for that version it commits and pushes nothing — fails fast on
+a missing `HOMEBREW_TAP_TOKEN`, and fails (never force-pushes) if the tap
+advanced concurrently. It never writes to this repository.
+
+Note: the `publish-cask` job is delivered only in this template; per #20 it
+still needs a human to commit `.github/workflows/release.yml` before it runs,
+and the first publish to the tap is blocked on that same issue.
+
+## Checking the cask locally
+
+`pnpm cask:check` runs the render script's unit tests, renders
+`packaging/homebrew/zeo.rb.tmpl` against a committed fixture, and, when
+Homebrew is installed, runs `brew style --cask` on the rendered cask. When
+Homebrew is not installed it prints "Homebrew not found; skipping brew style
+check" and exits `0`.
 
 ## Hardening to consider before activating
 
@@ -81,6 +103,9 @@ committed file matches the spec unless you choose otherwise):
   packaged app keeps Electron defaults (e.g. `ELECTRON_RUN_AS_NODE`). Consider
   disabling `runAsNode`, `enableNodeOptionsEnvironmentVariable`, and
   `enableNodeCliInspectArguments`.
+- `publish-cask` already runs with `contents: read` on this repo, applying the
+  split-build-from-publish pattern above to the cask job, so no further change
+  is needed there.
 
 ## Local packaging on macOS
 
@@ -112,9 +137,14 @@ Anyway (older macOS also accepts a right-click → Open), or clear the attribute
 xattr -dr com.apple.quarantine /path/to/zeo.app
 ```
 
-The intended install path for end users is PRD 8.2's
-`brew install --cask … --no-quarantine`, which installs the app without the
-quarantine attribute so Gatekeeper never blocks it. That cask is not shipped
-by 8.1.
+The intended install path for end users is Homebrew:
+
+```sh
+brew install --cask vtmocanu/tap/zeo --no-quarantine
+```
+
+which installs the app without the quarantine attribute so Gatekeeper never
+blocks it — see the README's [Installation](../../README.md#installation)
+section.
 
 `release/` is git-ignored; packaging artifacts are never committed.
