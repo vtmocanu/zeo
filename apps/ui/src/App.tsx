@@ -592,6 +592,7 @@ export function App() {
     },
     quickBrowse: null,
     isDefaultBrowser: false,
+    appVersion: "",
     layout: SINGLE_LAYOUT,
   });
   const [showArchived, setShowArchived] = useState(false);

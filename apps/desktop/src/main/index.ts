@@ -39,6 +39,10 @@ app.on("open-url", (event, url) => {
   handleExternalLink(url);
 });
 
+// App version (PRD 8.1 §7), read once at module load so every snapshot carries
+// the same value for the process lifetime.
+runtime.appVersion = app.getVersion();
+
 app.whenReady().then(async () => {
   // Restore from disk if a prior session was persisted; otherwise start empty and
   // let createWindow seed the first tab.
