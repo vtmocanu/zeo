@@ -60,7 +60,7 @@ async function viewWindow(app: ElectronApplication, urlSubstring: string): Promi
     for (const w of app.windows()) {
       try {
         if (w.url().includes(urlSubstring)) {
-          return w;
+          return await followAppearance(w);
         }
       } catch {
         // A navigating WebContentsView can momentarily lose its execution
@@ -93,10 +93,28 @@ async function launch(userDataDir: string): Promise<{ app: ElectronApplication; 
     },
   });
   const sidebar = await sidebarWindow(app);
-  return { app, sidebar };
+  return { app, sidebar: await followAppearance(sidebar) };
 }
 
 /** Force the process-wide appearance through Electron's `nativeTheme`. */
+/**
+ * On macOS, `nativeTheme.themeSource` drives Chromium's `prefers-color-scheme`
+ * in every renderer. On Linux (the xvfb CI job) Electron updates
+ * `nativeTheme.shouldUseDarkColors` but the renderers' media query never
+ * flips, so there the same scheme is also emulated on each page under test.
+ * That still exercises what zeo owns: a `prefers-color-scheme` change
+ * re-coloring an open surface without a reload.
+ */
+const EMULATE_COLOR_SCHEME = process.platform !== "darwin";
+let emulatedScheme: "light" | "dark" | null = null;
+const surfaces = new Set<Page>();
+
+async function followAppearance(page: Page): Promise<Page> {
+  surfaces.add(page);
+  if (EMULATE_COLOR_SCHEME) await page.emulateMedia({ colorScheme: emulatedScheme });
+  return page;
+}
+
 async function setThemeSource(
   app: ElectronApplication,
   source: "light" | "dark" | "system",
@@ -104,6 +122,12 @@ async function setThemeSource(
   await app.evaluate(({ nativeTheme }, s) => {
     nativeTheme.themeSource = s;
   }, source);
+  emulatedScheme = source === "system" ? null : source;
+  if (EMULATE_COLOR_SCHEME) {
+    for (const page of surfaces) {
+      if (!page.isClosed()) await page.emulateMedia({ colorScheme: emulatedScheme });
+    }
+  }
 }
 
 /**
