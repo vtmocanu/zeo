@@ -149,4 +149,34 @@ describe("check-css-tokens.mjs", () => {
     expect(stderr).toBe("");
     expect(status).toBe(0);
   });
+
+  test("an unterminated string ends at the newline", () => {
+    const dir = makeTempDir();
+    writeFileSync(
+      join(dir, "bad-unterminated.css"),
+      '.a { content: "oops; }\n.b { color: red; }\n',
+    );
+
+    const { status, stderr } = run(dir);
+    expect(status).toBe(1);
+    expect(stderr).toMatch(/bad-unterminated\.css:2: literal color "red"/);
+  });
+
+  test("an escaped CRLF inside a string continues it", () => {
+    const dir = makeTempDir();
+    writeFileSync(join(dir, "bad-crlf.css"), '.a { content: "x\\\r\ny"; } .b { color: red; }\r\n');
+
+    const { status, stderr } = run(dir);
+    expect(status).toBe(1);
+    expect(stderr).toMatch(/bad-crlf\.css:2: literal color "red"/);
+  });
+
+  test("color words inside a string with an escaped newline are ignored", () => {
+    const dir = makeTempDir();
+    writeFileSync(join(dir, "string.css"), '.a::before { content: "a\\\n red"; }\n');
+
+    const { status, stderr } = run(dir);
+    expect(stderr).toBe("");
+    expect(status).toBe(0);
+  });
 });

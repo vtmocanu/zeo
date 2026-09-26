@@ -69,7 +69,7 @@ const NAMED_COLORS = new Set(
 // properties such as `--ink-primary` never match), not a class, id or pseudo
 // selector, and not a function name.
 const IDENT = /(?<![\w.#:-])[a-z]+(?![\w-]|\()|(?<![\w-])-webkit-focus-ring-color(?![\w-])/gi;
-const STRING = /"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'/g;
+const STRING = /"(?:[^"\\\n]|\\[\s\S])*"|'(?:[^'\\\n]|\\[\s\S])*'/g;
 
 /** Recursively list *.css files under `dir`, skipping tokens.css. */
 function cssFiles(dir) {
@@ -165,10 +165,12 @@ function declarationValues(source) {
     if (quote) {
       // Braces and semicolons inside a string are part of the value.
       if (char === "\\") {
-        text += char + (source[i + 1] ?? "");
-        lines.push(line, line);
-        i += 1;
-        if (source[i] === "\n") line += 1;
+        // An escaped newline (LF or CRLF) continues the string.
+        const escaped = source.startsWith("\r\n", i + 1) ? "\r\n" : (source[i + 1] ?? "");
+        text += char + escaped;
+        for (let k = 0; k <= escaped.length; k += 1) lines.push(line);
+        i += escaped.length;
+        if (escaped.endsWith("\n")) line += 1;
         continue;
       }
       // A string ends at its closing quote, or (unterminated) at the newline.
