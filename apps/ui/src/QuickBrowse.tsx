@@ -1,4 +1,6 @@
 import { useEffect, useState } from "react";
+import type { CSSProperties } from "react";
+import { QUICK_BROWSE_CHROME_HEIGHT } from "@zeo/core";
 import type { TabsState } from "@zeo/core";
 import "./App.css";
 
@@ -73,7 +75,14 @@ export function QuickBrowse() {
   const quickBrowse = state?.quickBrowse ?? null;
 
   return (
-    <div className="quick-browse" data-testid="quick-browse">
+    <div
+      className="quick-browse"
+      data-testid="quick-browse"
+      // The bar's height comes from core's layout constant (the page view starts
+      // exactly there), exposed to App.css as a custom property. The cast is only
+      // because React's CSSProperties does not declare custom properties.
+      style={{ "--quick-browse-chrome-height": `${QUICK_BROWSE_CHROME_HEIGHT}px` } as CSSProperties}
+    >
       <div className="quick-browse__meta">
         {quickBrowse !== null && (
           <span className="quick-browse__title" data-testid="quick-browse-title">

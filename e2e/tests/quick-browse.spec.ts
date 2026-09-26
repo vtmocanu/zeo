@@ -456,6 +456,11 @@ async function waitForDebouncedSave(): Promise<void> {
 // so nothing reaches the network and the suite stays deterministic under headless
 // xvfb with one worker. Assertions poll slice-specific state (quickBrowse.state(),
 // tabs.list()) rather than a global broadcast counter, which unrelated pushes flake.
+// Mirrors @zeo/core's QUICK_BROWSE_CHROME_HEIGHT (packages/core/src/layout.ts):
+// the page view starts at this y, so the chrome bar must fit above it. Redeclared
+// because e2e deliberately does not depend on @zeo/core.
+const QUICK_BROWSE_CHROME_HEIGHT = 44;
+
 test.describe("PRD 7.2 quick-browse window (offline)", () => {
   // Scenario 1 (OPEN): the handoff opens exactly one quick-browse window on the
   // link, the pure entry reports the link, the untrusted page view loaded it, and
@@ -653,6 +658,40 @@ test.describe("PRD 7.2 quick-browse window (offline)", () => {
       });
       expect(await quickBrowseState(sidebar)).toBeNull();
       expect(quickBrowseChromeCount(app)).toBe(0);
+    } finally {
+      await app.close();
+      await server.close();
+      rmSync(userDataDir, { recursive: true, force: true });
+    }
+  });
+
+  // Chrome layout: the chrome renderer fills the whole window and main lays the
+  // page view over it from y = QUICK_BROWSE_CHROME_HEIGHT down, so every visible
+  // chrome control must sit inside the top bar or the page view covers it.
+  // Playwright clicks the chrome's DOM directly, so only a geometry check sees it.
+  test("the chrome's title and action buttons lie within the top chrome bar", async () => {
+    const userDataDir = mkdtempSync(join(tmpdir(), "zeo-qb-"));
+    const server = await startFixtureServer();
+    const { app } = await launch(userDataDir);
+    try {
+      const fixture = `${server.base}/qb-layout.html?probe=qb-layout`;
+      await emitOpenUrl(app, fixture);
+      const chrome = await waitForQuickBrowseChrome(app);
+      await expect(chrome.getByTestId("quick-browse-title")).toBeVisible({ timeout: 15_000 });
+
+      for (const testId of [
+        "quick-browse-title",
+        "quick-browse-promote",
+        "quick-browse-promote-space",
+        "quick-browse-dismiss",
+      ]) {
+        const box = await chrome.getByTestId(testId).boundingBox();
+        expect(box, `${testId} has a bounding box`).not.toBeNull();
+        expect(box!.y, `${testId} top`).toBeGreaterThanOrEqual(0);
+        expect(box!.y + box!.height, `${testId} bottom`).toBeLessThanOrEqual(
+          QUICK_BROWSE_CHROME_HEIGHT,
+        );
+      }
     } finally {
       await app.close();
       await server.close();
