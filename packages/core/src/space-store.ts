@@ -239,6 +239,23 @@ export class SpaceStore {
     return this.profileOrder.map((id) => ({ ...this.profilesById.get(id)! }));
   }
 
+  /**
+   * The id of the seeded default profile — the profile every space references
+   * until a real profile is assigned, and the one legacy default-session tabs
+   * belong to. Returns {@link DEFAULT_PROFILE_ID} whenever the store holds that
+   * profile, regardless of its position in {@link profiles} order (a restored
+   * snapshot may place it anywhere); {@link renameProfile} changes only the
+   * name, never the id. Falls back to the first profile in order only when the
+   * store has no profile with that id (a hand-built store), and to
+   * {@link DEFAULT_PROFILE_ID} for a zero-profile store.
+   */
+  get defaultProfileId(): string {
+    if (this.profilesById.has(DEFAULT_PROFILE_ID)) {
+      return DEFAULT_PROFILE_ID;
+    }
+    return this.profileOrder[0] ?? DEFAULT_PROFILE_ID;
+  }
+
   // --- Space lifecycle -----------------------------------------------------
 
   /**

@@ -794,6 +794,43 @@ describe("SpaceStore profile seeding", () => {
   });
 });
 
+describe("SpaceStore.defaultProfileId", () => {
+  test("a fresh store resolves to the seeded default profile id", () => {
+    const store = makeStore();
+    expect(store.defaultProfileId).toBe("default");
+    expect(store.defaultProfileId).toBe(store.profiles()[0].id);
+  });
+
+  test("stays the default even after other profiles are created", () => {
+    const store = makeStore();
+    store.createProfile("Work");
+    store.createProfile("Personal 2");
+    // Created profiles append after the default, so it remains first.
+    expect(store.defaultProfileId).toBe("default");
+  });
+
+  test("survives a persistence round trip", () => {
+    const store = makeStore();
+    store.createProfile("Work");
+    const restored = SpaceStore.fromPersisted(store.toPersisted());
+    expect(restored.defaultProfileId).toBe("default");
+  });
+
+  test("resolves to the default profile even when it is not first in order", () => {
+    const store = makeStore();
+    const work = store.createProfile("Work");
+    const state = store.toPersisted();
+    // Put "Work" ahead of the default profile in the persisted order.
+    state.profiles = state.profiles.map((p) => ({
+      ...p,
+      position: p.id === work.id ? 0 : 1,
+    }));
+    const restored = SpaceStore.fromPersisted(state);
+    expect(restored.profiles()[0].id).toBe(work.id);
+    expect(restored.defaultProfileId).toBe("default");
+  });
+});
+
 describe("SpaceStore.createProfile", () => {
   test("creates a profile with a fresh id from the id factory", () => {
     const store = makeStore();
