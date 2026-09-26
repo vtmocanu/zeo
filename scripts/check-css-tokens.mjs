@@ -69,7 +69,7 @@ const NAMED_COLORS = new Set(
 // properties such as `--ink-primary` never match), not a class, id or pseudo
 // selector, and not a function name.
 const IDENT = /(?<![\w.#:-])[a-z]+(?![\w-]|\()|(?<![\w-])-webkit-focus-ring-color(?![\w-])/gi;
-const STRING = /"(?:[^"\\\n]|\\[\s\S])*"|'(?:[^'\\\n]|\\[\s\S])*'/g;
+const STRING = /"(?:[^"\\\n]|\\(?:\r\n|[\s\S]))*"|'(?:[^'\\\n]|\\(?:\r\n|[\s\S]))*'/g;
 
 /** Recursively list *.css files under `dir`, skipping tokens.css. */
 function cssFiles(dir) {
@@ -90,7 +90,7 @@ function stripComments(source) {
   // Strings are matched first and kept, so a `/*` inside `content: "/*"` does
   // not open a comment.
   return source.replace(
-    /"(?:[^"\\\n]|\\[\s\S])*"|'(?:[^'\\\n]|\\[\s\S])*'|\/\*[\s\S]*?\*\//g,
+    /"(?:[^"\\\n]|\\(?:\r\n|[\s\S]))*"|'(?:[^'\\\n]|\\(?:\r\n|[\s\S]))*'|\/\*[\s\S]*?\*\//g,
     (c) => (c.startsWith("/*") ? c.replace(/[^\n]/g, " ") : c),
   );
 }

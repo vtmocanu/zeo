@@ -179,4 +179,18 @@ describe("check-css-tokens.mjs", () => {
     expect(stderr).toBe("");
     expect(status).toBe(0);
   });
+
+  test("an escaped CRLF inside a string keeps its color words and comment markers inert", () => {
+    const dir = makeTempDir();
+    writeFileSync(join(dir, "ok-crlf.css"), '.a::before { content: "a\\\r\n red"; }\r\n');
+    writeFileSync(
+      join(dir, "bad-crlf-comment.css"),
+      '.a { content: "/*\\\r\n"; color: red; }\r\n.b { content: "*/"; }\r\n',
+    );
+
+    const { status, stderr } = run(dir);
+    expect(status).toBe(1);
+    expect(stderr).not.toContain("ok-crlf.css");
+    expect(stderr).toMatch(/bad-crlf-comment\.css:2: literal color "red"/);
+  });
 });

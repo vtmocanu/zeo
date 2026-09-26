@@ -80,6 +80,9 @@ async function viewWindow(app: ElectronApplication, urlSubstring: string): Promi
  * root). Mirrors zoom.spec.ts's launch.
  */
 async function launch(userDataDir: string): Promise<{ app: ElectronApplication; sidebar: Page }> {
+  // Each launch starts at the system appearance with no tracked surfaces.
+  surfaces.clear();
+  emulatedScheme = null;
   const app = await electron.launch({
     args: [
       mainPath,
@@ -96,14 +99,15 @@ async function launch(userDataDir: string): Promise<{ app: ElectronApplication; 
   return { app, sidebar: await followAppearance(sidebar) };
 }
 
-/** Force the process-wide appearance through Electron's `nativeTheme`. */
 /**
  * On macOS, `nativeTheme.themeSource` drives Chromium's `prefers-color-scheme`
  * in every renderer. On Linux (the xvfb CI job) Electron updates
  * `nativeTheme.shouldUseDarkColors` but the renderers' media query never
  * flips, so there the same scheme is also emulated on each page under test.
  * That still exercises what zeo owns: a `prefers-color-scheme` change
- * re-coloring an open surface without a reload.
+ * re-coloring an open surface without a reload. It cannot show that a surface
+ * created while the appearance is forced starts in it; only the macOS job
+ * proves that.
  */
 const EMULATE_COLOR_SCHEME = process.platform !== "darwin";
 let emulatedScheme: "light" | "dark" | null = null;
@@ -115,14 +119,19 @@ async function followAppearance(page: Page): Promise<Page> {
   return page;
 }
 
+/**
+ * Force the process-wide appearance through Electron's `nativeTheme`, and
+ * emulate the same scheme on every tracked surface where that does not reach
+ * the renderers.
+ */
 async function setThemeSource(
   app: ElectronApplication,
   source: "light" | "dark" | "system",
 ): Promise<void> {
+  emulatedScheme = source === "system" ? null : source;
   await app.evaluate(({ nativeTheme }, s) => {
     nativeTheme.themeSource = s;
   }, source);
-  emulatedScheme = source === "system" ? null : source;
   if (EMULATE_COLOR_SCHEME) {
     for (const page of surfaces) {
       if (!page.isClosed()) await page.emulateMedia({ colorScheme: emulatedScheme });
