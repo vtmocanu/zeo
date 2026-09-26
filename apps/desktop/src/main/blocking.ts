@@ -20,6 +20,7 @@ import {
   writeBlockingEnabled,
   readSearchEngine,
   readQuickBrowseExternal,
+  readUpdateSettings,
   readAllowlist,
   insertAllowlistHost,
   deleteAllowlistHost,
@@ -239,6 +240,7 @@ export async function startBlocking(): Promise<void> {
     runtime.settings = {
       searchEngine: readSearchEngine(),
       quickBrowseExternal: readQuickBrowseExternal(),
+      updateCheckEnabled: readUpdateSettings().enabled,
     };
     // Cache the OS-default-browser flag once at startup; it is re-read only after
     // browser.setDefault, never in fullSnapshot (which runs on every broadcast).

@@ -570,6 +570,7 @@ export function App() {
     settings: {
       searchEngine: DEFAULT_SEARCH_ENGINE_ID,
       quickBrowseExternal: true,
+      updateCheckEnabled: true,
     },
     settingsSection: "general",
     settingsSectionNonce: 0,
@@ -593,6 +594,14 @@ export function App() {
     quickBrowse: null,
     isDefaultBrowser: false,
     layout: SINGLE_LAYOUT,
+    update: {
+      enabled: true,
+      origin: "direct",
+      available: null,
+      checking: false,
+      lastCheckedAt: null,
+      error: null,
+    },
   });
   const [showArchived, setShowArchived] = useState(false);
   const [now, setNow] = useState(() => Date.now());
