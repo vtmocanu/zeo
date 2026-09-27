@@ -1,10 +1,15 @@
 import {
+  createContext,
+  useContext,
   useEffect,
   useRef,
   useState,
   type ChangeEvent,
   type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
 } from "react";
+import { createPortal } from "react-dom";
 import {
   SETTINGS_SECTIONS,
   activeSpaceTheme,
@@ -14,6 +19,7 @@ import {
   HISTORY_RETENTION_MS,
   HOMEBREW_UPGRADE_COMMAND,
   formatRelativeTime,
+  settingsSheetRect,
   type BlockingState,
   type Profile,
   type Space,
@@ -22,7 +28,31 @@ import {
   type TabsState,
   type UpdateState,
 } from "@zeo/core";
+import { ConfirmDialog } from "./ConfirmDialog.js";
+import { Icon, type IconName } from "./icons.js";
 import { useThemeTokens } from "./theme.js";
+import { useWindowSize } from "./WindowChrome.js";
+
+/** The line icon beside each section in the sheet's nav. */
+const SECTION_ICONS: Record<SettingsSectionId, IconName> = {
+  general: "sliders",
+  blocking: "shield",
+  profiles: "grid",
+  history: "history",
+  about: "info",
+};
+
+/**
+ * The sheet element, so a section can portal a {@link ConfirmDialog} into it:
+ * the dialog's scrim then covers the whole sheet rather than the scrolling
+ * panel it is declared in. Null until the sheet mounts.
+ */
+const SheetContext = createContext<HTMLElement | null>(null);
+
+/** Runs the `settings.close` command (main hides the view). */
+function closeSettings(): void {
+  void window.zeo?.commands.run("settings.close").catch(() => {});
+}
 
 /**
  * The settings surface, mounted in its own WebContentsView (selected by
@@ -45,8 +75,11 @@ import { useThemeTokens } from "./theme.js";
  * row selects and highlights it. An unrelated broadcast (unchanged nonce) never
  * disturbs the user's local selection.
  *
- * `Escape` anywhere in the view dispatches the `settings.close` command; the
- * `Cmd+,` toggle is owned by the main process, not here.
+ * PRD 10.6 makes the view cover the whole window: it paints a scrim and
+ * centers the sheet at `settingsSheetRect(innerWidth, innerHeight)`. `Escape`
+ * anywhere in the view (unless a dialog consumed it), the close button and a
+ * click on the scrim dispatch the `settings.close` command; the `Cmd+,` toggle
+ * is owned by the main process, not here.
  */
 export function Settings() {
   // The mirrored application state; null until the first snapshot/broadcast lands.
@@ -113,10 +146,11 @@ export function Settings() {
     // body, an ancestor of the container) a descendant handler would never see
     // the keydown. The settings view owns the whole renderer, so a window
     // listener only fires while this WebContentsView has focus.
+    // An Escape a dialog already handled (preventDefault) is not a close.
     const onEscape = (event: KeyboardEvent): void => {
-      if (event.key === "Escape") {
+      if (event.key === "Escape" && !event.defaultPrevented) {
         event.preventDefault();
-        void window.zeo?.commands.run("settings.close").catch(() => {});
+        closeSettings();
       }
     };
     window.addEventListener("keydown", onEscape);
@@ -140,6 +174,10 @@ export function Settings() {
       const inSectionNav =
         target instanceof HTMLElement &&
         target.closest(".settings__sections") !== null;
+      // Keys inside a confirmation dialog belong to the dialog.
+      if (target instanceof Element && target.closest('[role="alertdialog"]') !== null) {
+        return;
+      }
       if (event.key === "ArrowDown") {
         if (inTextField) {
           return;
@@ -173,55 +211,107 @@ export function Settings() {
     setHighlight(id);
   };
 
-  return (
-    <div className="settings" data-testid="settings">
-      <nav className="settings__sections" aria-label="Settings sections">
-        {SETTINGS_SECTIONS.map((section) => {
-          const classes = ["settings__section-item"];
-          if (section.id === selected) {
-            classes.push(
-              "settings__section-item--selected",
-              "settings__section-item--active",
-            );
-          }
-          if (section.id === highlight) {
-            classes.push("settings__section-item--highlight");
-          }
-          return (
-            <button
-              key={section.id}
-              type="button"
-              className={classes.join(" ")}
-              data-testid={`settings-section-${section.id}`}
-              aria-current={section.id === selected ? "page" : undefined}
-              onClick={() => onSelectSection(section.id)}
-            >
-              {section.title}
-            </button>
-          );
-        })}
-      </nav>
+  const { width, height } = useWindowSize();
+  const sheet = settingsSheetRect(width, height);
+  const [sheetElement, setSheetElement] = useState<HTMLDivElement | null>(null);
+  // Set on a pointerdown that lands on the scrim itself, so a text selection
+  // started inside the sheet and released over the scrim does not close it.
+  const pressedScrimRef = useRef(false);
 
-      <div className="settings__panel">
-        {selected === "general" && state !== null && (
-          <GeneralSection
-            searchEngine={state.settings.searchEngine}
-            quickBrowseExternal={state.settings.quickBrowseExternal}
-            isDefaultBrowser={state.isDefaultBrowser}
-            updateCheckEnabled={state.settings.updateCheckEnabled}
-            update={state.update}
-          />
-        )}
-        {selected === "blocking" && state !== null && (
-          <BlockingSection blocking={state.blocking} />
-        )}
-        {selected === "profiles" && state !== null && (
-          <ProfilesSection profiles={state.profiles} spaces={state.spaces} />
-        )}
-        {selected === "history" && <HistorySection />}
-        {selected === "about" && state !== null && (
-          <AboutSection version={state.appVersion} />
-        )}
+  const onScrimPointerDown = (event: ReactPointerEvent<HTMLDivElement>): void => {
+    pressedScrimRef.current = event.target === event.currentTarget;
+  };
+
+  const onScrimClick = (event: ReactMouseEvent<HTMLDivElement>): void => {
+    const pressed = pressedScrimRef.current;
+    pressedScrimRef.current = false;
+    if (pressed && event.target === event.currentTarget) {
+      closeSettings();
+    }
+  };
+
+  const selectedTitle =
+    SETTINGS_SECTIONS.find((section) => section.id === selected)?.title ?? "";
+
+  return (
+    <div
+      className="settings-scrim"
+      data-testid="settings-scrim"
+      onPointerDown={onScrimPointerDown}
+      onClick={onScrimClick}
+    >
+      <div
+        ref={setSheetElement}
+        className="settings"
+        data-testid="settings"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Settings"
+        style={{ left: sheet.x, top: sheet.y, width: sheet.width, height: sheet.height }}
+      >
+        <SheetContext.Provider value={sheetElement}>
+          <nav className="settings__sections" aria-label="Settings sections">
+            <div className="settings__nav-title">Settings</div>
+            {SETTINGS_SECTIONS.map((section) => {
+              const classes = ["settings__section-item"];
+              if (section.id === selected) {
+                classes.push(
+                  "settings__section-item--selected",
+                  "settings__section-item--active",
+                );
+              }
+              if (section.id === highlight) {
+                classes.push("settings__section-item--highlight");
+              }
+              return (
+                <button
+                  key={section.id}
+                  type="button"
+                  className={classes.join(" ")}
+                  data-testid={`settings-section-${section.id}`}
+                  aria-current={section.id === selected ? "page" : undefined}
+                  onClick={() => onSelectSection(section.id)}
+                >
+                  <Icon name={SECTION_ICONS[section.id]} />
+                  <span>{section.title}</span>
+                </button>
+              );
+            })}
+          </nav>
+
+          <div className="settings__panel">
+            <button
+              type="button"
+              className="settings__close"
+              data-testid="settings-close"
+              aria-label="Close settings"
+              title="Close settings"
+              onClick={closeSettings}
+            >
+              <Icon name="close" size={14} />
+            </button>
+            <h2 className="settings__panel-title">{selectedTitle}</h2>
+            {selected === "general" && state !== null && (
+              <GeneralSection
+                searchEngine={state.settings.searchEngine}
+                quickBrowseExternal={state.settings.quickBrowseExternal}
+                isDefaultBrowser={state.isDefaultBrowser}
+                updateCheckEnabled={state.settings.updateCheckEnabled}
+                update={state.update}
+              />
+            )}
+            {selected === "blocking" && state !== null && (
+              <BlockingSection blocking={state.blocking} />
+            )}
+            {selected === "profiles" && state !== null && (
+              <ProfilesSection profiles={state.profiles} spaces={state.spaces} />
+            )}
+            {selected === "history" && <HistorySection />}
+            {selected === "about" && state !== null && (
+              <AboutSection version={state.appVersion} />
+            )}
+          </div>
+        </SheetContext.Provider>
       </div>
     </div>
   );
@@ -359,11 +449,16 @@ function GeneralSection({
   return (
     <>
       <section className="settings__group">
-        <h2 className="settings__group-title">Default search engine</h2>
-
-        <div className="settings__radio-group" role="radiogroup">
+        <h3 className="settings__group-title" id="settings-search-engine-title">
+          Default search engine
+        </h3>
+        <div
+          className="settings__well settings__radio-group"
+          role="radiogroup"
+          aria-labelledby="settings-search-engine-title"
+        >
           {SEARCH_ENGINES.map((engine) => (
-            <label key={engine.id} className="settings__radio-label">
+            <label key={engine.id} className="settings__row settings__radio-label">
               <input
                 type="radio"
                 className="settings__radio"
@@ -389,10 +484,10 @@ function GeneralSection({
       </section>
 
       <section className="settings__group">
-        <h2 className="settings__group-title">Updates</h2>
-
-        <div className="settings__row">
-          <label className="settings__toggle-label">
+        <h3 className="settings__group-title">Updates</h3>
+        <div className="settings__well">
+          <label className="settings__row settings__toggle-label">
+            <span className="settings__row-label">Check for updates automatically</span>
             <input
               type="checkbox"
               className="settings__checkbox"
@@ -400,8 +495,61 @@ function GeneralSection({
               checked={updateCheckEnabled}
               onChange={onToggleUpdateCheck}
             />
-            <span>Check for updates automatically</span>
           </label>
+
+          <div className="settings__row">
+            <span className="settings__status" data-testid="update-status">
+              {updateStatus}
+            </span>
+            <button
+              type="button"
+              className="settings__button"
+              data-testid="update-check-now"
+              disabled={update.checking}
+              onClick={onCheckNow}
+            >
+              Check now
+            </button>
+          </div>
+
+          {update.available !== null &&
+            (update.origin === "homebrew" ? (
+              <div className="settings__row settings__update-action">
+                <code>{HOMEBREW_UPGRADE_COMMAND}</code>
+                <button
+                  type="button"
+                  className="settings__button"
+                  data-testid="update-copy-command"
+                  onClick={onCopyUpgradeCommand}
+                >
+                  Copy
+                </button>
+              </div>
+            ) : (
+              <div className="settings__row settings__update-action">
+                <button
+                  type="button"
+                  className="settings__button settings__button--primary"
+                  data-testid="update-open-release"
+                  onClick={onOpenRelease}
+                >
+                  Open release page
+                </button>
+              </div>
+            ))}
+
+          {update.available !== null && (
+            <div className="settings__row">
+              <button
+                type="button"
+                className="settings__link-button"
+                data-testid="update-dismiss"
+                onClick={onDismissUpdate}
+              >
+                Dismiss this version
+              </button>
+            </div>
+          )}
         </div>
         {updateCheckError !== null && (
           <p
@@ -412,68 +560,13 @@ function GeneralSection({
             {updateCheckError}
           </p>
         )}
-
-        <div className="settings__row">
-          <button
-            type="button"
-            className="settings__button"
-            data-testid="update-check-now"
-            disabled={update.checking}
-            onClick={onCheckNow}
-          >
-            Check now
-          </button>
-        </div>
-
-        <p className="settings__status" data-testid="update-status">
-          {updateStatus}
-        </p>
-
-        {update.available !== null &&
-          (update.origin === "homebrew" ? (
-            <div className="settings__row settings__update-action">
-              <code>{HOMEBREW_UPGRADE_COMMAND}</code>
-              <button
-                type="button"
-                className="settings__button"
-                data-testid="update-copy-command"
-                onClick={onCopyUpgradeCommand}
-              >
-                Copy
-              </button>
-            </div>
-          ) : (
-            <div className="settings__row settings__update-action">
-              <button
-                type="button"
-                className="settings__button"
-                data-testid="update-open-release"
-                onClick={onOpenRelease}
-              >
-                Open release page
-              </button>
-            </div>
-          ))}
-
-        {update.available !== null && (
-          <div className="settings__row">
-            <button
-              type="button"
-              className="settings__link-button"
-              data-testid="update-dismiss"
-              onClick={onDismissUpdate}
-            >
-              Dismiss this version
-            </button>
-          </div>
-        )}
       </section>
 
       <section className="settings__group">
-        <h2 className="settings__group-title">External links</h2>
-
-        <div className="settings__row">
-          <label className="settings__toggle-label">
+        <h3 className="settings__group-title">External links</h3>
+        <div className="settings__well">
+          <label className="settings__row settings__toggle-label">
+            <span className="settings__row-label">Open external links in quick-browse</span>
             <input
               type="checkbox"
               className="settings__checkbox"
@@ -481,8 +574,22 @@ function GeneralSection({
               checked={quickBrowseExternal}
               onChange={onToggleQuickBrowse}
             />
-            <span>Open external links in quick-browse</span>
           </label>
+
+          <div className="settings__row">
+            <span className="settings__row-label">Default browser</span>
+            <button
+              type="button"
+              className="settings__button"
+              data-testid="settings-default-browser"
+              disabled={isDefaultBrowser}
+              onClick={onSetDefaultBrowser}
+            >
+              {isDefaultBrowser
+                ? "zeo is your default browser"
+                : "Set zeo as default browser"}
+            </button>
+          </div>
         </div>
         {quickBrowseError !== null && (
           <p
@@ -493,20 +600,6 @@ function GeneralSection({
             {quickBrowseError}
           </p>
         )}
-
-        <div className="settings__row">
-          <button
-            type="button"
-            className="settings__button"
-            data-testid="settings-default-browser"
-            disabled={isDefaultBrowser}
-            onClick={onSetDefaultBrowser}
-          >
-            {isDefaultBrowser
-              ? "zeo is your default browser"
-              : "Set zeo as default browser"}
-          </button>
-        </div>
         {defaultBrowserError !== null && (
           <p
             className="settings__error"
@@ -613,10 +706,10 @@ function BlockingSection({ blocking }: { blocking: BlockingState }) {
   return (
     <>
       <section className="settings__group">
-        <h2 className="settings__group-title">Content blocking</h2>
-
-        <div className="settings__row">
-          <label className="settings__toggle-label">
+        <h3 className="settings__group-title">Ads and trackers</h3>
+        <div className="settings__well">
+          <label className="settings__row settings__toggle-label">
+            <span className="settings__row-label">Block ads and trackers</span>
             <input
               type="checkbox"
               className="settings__checkbox"
@@ -624,8 +717,34 @@ function BlockingSection({ blocking }: { blocking: BlockingState }) {
               checked={enabled}
               onChange={onToggle}
             />
-            <span>Block ads and trackers</span>
           </label>
+
+          <div className="settings__row">
+            <span className="settings__label">Filter lists</span>
+            <span
+              className="settings__value"
+              data-testid="settings-blocking-version"
+            >
+              {listVersion}
+            </span>
+            {refreshResult !== null && (
+              <span
+                className="settings__value settings__value--muted"
+                data-testid="settings-blocking-refresh-result"
+              >
+                {refreshResult}
+              </span>
+            )}
+            <button
+              type="button"
+              className="settings__button settings__row-end"
+              data-testid="settings-blocking-refresh"
+              disabled={refreshPending}
+              onClick={onRefresh}
+            >
+              Update now
+            </button>
+          </div>
         </div>
         {blockingError !== null && (
           <p
@@ -636,58 +755,33 @@ function BlockingSection({ blocking }: { blocking: BlockingState }) {
             {blockingError}
           </p>
         )}
-
-        <div className="settings__row">
-          <span className="settings__label">Filter lists</span>
-          <span
-            className="settings__value"
-            data-testid="settings-blocking-version"
-          >
-            {listVersion}
-          </span>
-          <button
-            type="button"
-            className="settings__button"
-            data-testid="settings-blocking-refresh"
-            disabled={refreshPending}
-            onClick={onRefresh}
-          >
-            Update now
-          </button>
-          {refreshResult !== null && (
-            <span
-              className="settings__value settings__value--muted"
-              data-testid="settings-blocking-refresh-result"
-            >
-              {refreshResult}
-            </span>
-          )}
-        </div>
       </section>
 
       <section className="settings__group">
-        <h2 className="settings__group-title">Allowlisted sites</h2>
-
-        <div className="settings__row">
-          <input
-            type="text"
-            className="settings__input"
-            data-testid="settings-allowlist-input"
-            placeholder="example.com"
-            spellCheck={false}
-            autoComplete="off"
-            value={allowInput}
-            onChange={(event) => setAllowInput(event.target.value)}
-            onKeyDown={onInputKeyDown}
-          />
-          <button
-            type="button"
-            className="settings__button"
-            data-testid="settings-allowlist-add"
-            onClick={onAdd}
-          >
-            Add
-          </button>
+        <h3 className="settings__group-title">Allowlisted sites</h3>
+        <div className="settings__well">
+          <div className="settings__row">
+            <input
+              type="text"
+              className="settings__input"
+              data-testid="settings-allowlist-input"
+              aria-label="Site to allow"
+              placeholder="example.com"
+              spellCheck={false}
+              autoComplete="off"
+              value={allowInput}
+              onChange={(event) => setAllowInput(event.target.value)}
+              onKeyDown={onInputKeyDown}
+            />
+            <button
+              type="button"
+              className="settings__button"
+              data-testid="settings-allowlist-add"
+              onClick={onAdd}
+            >
+              Add
+            </button>
+          </div>
         </div>
         {allowError !== null && (
           <p
@@ -700,15 +794,17 @@ function BlockingSection({ blocking }: { blocking: BlockingState }) {
         )}
 
         {allowlist.length === 0 ? (
-          <p className="settings__empty" data-testid="settings-allowlist-empty">
-            No allowlisted sites
-          </p>
+          <div className="settings__well settings__well--list">
+            <p className="settings__row settings__empty" data-testid="settings-allowlist-empty">
+              No allowlisted sites
+            </p>
+          </div>
         ) : (
-          <ul className="settings__allowlist">
+          <ul className="settings__well settings__well--list settings__allowlist">
             {allowlist.map((host) => (
               <li
                 key={host}
-                className="settings__allowlist-row"
+                className="settings__row settings__allowlist-row"
                 data-testid="settings-allowlist-row"
                 data-host={host}
               >
@@ -820,116 +916,130 @@ function ProfilesSection({
   };
 
   return (
-    <section className="settings__group">
-      <h2 className="settings__group-title">Profiles</h2>
-
-      {profiles.length === 0 ? (
-        <p className="settings__empty">No profiles</p>
-      ) : (
-        <ul className="settings__profiles">
-          {profiles.map((profile) => {
-            const usage = spaces.filter(
-              (space) => space.profileId === profile.id,
-            ).length;
-            const name = drafts[profile.id] ?? profile.name;
-            return (
-              <li
-                key={profile.id}
-                className="settings__profile-row"
-                data-profile={profile.id}
-              >
-                <input
-                  type="text"
-                  className="settings__input"
-                  data-testid={`settings-profile-name-${profile.id}`}
-                  spellCheck={false}
-                  autoComplete="off"
-                  value={name}
-                  onChange={(event) =>
-                    setDrafts((current) => ({
-                      ...current,
-                      [profile.id]: event.target.value,
-                    }))
-                  }
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") {
-                      event.preventDefault();
-                      onRename(profile);
+    <>
+      <section className="settings__group">
+        <h3 className="settings__group-title">Your profiles</h3>
+        {profiles.length === 0 ? (
+          <div className="settings__well">
+            <p className="settings__row settings__empty">No profiles</p>
+          </div>
+        ) : (
+          <ul className="settings__well settings__profiles">
+            {profiles.map((profile) => {
+              const usage = spaces.filter(
+                (space) => space.profileId === profile.id,
+              ).length;
+              const name = drafts[profile.id] ?? profile.name;
+              return (
+                <li
+                  key={profile.id}
+                  className="settings__row settings__profile-row"
+                  data-profile={profile.id}
+                >
+                  <input
+                    type="text"
+                    className="settings__input"
+                    data-testid={`settings-profile-name-${profile.id}`}
+                    aria-label={`Name of profile ${profile.id}`}
+                    spellCheck={false}
+                    autoComplete="off"
+                    value={name}
+                    onChange={(event) =>
+                      setDrafts((current) => ({
+                        ...current,
+                        [profile.id]: event.target.value,
+                      }))
                     }
-                  }}
-                />
-                <span className="settings__profile-id" title={profile.id}>
-                  {profile.id}
-                </span>
-                <span className="settings__profile-usage">
-                  {usage} {usage === 1 ? "space" : "spaces"}
-                </span>
-                <button
-                  type="button"
-                  className="settings__button"
-                  data-testid={`settings-profile-rename-${profile.id}`}
-                  onClick={() => onRename(profile)}
-                >
-                  Rename
-                </button>
-                <button
-                  type="button"
-                  className="settings__button settings__button--ghost"
-                  data-testid={`settings-profile-delete-${profile.id}`}
-                  disabled={usage > 0}
-                  onClick={() => onDelete(profile.id)}
-                >
-                  Delete
-                </button>
-              </li>
-            );
-          })}
-        </ul>
-      )}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        onRename(profile);
+                      }
+                    }}
+                  />
+                  <span className="settings__profile-id" title={profile.id}>
+                    {profile.id}
+                  </span>
+                  <span className="settings__profile-usage">
+                    {usage} {usage === 1 ? "space" : "spaces"}
+                  </span>
+                  <button
+                    type="button"
+                    className="settings__button"
+                    data-testid={`settings-profile-rename-${profile.id}`}
+                    onClick={() => onRename(profile)}
+                  >
+                    Rename
+                  </button>
+                  <button
+                    type="button"
+                    className="settings__button settings__button--ghost"
+                    data-testid={`settings-profile-delete-${profile.id}`}
+                    disabled={usage > 0}
+                    title={usage > 0 ? "In use by a space" : undefined}
+                    onClick={() => onDelete(profile.id)}
+                  >
+                    Delete
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </section>
 
-      <div className="settings__row">
-        <input
-          type="text"
-          className="settings__input"
-          data-testid="settings-profile-create-name"
-          placeholder="New profile name"
-          spellCheck={false}
-          autoComplete="off"
-          value={createName}
-          onChange={(event) => setCreateName(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") {
-              event.preventDefault();
-              onCreate();
-            }
-          }}
-        />
-        <button
-          type="button"
-          className="settings__button"
-          data-testid="settings-profile-create"
-          onClick={onCreate}
-        >
-          Create
-        </button>
-      </div>
-    </section>
+      <section className="settings__group">
+        <h3 className="settings__group-title">New profile</h3>
+        <div className="settings__well">
+          <div className="settings__row">
+            <input
+              type="text"
+              className="settings__input"
+              data-testid="settings-profile-create-name"
+              aria-label="New profile name"
+              placeholder="New profile name"
+              spellCheck={false}
+              autoComplete="off"
+              value={createName}
+              onChange={(event) => setCreateName(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  onCreate();
+                }
+              }}
+            />
+            <button
+              type="button"
+              className="settings__button"
+              data-testid="settings-profile-create"
+              onClick={onCreate}
+            >
+              Create
+            </button>
+          </div>
+        </div>
+      </section>
+    </>
   );
 }
 
 /**
  * The history settings body: the fixed retention derived from
  * {@link HISTORY_RETENTION_MS}, the on-demand entry/visit summary from
- * `history.stats()` (read on mount and re-read after a clear), and a two-step
- * clear where only the revealed confirm control calls `history.clear()`.
+ * `history.stats()` (read on mount and re-read after a clear), and a clear
+ * behind a {@link ConfirmDialog}: only the dialog's confirm calls
+ * `history.clear()`. The dialog is portalled into the sheet so its scrim dims
+ * the whole sheet, not just the scrolling panel.
  */
 function HistorySection() {
   // The on-demand stats; null until the first read resolves.
   const [stats, setStats] = useState<{ entries: number; visits: number } | null>(
     null,
   );
-  // Whether the destructive confirm control is revealed.
+  // Whether the confirmation dialog is open.
   const [confirming, setConfirming] = useState(false);
+  const sheet = useContext(SheetContext);
 
   useEffect(() => {
     // History is not broadcast; read the counts on mount.
@@ -937,8 +1047,8 @@ function HistorySection() {
   }, []);
 
   /**
-   * Clears history, then re-reads the counts and dismisses the confirm step. Only
-   * this confirm control clears — the initial button just reveals it.
+   * Clears history, then re-reads the counts and closes the dialog. Only the
+   * dialog's confirm clears; the trigger just opens it.
    */
   const onConfirmClear = (): void => {
     const api = window.zeo;
@@ -956,38 +1066,47 @@ function HistorySection() {
   };
 
   const retentionDays = HISTORY_RETENTION_MS / (24 * 60 * 60 * 1000);
+  const entries = stats?.entries ?? 0;
+  const visits = stats?.visits ?? 0;
 
   return (
     <section className="settings__group">
-      <h2 className="settings__group-title">History</h2>
-
-      <p className="settings__value" data-testid="settings-history-retention">
-        History is kept for {retentionDays} days.
-      </p>
-      <p className="settings__value" data-testid="settings-history-stats">
-        {stats?.entries ?? 0} entries · {stats?.visits ?? 0} visits
-      </p>
-
-      <div className="settings__row">
-        <button
-          type="button"
-          className="settings__button"
-          data-testid="settings-history-clear"
-          onClick={() => setConfirming(true)}
-        >
-          Clear browsing history
-        </button>
-        {confirming && (
+      <h3 className="settings__group-title">Browsing data</h3>
+      <div className="settings__well">
+        <p className="settings__row settings__value" data-testid="settings-history-retention">
+          History is kept for {retentionDays} days.
+        </p>
+        <p className="settings__row settings__value" data-testid="settings-history-stats">
+          {entries} entries · {visits} visits
+        </p>
+        <div className="settings__row">
           <button
             type="button"
-            className="settings__button settings__button--danger"
-            data-testid="settings-history-clear-confirm"
-            onClick={onConfirmClear}
+            className="settings__button settings__button--danger-text"
+            data-testid="settings-history-clear"
+            aria-haspopup="dialog"
+            onClick={() => setConfirming(true)}
           >
-            Confirm clear
+            Clear Browsing History…
           </button>
-        )}
+        </div>
       </div>
+      {confirming &&
+        sheet !== null &&
+        createPortal(
+          <ConfirmDialog
+            title="Clear browsing history?"
+            body={`This removes ${entries} entries and ${visits} visits. It cannot be undone.`}
+            confirmLabel="Clear History"
+            destructive
+            testId="settings-history-clear-dialog"
+            confirmTestId="settings-history-clear-confirm"
+            cancelTestId="settings-history-clear-cancel"
+            onConfirm={onConfirmClear}
+            onCancel={() => setConfirming(false)}
+          />,
+          sheet,
+        )}
     </section>
   );
 }
@@ -1001,17 +1120,21 @@ function HistorySection() {
 function AboutSection({ version }: { version: string }) {
   return (
     <section className="settings__group">
-      <h2 className="settings__group-title">About</h2>
-
-      <div className="settings__row">
-        <span className="settings__label">Product</span>
-        <span className="settings__value">zeo</span>
-      </div>
-      <div className="settings__row">
-        <span className="settings__label">Version</span>
-        <span className="settings__value" data-testid="settings-about-version">
-          {version}
-        </span>
+      <h3 className="settings__group-title">Application</h3>
+      <div className="settings__well">
+        <div className="settings__row">
+          <span className="settings__label">Product</span>
+          <span className="settings__value settings__row-end">zeo</span>
+        </div>
+        <div className="settings__row">
+          <span className="settings__label">Version</span>
+          <span
+            className="settings__value settings__row-end"
+            data-testid="settings-about-version"
+          >
+            {version}
+          </span>
+        </div>
       </div>
     </section>
   );

@@ -1,26 +1,32 @@
-/* Split divider handle ---------------------------------------------------- */
+/* Split divider (PRD 10.6 §6) ------------------------------------------------
 
-/* The draggable gutter between the two split panes, rendered in its own
-   full-viewport WebContentsView (?view=divider) that main sizes and positions
-   in the 8px gap between the two cards. The handle fills that view and is
-   transparent at rest, so the gap shows the window ground between the cards;
-   hover and an active drag wash it in the soft accent. `body` already resets
-   its margin to 0 (base.css), so the handle sits flush to the view edges. */
+   The draggable gutter between the two split panes, rendered in its own
+   transparent WebContentsView (?view=divider) that main places in the 8px gap
+   between the two cards. The handle fills the view and stays transparent, so
+   the gap shows the window ground; only the centered grip paints: a hairline
+   pill at rest, secondary ink on hover, the accent while dragging. */
 .divider-handle {
+  display: grid;
+  place-items: center;
   width: 100%;
   height: 100vh;
-  cursor: col-resize;
   background: transparent;
-  transition: background-color var(--motion-fast) var(--ease-standard);
+  cursor: col-resize;
 }
 
-.divider-handle:hover,
-.divider-handle:active {
-  background: var(--accent-soft);
+.divider-handle__grip {
+  width: 4px;
+  height: 32px;
+  border-radius: 2px;
+  background: var(--hairline);
+  pointer-events: none;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .divider-handle {
-    transition: none;
-  }
+.divider-handle:hover .divider-handle__grip {
+  background: var(--ink-secondary);
+}
+
+.divider-handle--dragging .divider-handle__grip,
+.divider-handle--dragging:hover .divider-handle__grip {
+  background: var(--accent);
 }

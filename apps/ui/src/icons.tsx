@@ -17,12 +17,15 @@ export type IconName =
   | "shield"
   | "shield-off"
   | "chevron-down"
+  | "chevron-up"
   | "arrow"
   | "search"
   | "globe"
   | "grid"
   | "bolt"
-  | "history";
+  | "history"
+  | "sliders"
+  | "info";
 
 const SHIELD_PATH = "M8 2.2 12.8 4v3.7c0 2.8-2 5-4.8 6.1-2.8-1.1-4.8-3.3-4.8-6.1V4z";
 
@@ -59,6 +62,7 @@ const ICON_PATHS: Record<IconName, ReactNode> = {
     </>
   ),
   "chevron-down": <path d="m4 6 4 4 4-4" />,
+  "chevron-up": <path d="m4 10 4-4 4 4" />,
   arrow: <path d="M3 8h10M9.2 4.2 13 8l-3.8 3.8" />,
   search: (
     <>
@@ -85,6 +89,21 @@ const ICON_PATHS: Record<IconName, ReactNode> = {
     <>
       <circle cx="8" cy="8" r="5.6" />
       <path d="M8 4.8V8l2.2 1.4" />
+    </>
+  ),
+  // Three faders, knobs staggered: the General settings section.
+  sliders: (
+    <>
+      <path d="M2.5 4.5H9M12 4.5h1.5M2.5 8H4M7 8h6.5M2.5 11.5h5M10.5 11.5h3" />
+      <circle cx="10.5" cy="4.5" r="1.5" />
+      <circle cx="5.5" cy="8" r="1.5" />
+      <circle cx="9" cy="11.5" r="1.5" />
+    </>
+  ),
+  info: (
+    <>
+      <circle cx="8" cy="8" r="5.6" />
+      <path d="M8 7.4v3.4M8 5.2v.01" />
     </>
   ),
 };

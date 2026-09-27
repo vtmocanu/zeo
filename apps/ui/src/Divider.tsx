@@ -26,6 +26,8 @@ import { clampRatio } from "@zeo/core";
 export function Divider() {
   const [ratio, setRatio] = useState(0.5);
   const [dividableWidth, setDividableWidth] = useState(0);
+  // Mirrors draggingRef for rendering: the grip turns accent while dragging.
+  const [dragging, setDragging] = useState(false);
 
   // Mirror state into refs so the pointer handlers always read the latest values.
   const ratioRef = useRef(ratio);
@@ -64,6 +66,7 @@ export function Divider() {
     startXRef.current = event.clientX;
     startRatioRef.current = ratioRef.current;
     draggingRef.current = true;
+    setDragging(true);
   };
 
   const onPointerMove = (event: ReactPointerEvent<HTMLDivElement>): void => {
@@ -84,6 +87,7 @@ export function Divider() {
   const onPointerUp = (event: ReactPointerEvent<HTMLDivElement>): void => {
     event.currentTarget.releasePointerCapture(event.pointerId);
     draggingRef.current = false;
+    setDragging(false);
   };
 
   // A pointercancel (or an implicit capture loss) ends the drag WITHOUT a
@@ -91,17 +95,20 @@ export function Divider() {
   // a later bare hover-move would move the divider with no press.
   const onDragInterrupted = (): void => {
     draggingRef.current = false;
+    setDragging(false);
   };
 
   return (
     <div
-      className="divider-handle"
+      className={dragging ? "divider-handle divider-handle--dragging" : "divider-handle"}
       data-testid="divider-handle"
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
       onPointerCancel={onDragInterrupted}
       onLostPointerCapture={onDragInterrupted}
-    />
+    >
+      <div className="divider-handle__grip" aria-hidden="true" />
+    </div>
   );
 }

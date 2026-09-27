@@ -34,6 +34,13 @@
   pointer-events: none;
 }
 
+/* Split view (PRD 10.6 §6): the focused pane's card wears a 2px soft-accent
+   ring. It sits outside the card's rect, in the 8px gap and inset that no
+   native view covers, so it stays visible around the page. */
+.window-card--focused {
+  box-shadow: var(--shadow-card), 0 0 0 2px var(--accent-soft);
+}
+
 /* The inset gutter above the card: keeps the window draggable when the
    sidebar, and with it the window row, is collapsed. */
 .window-drag-strip {
