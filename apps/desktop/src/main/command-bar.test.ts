@@ -78,6 +78,7 @@ describe("command-bar module graph", () => {
 describe("command-bar background re-rank and accept remap", () => {
   let tabA: Tab;
   let tabB: Tab;
+  let tabC: Tab;
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -91,9 +92,8 @@ describe("command-bar background re-rank and accept remap", () => {
     });
     tabA = runtime.store.create({ url: "https://a.test", title: "Tab A" });
     tabB = runtime.store.create({ url: "https://b.test", title: "Tab B" });
-    // tabC is created last so it becomes the active tab (its own suggestion
-    // is never asserted on beyond that).
-    runtime.store.create({ url: "https://c.test", title: "Tab C" });
+    // tabC is created last so it becomes the active tab.
+    tabC = runtime.store.create({ url: "https://c.test", title: "Tab C" });
     // The most recently created tab (tabC) is active; new-tab mode's
     // empty-query list is every OTHER open tab, MRU-first: [tabB, tabA].
     runtime.commandContextOf = fakeContext;
@@ -150,6 +150,42 @@ describe("command-bar background re-rank and accept remap", () => {
       tabA.id,
     ]);
     expect(runtime.commandBar.selectedIndex).toBe(0);
+  });
+
+  /**
+   * Swaps the recency of tabA and tabB without changing the list's length:
+   * activating tabA and then tabC again leaves tabC active and makes tabA more
+   * recent than tabB, so new-tab mode's list goes [tabB, tabA] → [tabA, tabB].
+   * A same-length reorder is what tells identity from a clamped index.
+   */
+  function swapRecency(): void {
+    runtime.store.activate(tabA.id);
+    runtime.store.activate(tabC.id);
+  }
+
+  test("a same-length background reorder keeps the selected row by identity, not index", () => {
+    runtime.commandBar.selectedIndex = 1; // tabA in [tabB, tabA]
+
+    swapRecency();
+    refreshCommandState();
+
+    expect(runtime.commandBar.suggestions.map((s) => (s.kind === "tab" ? s.tabId : null))).toEqual([
+      tabA.id,
+      tabB.id,
+    ]);
+    expect(runtime.commandBar.selectedIndex).toBe(0);
+  });
+
+  test("accept(index, oldRevision) after a same-length reorder activates the clicked row, not the row now at that index", () => {
+    const oldRevision = runtime.commandBar.revision; // rendered [tabB, tabA]
+
+    swapRecency();
+    refreshCommandState();
+
+    acceptCommandBar(1, oldRevision); // index 1 was tabA; tabB sits there now
+
+    expect(h.activateTab).toHaveBeenCalledWith(tabA.id);
+    expect(h.activateTab).not.toHaveBeenCalledWith(tabB.id);
   });
 
   test("setQueryCommandBar resets selectedIndex to 0 and empties commandBarPrevious", () => {

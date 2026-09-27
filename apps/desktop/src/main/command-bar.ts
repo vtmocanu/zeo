@@ -411,9 +411,10 @@ export function performSuggestion(s: Suggestion): void {
  * (`navigate`/`search`) also route through {@link submitCommandBar} (which
  * closes the bar itself, so no extra close); a `command` kind runs
  * {@link executeCommand} and then closes, except `tab.new`,
- * `bar.open-location`, and `bar.open-commands`, whose handlers re-open or
- * switch the bar and so are left open; every other kind runs
- * {@link performSuggestion} and then closes.
+ * `bar.open-location`, `bar.open-commands`, `history.open` and
+ * `downloads.open`, whose handlers re-open or switch the bar and so are left
+ * open; every other kind runs {@link performSuggestion} and then closes, except
+ * in `downloads` mode, where the bar stays open.
  *
  * `revision` is the {@link CommandBarState.revision} the renderer rendered the
  * clicked row against. When an explicit `index` is paired with a `revision`, it

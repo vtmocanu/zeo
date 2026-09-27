@@ -12,9 +12,8 @@ function closeCommandBar(): void {
 /**
  * Set by {@link onTabViewFocus} when a tab view steals native focus WHILE the
  * command bar owns it, and read (then cleared) by {@link onOverlayBlur}'s
- * deferred check. The steal fires the overlay's `blur` before the tab view's own
- * `focus` handler runs the refocus, so the flag is how the deferred blur handler
- * learns the blur was a steal rather than a real dismiss.
+ * deferred check, so the deferred blur handler learns the blur was a steal
+ * rather than a real dismiss.
  *
  * Bounded so it can never outlive the focus handoff it was recorded for:
  * {@link onTabViewFocus} also schedules a two-level deferred clear
@@ -27,7 +26,11 @@ function closeCommandBar(): void {
  * therefore run and clear the flag before a same-batch blur check gets to read
  * it; deferring the actual clear to a second level guarantees it always runs
  * AFTER any single-level timer scheduled in the same synchronous batch,
- * regardless of registration order, while a blur arriving only after both
+ * regardless of registration order. When focus and blur land in separate
+ * native tasks far enough apart that the flag has already cleared, the
+ * blur check falls back on `isFocused()`: {@link onTabViewFocus} refocused the
+ * overlay synchronously, so the overlay (or the tab view) still reports focus
+ * unless the window itself lost it. A blur arriving only after both
  * levels have already run (flushed timers, or simply much later) correctly
  * sees `false` and closes normally. Without this bound, a stale `true` from an
  * earlier steal (e.g. one whose own blur never arrived, or arrived and closed
