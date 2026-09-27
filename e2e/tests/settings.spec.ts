@@ -813,8 +813,104 @@ test.describe("PRD 6.5 settings sections + search engine (offline)", () => {
       await expect(error).toHaveAttribute("role", "alert");
       await expect(dialog).toBeVisible();
       await expect(confirm).toBeEnabled();
+      // ConfirmDialog's `useEffect([error])` refocuses Cancel once the inline
+      // error appears, so a failed clear never strands focus on the (still
+      // enabled) Confirm button.
+      await expect(settings.getByTestId("settings-history-clear-cancel")).toBeFocused();
     } finally {
       await app.close();
+      rmSync(userDataDir, { recursive: true, force: true });
+    }
+  });
+
+  // A clear started in one settings session must not touch a later session:
+  // `sessionRef` in HistorySection is bumped on every open/close transition,
+  // and `onConfirmClear`'s continuations compare against it before touching
+  // state. Here the clear is still in flight when settings is closed and
+  // reopened; once the stale promise is released (and rejects), the reopened
+  // session's dialog must show no error, and a freshly opened dialog must be
+  // untouched (no error, Confirm enabled) rather than inheriting the stale
+  // failure.
+  test("a stale clear from a superseded session leaves the reopened dialog untouched", async () => {
+    const userDataDir = mkdtempSync(join(tmpdir(), "zeo-settings-"));
+    const server = await startHistoryFixtureServer();
+    const { app, sidebar } = await launch(userDataDir);
+    try {
+      const tabId = await freshHistory(app, sidebar);
+      await navigateAndRecord(sidebar, tabId, `${server.base}/a.html`, 1);
+
+      // A rejecting `zeo:history:clear` handler gated behind
+      // `__zeoReleaseHistoryClear`, same pattern as the failed-clear test
+      // above, plus a `__zeoHistoryClearReleased` flag the test can poll to
+      // know the rejection has actually been delivered to main before it
+      // asserts anything about the (ignored) renderer-side settle.
+      await app.evaluate(({ ipcMain }) => {
+        const g = globalThis as unknown as {
+          __zeoHistoryClearReleased: boolean;
+          __zeoReleaseHistoryClear?: () => void;
+        };
+        g.__zeoHistoryClearReleased = false;
+        ipcMain.removeHandler("zeo:history:clear");
+        ipcMain.handle("zeo:history:clear", () => {
+          return new Promise((_resolve, reject) => {
+            g.__zeoReleaseHistoryClear = () => {
+              g.__zeoHistoryClearReleased = true;
+              reject(new Error("stale clear"));
+            };
+          });
+        });
+      });
+
+      let settings = await openSettings(app, sidebar, "settings.openHistory");
+      await settings.getByTestId("settings-history-clear").click();
+      await expect(settings.getByTestId("settings-history-clear-dialog")).toBeVisible();
+      await settings.getByTestId("settings-history-clear-confirm").click();
+      // The clear is now in flight (Confirm disabled) when settings closes.
+      await expect(settings.getByTestId("settings-history-clear-confirm")).toBeDisabled();
+
+      // Close settings the same way the close/reopen test does, while the
+      // clear from this (now superseded) session is still pending.
+      await runCommand(sidebar, "settings.close");
+      await expect
+        .poll(() => settingsOpen(sidebar), { message: "expected settings.close to close settings" })
+        .toBe(false);
+
+      settings = await openSettings(app, sidebar, "settings.openHistory");
+      // The dialog is not already open on reopen (a fresh session).
+      await expect(settings.getByTestId("settings-history-clear-dialog")).toHaveCount(0);
+
+      // Release the stale clear now that a newer session is live, and wait
+      // for main to have actually thrown before asserting anything about the
+      // (session-guarded, so ignored) renderer-side settle.
+      await app.evaluate(() => {
+        (globalThis as unknown as { __zeoReleaseHistoryClear?: () => void }).__zeoReleaseHistoryClear?.();
+      });
+      await expect
+        .poll(
+          () =>
+            app.evaluate(
+              () =>
+                (globalThis as unknown as { __zeoHistoryClearReleased: boolean })
+                  .__zeoHistoryClearReleased,
+            ),
+          { message: "expected the stale clear handler to have rejected" },
+        )
+        .toBe(true);
+      // Give the renderer a turn of the event loop to receive and (no-op)
+      // process the stale rejection before asserting its absence.
+      await settings.evaluate(() => new Promise<void>((resolve) => setTimeout(resolve, 50)));
+      await expect(settings.getByTestId("settings-history-clear-dialog-error")).toHaveCount(0);
+
+      // Opening the dialog fresh in this session must show no error and an
+      // enabled Confirm: the stale settle never touched this session's state.
+      await settings.getByTestId("settings-history-clear").click();
+      const reopenedDialog = settings.getByTestId("settings-history-clear-dialog");
+      await expect(reopenedDialog).toBeVisible();
+      await expect(settings.getByTestId("settings-history-clear-dialog-error")).toHaveCount(0);
+      await expect(settings.getByTestId("settings-history-clear-confirm")).toBeEnabled();
+    } finally {
+      await app.close();
+      await server.close();
       rmSync(userDataDir, { recursive: true, force: true });
     }
   });
