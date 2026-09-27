@@ -399,7 +399,7 @@ export class TabStore {
   }
 
   /**
-   * Unpins `id`, appending it to the end of the unpinned group. Throws on an
+   * Unpins `id`, appending it to the end of the today group. Throws on an
    * unknown id. Already-unpinned is a COMPLETE no-op (the record is not moved).
    */
   unpin(id: string): void {
@@ -411,7 +411,7 @@ export class TabStore {
       return;
     }
     record.pinned = false;
-    // Move to the end of the array (= the end of the unpinned group).
+    // Move to the end of the array (= the end of the today group).
     this.tabs.splice(this.tabs.indexOf(record), 1);
     this.tabs.push(record);
   }

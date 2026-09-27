@@ -415,7 +415,9 @@ test.describe("PRD 10.4 sidebar", () => {
     expect(await rejection(sidebar, "favorites.add", created.extra)).toContain(
       `Favorites are full: ${FAVORITES_MAX}`,
     );
-    expect(await rejection(sidebar, "commands.run", "tab.favorite")).not.toBeNull();
+    expect(await rejection(sidebar, "commands.run", "tab.favorite")).toContain(
+      "command disabled in current context",
+    );
     await expect(sidebar.getByTestId("favorite-tile")).toHaveCount(FAVORITES_MAX);
     const after = await readState(sidebar);
     expect(after.favorites).toHaveLength(FAVORITES_MAX);
@@ -502,8 +504,8 @@ test.describe("PRD 10.4 sidebar", () => {
     await expect(tile(sidebar, a)).toHaveClass(/favorite-tile--drop-before/);
     await sidebar.mouse.up();
 
-    // Had the out-of-grid drop moved a to the end ([b, c, a]), this drag would
-    // have produced [a, b, c]; [c, a, b] proves both drops.
+    // The out-of-grid drop is proven ignored by the order check above; this
+    // in-grid drag gives [c, a, b].
     await expect.poll(() => favoriteIds(sidebar)).toEqual([c, a, b]);
     await expect
       .poll(() =>
@@ -586,7 +588,9 @@ test.describe("PRD 10.4 sidebar", () => {
     expect(state.activeTabId === setup.p || state.activeTabId === setup.f).toBe(true);
 
     // Nothing left to clear in this space: the command rejects.
-    expect(await rejection(sidebar, "commands.run", "tabs.clearToday")).not.toBeNull();
+    expect(await rejection(sidebar, "commands.run", "tabs.clearToday")).toContain(
+      "command disabled in current context",
+    );
 
     // The other space's today tab is untouched.
     await sidebar.evaluate(async (id) => {
@@ -637,13 +641,13 @@ test.describe("PRD 10.4 sidebar", () => {
     await expect.poll(async () => Math.round((await boxOf(dot)).width)).toBe(10);
   });
 
-  // Review regression (a25a857): the active item is revealed by scrolling the
+  // The active item is revealed by scrolling the
   // strip only. NOTE: in every layout reachable here (even the 400px minimum
   // window with 12 favorites and the archived panel open, which shrinks) the
   // bottom bar stays inside `.sidebar`, so the pre-fix `scrollIntoView` also
   // leaves `.sidebar` at 0 — this test pins the strip behaviour end to end;
   // `nearestScrollLeft` in Sidebar.test.tsx is what discriminates the fix.
-  test("switching to an off-strip space scrolls only the space strip, never the sidebar", async () => {
+  test("switching to an off-strip space scrolls the strip to reveal the active item", async () => {
     const lastId = await sidebar.evaluate(async () => {
       const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
       let id = "";
