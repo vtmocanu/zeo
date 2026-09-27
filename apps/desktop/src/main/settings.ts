@@ -2,6 +2,7 @@ import { ipcMain, WebContentsView } from "electron";
 import { join } from "node:path";
 import { IPC, CARD_INSET, CARD_RADIUS, cardLeft, settingsBounds, searchEngine } from "@zeo/core";
 import type { Settings, SearchEngineId, SettingsSectionId } from "@zeo/core";
+import { focusTabViewDeliberately } from "./command-bar-focus.js";
 import { writeSearchEngine, writeQuickBrowseExternal } from "./db.js";
 import { runtime, moduleDir } from "./state.js";
 import { broadcast } from "./broadcast.js";
@@ -104,8 +105,9 @@ export function closeSettings(): void {
   runtime.settingsView!.setVisible(false);
   runtime.settingsOpen = false;
   const activeTabId = runtime.store.activeTabId;
-  if (activeTabId !== null && runtime.views.has(activeTabId)) {
-    runtime.views.get(activeTabId)?.webContents.focus();
+  const activeView = activeTabId !== null ? runtime.views.get(activeTabId) : undefined;
+  if (activeView !== undefined) {
+    focusTabViewDeliberately(activeView.webContents);
   } else {
     runtime.win!.webContents.focus();
   }

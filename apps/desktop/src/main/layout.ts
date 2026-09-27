@@ -18,6 +18,7 @@ import {
   layoutsEqual,
 } from "@zeo/core";
 import type { DividerGeometry, PaneSide, Tab, WindowLayout } from "@zeo/core";
+import { focusTabViewDeliberately } from "./command-bar-focus.js";
 import { writeWindowLayout, readWindowLayout } from "./db.js";
 import { runtime, moduleDir, LAYOUT_SAVE_DEBOUNCE_MS } from "./state.js";
 import { broadcast } from "./broadcast.js";
@@ -132,7 +133,7 @@ export function applyLayout(): void {
   if (focusedTabId !== null) {
     const focusedView = runtime.views.get(focusedTabId);
     if (focusedView !== undefined && !focusedView.webContents.isDestroyed()) {
-      focusedView.webContents.focus();
+      focusTabViewDeliberately(focusedView.webContents);
     }
   }
 }
