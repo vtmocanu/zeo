@@ -19,19 +19,47 @@ import {
 import type { CommandBarMode, CommandBarState, Suggestion } from "@zeo/core";
 import { Icon } from "./icons.js";
 
+/** The slice of `window` that {@link subscribeViewportSize} reads. */
+export interface ViewportTarget {
+  readonly innerWidth: number;
+  readonly innerHeight: number;
+  addEventListener(type: "resize", listener: () => void): void;
+  removeEventListener(type: "resize", listener: () => void): void;
+}
+
+/**
+ * Reports `target`'s current size, then every size after a `resize`. Reading
+ * the size at subscribe time catches a resize that fired between the first
+ * render and the effect that subscribes (the overlay grows from the find
+ * region to the full window as the bar opens). Returns the unsubscribe.
+ */
+export function subscribeViewportSize(
+  target: ViewportTarget,
+  onSize: (size: { width: number; height: number }) => void,
+): () => void {
+  const report = (): void => {
+    onSize({ width: target.innerWidth, height: target.innerHeight });
+  };
+  report();
+  target.addEventListener("resize", report);
+  return () => target.removeEventListener("resize", report);
+}
+
 /** Tracks `window.innerWidth` and `innerHeight`, updating on `resize`. */
 function useViewportSize(): { width: number; height: number } {
   const [size, setSize] = useState(() => ({
     width: window.innerWidth,
     height: window.innerHeight,
   }));
-  useEffect(() => {
-    const onResize = (): void => {
-      setSize({ width: window.innerWidth, height: window.innerHeight });
-    };
-    window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
-  }, []);
+  useEffect(
+    () =>
+      subscribeViewportSize(window, (next) => {
+        setSize((prev) =>
+          prev.width === next.width && prev.height === next.height ? prev : next,
+        );
+      }),
+    [],
+  );
   return size;
 }
 
