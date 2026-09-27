@@ -92,7 +92,7 @@ export function ensureDividerView(): void {
  * steals focus from an open command bar, for a layout pass NOT initiated by
  * the user directly acting on the split (e.g. restoreTab, remapSpaceProfile,
  * sweepIdle, createWindow's first layout, or a non-pane tab closing), and for
- * doSetRatio, whose divider drag cannot happen while the full-window command
+ * doSetRatio, whose divider drag cannot start while the full-window command
  * bar is open anyway; `"deliberate"`
  * (via {@link focusTabViewDeliberately}) closes an open command bar first, for
  * the explicit user split/focus ops in this file and {@link activateTab}.

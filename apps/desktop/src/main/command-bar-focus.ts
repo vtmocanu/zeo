@@ -173,9 +173,10 @@ export function onOverlayBlur(): void {
  * caller already knows it means to move focus away from the bar. Closing
  * first here keeps that existing "focusing a tab view closes the bar"
  * behavior, just synchronous and deliberate instead of blur-driven. Use ONLY
- * for a user-initiated focus move; any other layout pass (e.g. idle sweeping
- * unloading a background tab, or a non-pane tab closing) must use {@link focusTabViewPassively} instead so it
- * never steals focus away from an open command bar. Note {@link doUnsplit}
+ * for a user-initiated focus move; any other layout pass (e.g. the idle sweep
+ * archiving a background tab, or a non-pane tab closing) must use
+ * {@link focusTabViewPassively} instead so it never steals focus away from an
+ * open command bar. Note {@link doUnsplit}
  * and a split-collapsing {@link activateTab} pass `"deliberate"` too, but it
  * is a no-op there: the resulting single-mode branch never focuses a view.
  */
@@ -195,9 +196,8 @@ export function focusTabViewDeliberately(wc: Electron.WebContents): void {
  * overlay is shown again. Used by {@link applyLayout} /
  * {@link reconcileAndApply}'s default ("passive") focus pass, so a layout
  * reconcile that was not triggered by a deliberate user split/focus action
- * (e.g. idle sweeping unloading a background tab, or a non-pane tab closing)
- * never closes an open command bar out from
- * under the user.
+ * (e.g. the idle sweep archiving a background tab, or a non-pane tab closing)
+ * never closes an open command bar out from under the user.
  */
 export function focusTabViewPassively(wc: Electron.WebContents): void {
   if (runtime.commandBar.open && runtime.commandBar.surface === "bar") {
