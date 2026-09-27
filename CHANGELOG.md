@@ -20,7 +20,7 @@ milestone, a minor bump only for very large breakthroughs.
 - The sidebar is resizable: drag its right edge (or focus the handle and use
   the arrow keys) to set a width between 200 and 360 px.
 - View ▸ Toggle Sidebar (⌘S) collapses the sidebar and hides the traffic
-  lights. Touching the left edge of the window slides it back in; it hides
+  lights. Touching the left edge of the window brings it back; it hides
   again 400 ms after the pointer leaves, or when the window loses focus.
 - The sidebar width and collapsed state survive a relaunch.
 
