@@ -7,6 +7,9 @@ import { join } from "node:path";
 import { createServer } from "node:http";
 import type { Server, ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
+// PRD 10.5 — the shared command-bar overlay window lookup and the #175 load
+// settle, so the rendered downloads panel is asserted like history.spec does.
+import { commandBarWindow, waitForViewsIdle } from "./helpers/view";
 
 // Absolute path to the built Electron main entry, resolved from this test file
 // (e2e is ESM, so no __dirname). Layout mirrors blocking.spec.ts /
@@ -479,6 +482,8 @@ test.describe("PRD 6.2 §8 downloads (offline)", () => {
         ds.some((d) => d.filename === "report.bin" && d.state === "completed"),
       );
       const completed = items.find((d) => d.filename === "report.bin")!;
+      // Settle every view's load before driving the bar (#175).
+      await waitForViewsIdle(app);
 
       // downloads.open runs the command that opens the bar in downloads mode and
       // leaves it open. Poll for the mode — the command dispatches and broadcasts.
@@ -496,6 +501,24 @@ test.describe("PRD 6.2 §8 downloads (offline)", () => {
       const row = bar.suggestions.find((s) => s.kind === "download");
       expect(row, "expected a download suggestion row in downloads mode").toBeDefined();
       expect(row?.filename).toBe("report.bin");
+
+      // PRD 10.5 — the panel renders downloads mode as ONE "Downloads" group, the
+      // download row shows the filename, and the selected row carries the mode's
+      // action hint.
+      const cmd = await commandBarWindow(app);
+      const groups = cmd.getByTestId("command-bar-group");
+      await expect(groups).toHaveCount(1);
+      await expect(groups).toHaveText("Downloads");
+      await expect(
+        cmd.locator('[data-testid="command-bar-suggestion"][data-kind="download"]', {
+          hasText: "report.bin",
+        }),
+      ).toHaveCount(1);
+      await expect(
+        cmd.locator(
+          '[data-testid="command-bar-suggestion"][aria-selected="true"] .command-bar__row-accel',
+        ),
+      ).toHaveText("↵ Open · ⌘↵ Reveal · ⌘⌫ Remove");
 
       // Delete the file from disk: open(id) must now reject (completed but the file
       // no longer exists), changing nothing.
