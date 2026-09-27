@@ -101,13 +101,13 @@ async function launch(userDataDir: string): Promise<{ app: ElectronApplication; 
 
 /**
  * `nativeTheme.themeSource` does not reliably reach the renderers'
- * `prefers-color-scheme` on headless CI: on Linux (xvfb) and on the GitHub
- * macOS runner alike, Electron updates `nativeTheme.shouldUseDarkColors` but
- * the renderers' media query never flips. So the same scheme is also emulated
- * on every page under test, on every platform. That exercises what zeo owns: a
- * `prefers-color-scheme` change re-coloring an open surface without a reload.
- * It cannot show that a surface created while the OS appearance is dark starts
- * in it.
+ * `prefers-color-scheme` on headless CI: on Linux (xvfb) Electron updates
+ * `nativeTheme.shouldUseDarkColors` but the renderers' media query never flips,
+ * and on the GitHub macOS runner the media query did not flip either. So the
+ * same scheme is also emulated on every page under test, on every platform.
+ * That exercises what zeo owns: a `prefers-color-scheme` change re-coloring an
+ * open surface without a reload. It cannot show that a surface created while
+ * the appearance is forced starts in it.
  */
 let emulatedScheme: "light" | "dark" | null = null;
 const surfaces = new Set<Page>();
@@ -119,9 +119,9 @@ async function followAppearance(page: Page): Promise<Page> {
 }
 
 /**
- * Force the process-wide appearance through Electron's `nativeTheme`, and
- * emulate the same scheme on every tracked surface, since the former does not
- * reliably reach the renderers.
+ * Emulate `source`'s scheme on every tracked surface; this is what the
+ * assertions observe. `nativeTheme.themeSource` is set as well, only so the
+ * process-wide state matches; no assertion depends on it.
  */
 async function setThemeSource(
   app: ElectronApplication,
@@ -175,7 +175,7 @@ function expectedRootTheme(appearance: Appearance): RootTheme {
 /**
  * Poll `page`'s root until it renders `appearance`. An appearance switch reaches
  * the renderer through the `matchMedia` change event and a layout effect, so the
- * computed style lands a tick or more after `themeSource` is set.
+ * computed style lands a tick or more after the scheme is emulated.
  */
 async function expectAppearance(
   page: Page,
