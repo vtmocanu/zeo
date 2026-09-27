@@ -16,7 +16,13 @@ export type IconName =
   | "archive"
   | "shield"
   | "shield-off"
-  | "chevron-down";
+  | "chevron-down"
+  | "arrow"
+  | "search"
+  | "globe"
+  | "grid"
+  | "bolt"
+  | "history";
 
 const SHIELD_PATH = "M8 2.2 12.8 4v3.7c0 2.8-2 5-4.8 6.1-2.8-1.1-4.8-3.3-4.8-6.1V4z";
 
@@ -53,6 +59,34 @@ const ICON_PATHS: Record<IconName, ReactNode> = {
     </>
   ),
   "chevron-down": <path d="m4 6 4 4 4-4" />,
+  arrow: <path d="M3 8h10M9.2 4.2 13 8l-3.8 3.8" />,
+  search: (
+    <>
+      <circle cx="7" cy="7" r="4.3" />
+      <path d="m10.2 10.2 3.3 3.3" />
+    </>
+  ),
+  globe: (
+    <>
+      <circle cx="8" cy="8" r="5.6" />
+      <path d="M2.4 8h11.2M8 2.4c1.6 1.6 2.4 3.5 2.4 5.6S9.6 12 8 13.6C6.4 12 5.6 10.1 5.6 8S6.4 4 8 2.4z" />
+    </>
+  ),
+  grid: (
+    <>
+      <rect x="2.5" y="2.5" width="4.5" height="4.5" rx="1.2" />
+      <rect x="9" y="2.5" width="4.5" height="4.5" rx="1.2" />
+      <rect x="2.5" y="9" width="4.5" height="4.5" rx="1.2" />
+      <rect x="9" y="9" width="4.5" height="4.5" rx="1.2" />
+    </>
+  ),
+  bolt: <path d="M8.8 2 3.8 9h4l-.8 5 5-7h-4z" />,
+  history: (
+    <>
+      <circle cx="8" cy="8" r="5.6" />
+      <path d="M8 4.8V8l2.2 1.4" />
+    </>
+  ),
 };
 
 /**

@@ -1,128 +1,154 @@
 /* Command bar ------------------------------------------------------------- */
 
-/* The overlay WebContentsView is sized/positioned by main to fit the input plus
-   its suggestion rows, so this container fills it (100vh) as a column with the
-   input at the top and the rows flowing below. Reads the popover
-   tokens for its surface, border, and text colors. Never scrolls (the row cap in
-   main bounds the list). */
-.command-bar {
-  height: 100vh;
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  justify-content: flex-start;
-  padding: 8px;
-  background: var(--surface-popover);
-  color: var(--ink-popover);
-  border: 1px solid var(--popover-hairline);
-  border-radius: 10px;
-  box-shadow: var(--shadow-palette);
+/* The overlay view covers the whole window (PRD 10.5), so its document paints
+   nothing: only the scrim and the panel are visible. Overlay.tsx sets
+   data-surface on the root. */
+:root[data-surface],
+:root[data-surface] body {
+  background: transparent;
   overflow: hidden;
 }
 
-/* Full-width input matching the sidebar's inline-edit field, sized up for the
-   address row. No default outline; a clear accent border on focus. */
-.command-bar__input {
-  appearance: none;
-  flex: 0 0 auto;
-  min-width: 0;
-  border: 1px solid var(--popover-hairline-strong);
-  background: var(--popover-well);
+.command-bar-overlay {
+  position: fixed;
+  inset: 0;
+}
+
+/* Dims the window. No backdrop-filter: the page is a separate native view the
+   overlay cannot sample, so the scrim dims but does not blur. */
+.command-bar-scrim {
+  position: absolute;
+  inset: 0;
+  background: var(--scrim);
+}
+
+/* The floating panel. CommandBar.tsx sets left/top/width/height from
+   commandBarPanelRect and the --command-bar-* metrics from the core
+   constants; every height below reads those, so the rendered panel equals the
+   formula exactly. */
+.command-bar {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--surface-popover);
   color: var(--ink-popover);
-  border-radius: 6px;
-  padding: 10px 12px;
-  font-size: 14px;
-  font-family: inherit;
+  border-radius: var(--radius-palette);
+  box-shadow: var(--shadow-palette);
+  font-family: var(--font-ui);
+}
+
+.command-bar__field {
+  flex: none;
+  box-sizing: border-box;
+  height: var(--command-bar-input-height);
+  display: flex;
+  align-items: center;
+  gap: var(--space-5);
+  padding: 0 var(--space-7);
+  color: var(--ink-popover-secondary);
+}
+
+/* The hairline sits inside the field's height (border-box). */
+.command-bar--has-list .command-bar__field {
+  border-bottom: 1px solid var(--popover-hairline);
+}
+
+.command-bar__input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  outline: none;
+  color: var(--ink-popover);
+  font: var(--weight-regular) var(--text-xl) / 1.2 var(--font-ui);
+  caret-color: var(--accent);
 }
 
 .command-bar__input::placeholder {
   color: var(--ink-popover-secondary);
 }
 
-.command-bar__input:focus {
-  outline: none;
-  border-color: var(--focus-ring);
+.command-bar__list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--command-bar-list-padding-top) var(--space-4)
+    var(--command-bar-list-padding-bottom);
 }
 
-/* Suggestion rows flow directly under the input. No scroll — main caps the row
-   count and sizes the overlay to fit, so the column always fits. */
-.command-bar__list {
+.command-bar__group-label {
+  height: var(--command-bar-group-height);
+  box-sizing: border-box;
   display: flex;
-  flex-direction: column;
-  gap: 2px;
-  margin-top: 6px;
+  align-items: flex-end;
+  padding: 0 var(--space-5) var(--space-2);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: var(--ink-popover-secondary);
 }
 
 .command-bar__row {
+  height: var(--command-bar-row-height);
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px 8px;
-  border-radius: 6px;
+  gap: var(--space-5);
+  padding: 0 var(--space-5);
+  border-radius: var(--radius-tab);
   cursor: default;
+}
+
+.command-bar__row:hover:not(.command-bar__row--selected) {
+  background: var(--popover-hover);
 }
 
 .command-bar__row--selected {
   background: var(--accent-soft);
 }
 
-.command-bar__row-icon {
-  flex: 0 0 auto;
-  width: 16px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
+.command-bar__row .icon {
+  flex: none;
   color: var(--ink-popover-secondary);
-  font-size: 13px;
-  line-height: 1;
 }
 
-.command-bar__row-text {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
+.command-bar__row--danger .icon {
+  color: var(--danger);
 }
 
 .command-bar__row-primary {
+  flex: 0 1 auto;
+  min-width: 0;
+  font-size: var(--text-base);
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--ink-popover);
-  font-size: 13px;
 }
 
 .command-bar__row-secondary {
+  flex: 1 1 0;
+  min-width: 0;
+  font-size: var(--text-sm);
+  color: var(--ink-popover-secondary);
+  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--ink-popover-secondary);
-  font-size: 11px;
 }
 
-/* On the accent-soft selected row the popover-secondary ink drops below 4.5:1,
-   so the selected row's secondary text, icon and accelerator take the full
-   popover ink. */
+.command-bar__row-accel {
+  flex: none;
+  margin-left: auto;
+  font-size: var(--text-sm);
+  letter-spacing: 0.08em;
+  color: var(--ink-popover-secondary);
+}
+
+/* On the accent-soft selected row the popover-secondary ink falls below 4.5:1
+   (about 4.4:1 light, 4.1:1 dark), so its secondary text and hint take the
+   full popover ink. Colour only; no metric changes. */
 .command-bar__row--selected .command-bar__row-secondary,
-.command-bar__row--selected .command-bar__row-icon,
 .command-bar__row--selected .command-bar__row-accel {
   color: var(--ink-popover);
-}
-
-/* The command accelerator, pushed to the row's right edge (the row is a flex
-   container). Muted like the secondary text; monospace keeps the macOS glyphs
-   crisp and evenly aligned across rows. */
-.command-bar__row-accel {
-  flex: 0 0 auto;
-  margin-left: auto;
-  padding-left: 8px;
-  white-space: nowrap;
-  color: var(--ink-popover-secondary);
-  font-size: 12px;
-  font-family:
-    ui-monospace,
-    SFMono-Regular,
-    Menlo,
-    monospace;
 }
