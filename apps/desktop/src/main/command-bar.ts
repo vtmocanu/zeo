@@ -158,9 +158,9 @@ export function openCommandBar(mode: CommandBarMode): void {
     revision: runtime.commandBar.revision,
     surface: "bar",
   };
-  // Rank the initial suggestions BEFORE laying out so the overlay is sized to the
-  // row count on open — a `Cmd+T` with empty text already shows the recent-tabs
-  // list at its full height.
+  // Rank the initial suggestions before showing the overlay so the first pushed
+  // state already carries them — a `Cmd+T` with empty text opens on the
+  // recent-tabs list.
   recomputeSuggestions();
   const shown = layoutOverlay();
   if (shown) {
@@ -243,8 +243,8 @@ export function submitCommandBar(text: string, mode?: CommandBarMode): void {
 
 /**
  * Sets the query, re-ranks the suggestion list from a fresh catalog, re-lays-out
- * the overlay to the new row count, and pushes the state. The renderer drives
- * this on every keystroke.
+ * the overlay, and pushes the state. The renderer drives this on every
+ * keystroke.
  */
 export function setQueryCommandBar(text: string): void {
   runtime.commandBar.query = text;

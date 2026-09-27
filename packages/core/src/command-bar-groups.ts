@@ -68,7 +68,8 @@ export function groupSuggestions(suggestions: readonly Suggestion[]): Suggestion
 /**
  * Splits an already-{@link groupSuggestions grouped} list into consecutive
  * runs of equal {@link groupOf} group, in the input's run order (which is
- * {@link SUGGESTION_GROUPS} order for a grouped list). Empty groups never appear; an empty list returns `[]`.
+ * {@link SUGGESTION_GROUPS} order for a grouped list). Empty groups never
+ * appear; an empty list returns `[]`.
  */
 export function suggestionGroups(suggestions: readonly Suggestion[]): SuggestionGroup[] {
   const groups: SuggestionGroup[] = [];
