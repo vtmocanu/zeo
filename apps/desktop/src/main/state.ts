@@ -91,6 +91,7 @@ export interface RuntimeState {
   settings: Settings;
   settingsSection: SettingsSectionId;
   settingsSectionNonce: number;
+  settingsSession: number;
   blockingBroadcastTimer: Timer;
   quickBrowse: QuickBrowseState;
   isDefaultBrowser: boolean;
@@ -186,6 +187,7 @@ export const runtime: RuntimeState = {
   settings: { searchEngine: "duckduckgo", quickBrowseExternal: true, updateCheckEnabled: true },
   settingsSection: "general",
   settingsSectionNonce: 0,
+  settingsSession: 0,
   blockingBroadcastTimer: null,
   quickBrowse: null,
   isDefaultBrowser: false,

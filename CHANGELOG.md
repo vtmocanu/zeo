@@ -43,7 +43,8 @@ milestone, a minor bump only for very large breakthroughs.
   extends past the pane (staying inside the page area), so its next and close
   buttons remain clickable.
 - Closing settings closes an open "Clear browsing history?" dialog, and
-  reopening settings re-reads the history counts.
+  reopening settings re-reads the history counts, even when settings is
+  closed and reopened in quick succession.
 - Clearing history works even when the counts cannot be read, Confirm is
   disabled while a clear is in progress, and a failed clear shows an error in
   the dialog.

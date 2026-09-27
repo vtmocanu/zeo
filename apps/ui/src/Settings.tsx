@@ -320,7 +320,12 @@ export function Settings() {
             {selected === "profiles" && state !== null && (
               <ProfilesSection profiles={state.profiles} spaces={state.spaces} />
             )}
-            {selected === "history" && <HistorySection open={state?.settingsOpen ?? false} />}
+            {selected === "history" && (
+              <HistorySection
+                key={state?.settingsSession ?? 0}
+                open={state?.settingsOpen ?? false}
+              />
+            )}
             {selected === "about" && state !== null && (
               <AboutSection version={state.appVersion} />
             )}
@@ -1052,6 +1057,13 @@ function ProfilesSection({
  * effect below resets the dialog/error/in-flight state when the sheet closes,
  * and on a (re)open sets `status` back to `"loading"` and re-reads the counts
  * fresh, so a reopen never shows a stale count with the trigger enabled.
+ *
+ * The caller also keys this section on `settingsSession`, which main bumps on
+ * every closed→open transition. A quick close→reopen can reach this renderer
+ * as back-to-back broadcasts that React renders once, so `open` never reads
+ * `false` and the effect below never fires; the key remounts the section on
+ * every new session regardless, and the superseded instance (with any clear
+ * still in flight) is unmounted, so its late settle cannot touch the new one.
  *
  * `sessionRef` is bumped on every `open` transition, in both directions, and
  * captured by `onConfirmClear` before it calls `history.clear()`. Its

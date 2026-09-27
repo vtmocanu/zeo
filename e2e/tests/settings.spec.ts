@@ -53,6 +53,7 @@ interface BridgeState {
   settings: { searchEngine: string };
   settingsSection: string;
   settingsSectionNonce: number;
+  settingsSession: number;
 }
 interface BridgeSpacesState {
   spaces: BridgeSpace[];
@@ -869,12 +870,18 @@ test.describe("PRD 6.5 settings sections + search engine (offline)", () => {
 
       // Close settings the same way the close/reopen test does, while the
       // clear from this (now superseded) session is still pending.
+      const sessionBefore = (await tabsList(sidebar)).settingsSession;
       await runCommand(sidebar, "settings.close");
       await expect
         .poll(() => settingsOpen(sidebar), { message: "expected settings.close to close settings" })
         .toBe(false);
 
       settings = await openSettings(app, sidebar, "settings.openHistory");
+      // A cold reopen starts exactly one new session; a warm section-open
+      // while settings is already open does not.
+      expect((await tabsList(sidebar)).settingsSession).toBe(sessionBefore + 1);
+      await runCommand(sidebar, "settings.openHistory");
+      expect((await tabsList(sidebar)).settingsSession).toBe(sessionBefore + 1);
       // The dialog is not already open on reopen (a fresh session).
       await expect(settings.getByTestId("settings-history-clear-dialog")).toHaveCount(0);
 

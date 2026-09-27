@@ -68,6 +68,8 @@ export function openSettings(): void {
   if (runtime.overlay !== null) {
     runtime.win!.contentView.addChildView(runtime.overlay);
   }
+  // A new settings session: the renderer keys per-session UI state on this.
+  runtime.settingsSession++;
   runtime.settingsOpen = true;
   runtime.settingsView!.webContents.focus();
   broadcast();
