@@ -461,6 +461,14 @@ export function unloadIdleViews(now: number): void {
   }
 }
 
+// Test-only (never wired in a production build): run one idle-unload sweep at an
+// injected clock, so the e2e drives the policy deterministically instead of racing
+// the wall-clock interval (#171). Gated strictly on ZEO_E2E === "1".
+if (process.env.ZEO_E2E === "1") {
+  (globalThis as Record<string, unknown>).__zeoUnloadIdleViews = (now: number): void =>
+    unloadIdleViews(now);
+}
+
 /**
  * The idle threshold / sweep interval (ms): the core constants, overridden by
  * ZEO_VIEW_UNLOAD_AFTER_MS / ZEO_VIEW_UNLOAD_INTERVAL_MS ONLY when
