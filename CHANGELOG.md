@@ -9,6 +9,17 @@ milestone, a minor bump only for very large breakthroughs.
 
 ## [Unreleased]
 
+## [0.0.34] - 2026-09-27
+
+### Fixed
+
+- A tab finishing its page load no longer disturbs an open command bar. The
+  row you arrowed to stays selected when the results re-rank (it follows the
+  same tab, space or command even if it moves), a click that raced the
+  re-rank lands on the row you clicked instead of being dropped, and a loading
+  tab can no longer take focus from the bar and close it. The bar now closes
+  only when the window loses focus or you dismiss it.
+
 ## [0.0.33] - 2026-09-27
 
 ### Changed
