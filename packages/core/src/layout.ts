@@ -4,7 +4,7 @@ import { contentRect, type ChromeState, type Rect } from "./chrome.js";
 /** Delay before a single click on a space row activates it, so a double-click can cancel it. */
 export const SPACE_ACTIVATE_DELAY_MS = 250;
 
-/** Fixed width of the find bar overlay, before clamping to the page region. */
+/** Fixed width of the find pill, before clamping to its anchor card ({@link findPillRect}). */
 export const FIND_BAR_WIDTH = 360;
 
 /** Fixed height of the find pill. */

@@ -203,8 +203,8 @@ export const COMMANDS: readonly CommandDescriptor[] = [
  * needs that too AND a current `zoomFactor` other than the default `1.0` (there
  * is nothing to reset when the host is already at actual size). `find.open`
  * needs an active tab and the settings view closed (`!context.settingsOpen`, so
- * no find pill floats over the settings scrim); `find.next` and `find.previous` need the find session
- * open with a non-empty query (`context.find.open && context.find.hasQuery`).
+ * no find pill floats over the settings scrim); `find.next` and
+ * `find.previous` need the find session open with a non-empty query (`context.find.open && context.find.hasQuery`).
  * The four `quickBrowse.*` commands need the quick-browse window open
  * (`context.quickBrowseOpen`); `browser.setDefault` is always enabled.
  * `view.split` and `view.splitChoose` need a single-pane layout with at least two

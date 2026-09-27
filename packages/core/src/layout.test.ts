@@ -119,6 +119,11 @@ describe("windowCardRects", () => {
       { pane: "left", rect: panes.left, focused: false },
       { pane: "right", rect: panes.right, focused: true },
     ]);
+    const leftFocused: WindowLayout = { ...SPLIT_RIGHT, focused: "left" } as WindowLayout;
+    expect(windowCardRects(1280, 800, DEFAULT_CHROME_STATE, leftFocused).map((c) => c.focused)).toEqual([
+      true,
+      false,
+    ]);
   });
 });
 
