@@ -3041,12 +3041,13 @@ test.describe("zeo desktop app", () => {
     expect(canonicalTabUrl(after.url)).toBe(canonicalTabUrl(before.url));
 
     // Closing hands focus back to the active tab (or the sidebar): the overlay
-    // is no longer the focused webContents.
+    // is no longer the focused webContents. No focused webContents at all (the
+    // window lost OS focus) also means "not the overlay".
     await expect
       .poll(() =>
         app.evaluate(({ webContents }) => {
           const focused = webContents.getFocusedWebContents();
-          return focused === null ? null : focused.getURL();
+          return focused === null ? "" : focused.getURL();
         }),
       )
       .not.toContain("view=command-bar");
