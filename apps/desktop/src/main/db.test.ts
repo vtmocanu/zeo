@@ -1092,6 +1092,21 @@ describe("migrate", () => {
     db.prepare(
       "INSERT INTO window_state(id,x,y,width,height,maximized,sidebarWidth,sidebarCollapsed) VALUES (0, 5, 6, 900, 700, 1, 320, 1)",
     ).run();
+    // A favorites row and a tab linked to it, so a spurious re-create (which
+    // would drop the favorites table) is detectable.
+    db.prepare(
+      "INSERT INTO profiles(id,name,createdAt,position) VALUES ('p1','Personal',1,0)",
+    ).run();
+    db.prepare(
+      "INSERT INTO spaces(id,name,profileId,createdAt,activeTabId,position) VALUES ('space-10','S','p1',1,'t1',0)",
+    ).run();
+    db.prepare(
+      "INSERT INTO favorites(id,url,title,faviconUrl,position,createdAt) VALUES ('f1','https://a.test','A',NULL,0,1)",
+    ).run();
+    db.prepare(
+      "INSERT INTO tabs(id,spaceId,url,title,faviconUrl,createdAt,pinned,lastActiveAt,archivedAt,position,favoriteId) " +
+        "VALUES ('t1','space-10','https://a.test','A',NULL,1,0,1,NULL,0,'f1')",
+    ).run();
 
     migrate(db);
 
@@ -1153,6 +1168,14 @@ describe("migrate", () => {
         )
         .get(),
     ).toEqual({ x: 5, y: 6, width: 900, height: 700, maximized: 1, sidebarWidth: 320, sidebarCollapsed: 1 });
+    // The seeded favorite and its linked tab are left untouched (no re-create
+    // wiped the favorites table or reset the tab's favoriteId).
+    expect(
+      db.prepare("SELECT id, url, title, position FROM favorites WHERE id='f1'").get(),
+    ).toEqual({ id: "f1", url: "https://a.test", title: "A", position: 0 });
+    expect(
+      (db.prepare("SELECT favoriteId FROM tabs WHERE id='t1'").get() as { favoriteId: string | null }).favoriteId,
+    ).toBe("f1");
     db.close();
   });
 
@@ -1183,6 +1206,17 @@ describe("migrate", () => {
       favoriteId: string | null;
     };
     expect(tab.favoriteId).toBeNull();
+    // The FK is wired at the SQL level too: tabs.favoriteId -> favorites(id)
+    // ON DELETE SET NULL, not just a bare column.
+    const fk = (
+      db.prepare("PRAGMA foreign_key_list(tabs)").all() as {
+        table: string;
+        from: string;
+        to: string;
+        on_delete: string;
+      }[]
+    ).find((row) => row.from === "favoriteId");
+    expect(fk).toMatchObject({ table: "favorites", from: "favoriteId", on_delete: "SET NULL" });
     db.close();
   });
 
@@ -1196,6 +1230,17 @@ describe("migrate", () => {
     ).toBeDefined();
     const cols = db.prepare("PRAGMA table_info(tabs)").all() as { name: string }[];
     expect(cols.some((c) => c.name === "favoriteId")).toBe(true);
+    // The FK is wired at the SQL level too: tabs.favoriteId -> favorites(id)
+    // ON DELETE SET NULL, not just a bare column.
+    const fk = (
+      db.prepare("PRAGMA foreign_key_list(tabs)").all() as {
+        table: string;
+        from: string;
+        to: string;
+        on_delete: string;
+      }[]
+    ).find((row) => row.from === "favoriteId");
+    expect(fk).toMatchObject({ table: "favorites", from: "favoriteId", on_delete: "SET NULL" });
     db.close();
   });
 });
@@ -2323,6 +2368,53 @@ describe("downloads helpers", () => {
     expect(favorites[1].position).toBe(1);
     const linked = store!.list().find((t) => t.id === tab.id)!;
     expect(linked.favoriteId).toBe(favorite.id);
+  });
+
+  test("removing a favorite through the production path deletes its row and nulls the linked tab's favoriteId, surviving a reopen", () => {
+    const path = join(tempDir, "zeo.db");
+    const seed = new Database(path);
+    seed.exec(V15_DDL);
+    seed.prepare(
+      "INSERT INTO meta(id,schemaVersion,activeSpaceId) VALUES (0, 15, 'space-a')",
+    ).run();
+    seed.prepare(
+      "INSERT INTO profiles(id,name,createdAt,position) VALUES ('p1','Personal',1,0)",
+    ).run();
+    seed.prepare(
+      "INSERT INTO spaces(id,name,profileId,createdAt,activeTabId,position) VALUES ('space-a','A','p1',1,NULL,0)",
+    ).run();
+    seed.close();
+
+    let store = loadStore();
+    expect(store).not.toBeNull();
+
+    const tab = store!.create({ url: "https://a.test", title: "A" });
+    const favorite = store!.addFavorite(tab.id);
+    scheduleSave(store!);
+    flush(store!);
+
+    // Remove the favorite through the store API (the production path), then
+    // flush and reopen: the favorites row must be gone and the tab's
+    // favoriteId must read back NULL, both from the fresh in-memory store AND
+    // directly from the on-disk rows.
+    store!.removeFavorite(favorite.id);
+    scheduleSave(store!);
+    flush(store!);
+    closeDb();
+
+    const raw = new Database(path, { readonly: true });
+    expect(raw.prepare("SELECT id FROM favorites WHERE id=?").get(favorite.id)).toBeUndefined();
+    const rawTab = raw.prepare("SELECT favoriteId FROM tabs WHERE id=?").get(tab.id) as {
+      favoriteId: string | null;
+    };
+    expect(rawTab.favoriteId).toBeNull();
+    raw.close();
+
+    store = loadStore();
+    expect(store).not.toBeNull();
+    expect(store!.favorites()).toEqual([]);
+    const reloaded = store!.list().find((t) => t.id === tab.id)!;
+    expect(reloaded.favoriteId).toBeNull();
   });
 
   test("deleting a favorite row directly nulls tabs.favoriteId (ON DELETE SET NULL)", () => {

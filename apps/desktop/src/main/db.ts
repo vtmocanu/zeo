@@ -46,8 +46,8 @@ import type {
  * blocking_allowlist table added at schema version 3, the two history
  * tables (history_entries, history_visits) added at schema version 4, the
  * searchEngine column added at schema version 5, the site_zoom table added
- * at schema version 6, plus the downloads table added at schema version 7 —
- * ten tables in all. Schema version 8 adds the five window-layout columns to
+ * at schema version 6, plus the downloads table added at schema version 7.
+ * Schema version 8 adds the five window-layout columns to
  * `meta` (layoutMode, layoutLeftTabId, layoutRightTabId, layoutRatio,
  * layoutFocused) that persist the active space's split-view layout, schema
  * version 9 adds the quickBrowseExternal column to `meta`, schema version 10
@@ -57,7 +57,9 @@ import type {
  * and updateLastCheckedAt columns to `meta` (the in-app update check).
  * Schema version 13 adds two chrome columns to `window_state`, schema version 14
  * adds the nullable `theme` column to `spaces`, and schema version 15 adds the
- * `favorites` table plus the nullable `tabs.favoriteId` column (PRD 10.4).
+ * `favorites` table plus the nullable `tabs.favoriteId` column (PRD 10.4) —
+ * twelve tables in all as of the current schema (counting sqlite's own
+ * `sqlite_sequence`, created for `history_visits`' AUTOINCREMENT column).
  * The PRIMARY KEYs (no duplicate ids), the foreign
  * keys, and `PRAGMA foreign_keys=ON` are the well-formedness contract the core
  * codec relies on: every on-disk state is guaranteed loadable. `spaces.activeTabId`
@@ -73,7 +75,7 @@ const SITE_ZOOM_DDL =
  * `state` is stored as its string; `completedAt` and `spaceId` are nullable; byte
  * counts and timestamps are integers. Download rows live OUTSIDE the
  * {@link writeState} full-state flush (like the allowlist, history, and site_zoom
- * tables) — they are managed only by the dedicated row helpers below.
+ * tables) — they are managed only by the dedicated row helpers in `db-downloads.ts`.
  */
 const DOWNLOADS_DDL =
   "CREATE TABLE downloads (id TEXT PRIMARY KEY, url TEXT NOT NULL, filename TEXT NOT NULL, path TEXT NOT NULL, totalBytes INTEGER NOT NULL, receivedBytes INTEGER NOT NULL, state TEXT NOT NULL, startedAt INTEGER NOT NULL, completedAt INTEGER, spaceId TEXT);";
@@ -258,7 +260,8 @@ function dbPath(): string {
 /**
  * Reads the schema version currently on disk and applies {@link migrationAction}:
  * `"abort"` throws {@link UnsupportedSchemaVersionError}, `"create"` builds the
- * fresh schema (all ten tables) and seeds the single meta row, `"migrate"` runs the
+ * fresh schema (all twelve tables, see the schema header above) and seeds the
+ * single meta row, `"migrate"` runs the
  * ordered {@link MIGRATION_STEPS} from the on-disk version + 1 through
  * {@link SCHEMA_VERSION} inside a single transaction (so a partially-applied
  * upgrade never lands), and `"noop"` leaves an up-to-date database untouched.

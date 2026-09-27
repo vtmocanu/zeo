@@ -298,7 +298,13 @@ export function showTabContextMenu(id: string, x: number, y: number): TabContext
 
   const isFavorite = tab.favoriteId !== null;
   const favoritesFull = runtime.store.favorites().length === FAVORITES_MAX;
-  const group = runtime.store.list().filter((t) => t.pinned === tab.pinned);
+  // The three-way sidebar-section key (pinned / today / favorite) tab belongs
+  // to, mirroring TabStore's private groupKey: "pinned" for a pinned tab,
+  // else "favorite" when it has a favoriteId, else "today". Move to Top/Bottom
+  // only reorder within this same group.
+  const groupKey = (t: Tab): "pinned" | "today" | "favorite" =>
+    t.pinned ? "pinned" : t.favoriteId !== null ? "favorite" : "today";
+  const group = runtime.store.list().filter((t) => groupKey(t) === groupKey(tab));
   const indexInGroup = group.findIndex((t) => t.id === id);
 
   const actions: { id: string; label: string; enabled: boolean; click: () => void }[] = [
