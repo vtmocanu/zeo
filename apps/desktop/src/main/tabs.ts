@@ -1,11 +1,12 @@
 import { clipboard, ipcMain, Menu } from "electron";
 import type { MenuItemConstructorOptions } from "electron";
-import { IPC, titleForUrl, dropBlockedTab } from "@zeo/core";
+import { IPC, titleForUrl, dropBlockedTab, FAVORITES_MAX } from "@zeo/core";
 import type { Tab, TabsState, TabContextMenuResult } from "@zeo/core";
 import { runtime, DEFAULT_URL, IDLE_THRESHOLD_MS } from "./state.js";
-import { broadcast, fullSnapshot } from "./broadcast.js";
+import { broadcast, fullSnapshot, withResync } from "./broadcast.js";
 import { createViewFor, destroyView, unloadView } from "./views.js";
 import { activateTab, preserveSurvivingPane, reconcileAndApply } from "./layout.js";
+import { addFavorite, removeFavorite } from "./favorites.js";
 
 /** Full new-tab lifecycle: store entry, view, activation, broadcast. */
 export function createTab(url?: string): Tab {
@@ -59,6 +60,11 @@ export function openPopupAsTab(ownerTabId: string, url: string): void {
 // Register the popup hook so createViewFor's window-open handler reaches it with
 // no views.ts -> tabs.ts import edge (madge --circular clean).
 runtime.openPopupAsTab = openPopupAsTab;
+
+// Register the close hook so favorites.ts's native context menu can close a
+// favorite's open tab with no favorites.ts -> tabs.ts import edge (madge
+// --circular clean, PRD 10.4).
+runtime.closeTabHook = closeTab;
 
 /**
  * Navigates the tab `id` to `url` with last-request-wins semantics. Validates
@@ -263,12 +269,35 @@ export function sweepIdle(): void {
   }
 }
 
+/**
+ * Full "Clear Today's Tabs" lifecycle: `store.archiveToday()` archives every
+ * open today tab (unpinned, non-favorite) of the active space, the active one
+ * included; a no-op when nothing was archived (no view work, no broadcast).
+ * Otherwise each archived tab's view is freed and its surviving-pane pointer
+ * updated (mirroring {@link archiveTab}'s per-tab teardown), then the layout
+ * reconciles once and the change broadcasts once.
+ */
+export function clearTodayTabs(): void {
+  const ids = runtime.store.archiveToday();
+  if (ids.length === 0) {
+    return;
+  }
+  for (const id of ids) {
+    unloadView(id);
+    preserveSurvivingPane(id);
+  }
+  reconcileAndApply();
+  broadcast();
+}
+
 export function showTabContextMenu(id: string, x: number, y: number): TabContextMenuResult {
   const tab = runtime.store.list().find((t) => t.id === id);
   if (tab === undefined) {
     return { tabId: id, items: [] };
   }
 
+  const isFavorite = tab.favoriteId !== null;
+  const favoritesFull = runtime.store.favorites().length === FAVORITES_MAX;
   const group = runtime.store.list().filter((t) => t.pinned === tab.pinned);
   const indexInGroup = group.findIndex((t) => t.id === id);
 
@@ -276,8 +305,15 @@ export function showTabContextMenu(id: string, x: number, y: number): TabContext
     {
       id: tab.pinned ? "unpin" : "pin",
       label: tab.pinned ? "Unpin" : "Pin",
-      enabled: true,
+      enabled: !isFavorite,
       click: () => (tab.pinned ? unpinTab(id) : pinTab(id)),
+    },
+    {
+      id: isFavorite ? "unfavorite" : "favorite",
+      label: isFavorite ? "Remove from Favorites" : "Add to Favorites",
+      enabled: isFavorite || !favoritesFull,
+      click: () =>
+        isFavorite ? removeFavorite(tab.favoriteId!) : addFavorite(id),
     },
     {
       id: "moveToTop",
@@ -294,7 +330,7 @@ export function showTabContextMenu(id: string, x: number, y: number): TabContext
     {
       id: "archive",
       label: "Archive",
-      enabled: !tab.pinned,
+      enabled: !tab.pinned && !isFavorite,
       click: () => archiveTab(id),
     },
     {
@@ -339,22 +375,6 @@ export function showTabContextMenu(id: string, x: number, y: number): TabContext
   }
 
   return { tabId: id, items };
-}
-
-/**
- * Runs `fn` and, on a throw, broadcasts the current (correct) state before
- * rethrowing — so a tab command the sidebar sent against a now-stale row (e.g.
- * activating/closing a tab the idle sweep just archived, #41) still triggers a
- * stateChange that removes the stale row, even though the invoke rejects and the
- * renderer swallows it with `.catch(() => {})`.
- */
-function withResync<T>(fn: () => T): T {
-  try {
-    return fn();
-  } catch (err) {
-    broadcast();
-    throw err;
-  }
 }
 
 ipcMain.handle(IPC.tabsCreate, (_event, url?: string): Tab => createTab(url));

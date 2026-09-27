@@ -49,15 +49,17 @@ import {
   clearHistory,
   historyStats,
   pruneHistory,
+  scheduleSave,
+  flush,
+} from "./db.js";
+import {
   insertDownload,
   updateDownload,
   deleteDownload,
   clearFinishedDownloadRows,
   listDownloads,
   markInterruptedDownloadsOnLaunch,
-  scheduleSave,
-  flush,
-} from "./db.js";
+} from "./db-downloads.js";
 import { readWindowState, writeWindowState, readChromePrefs, writeChromePrefs } from "./db-window.js";
 import type { Download, WindowState } from "@zeo/core";
 
@@ -191,8 +193,17 @@ const V13_DDL =
   "ALTER TABLE window_state ADD COLUMN sidebarWidth INTEGER NOT NULL DEFAULT 240;" +
   "ALTER TABLE window_state ADD COLUMN sidebarCollapsed INTEGER NOT NULL DEFAULT 0;";
 
-/** The current (schema v14) DDL: v13 plus the spaces.theme column. */
+/** The schema v14 DDL: v13 plus the spaces.theme column. A historical fixture
+ *  predating the favorites table and tabs.favoriteId column. */
 const V14_DDL = V13_DDL + "ALTER TABLE spaces ADD COLUMN theme TEXT;";
+
+/** The current (schema v15) DDL: v14 plus the favorites table and the
+ *  nullable tabs.favoriteId column. */
+const V15_DDL =
+  V14_DDL +
+  "CREATE TABLE favorites (id TEXT PRIMARY KEY, url TEXT NOT NULL, title TEXT NOT NULL, " +
+  "faviconUrl TEXT, position INTEGER NOT NULL, createdAt INTEGER NOT NULL);" +
+  "ALTER TABLE tabs ADD COLUMN favoriteId TEXT REFERENCES favorites(id) ON DELETE SET NULL;";
 
 /** True when the `history_visits` table exists in the database. */
 function hasHistoryTable(db: Database.Database): boolean {
@@ -357,7 +368,7 @@ describe("migrate", () => {
       searchEngine: string;
       quickBrowseExternal: number;
     };
-    expect(meta.schemaVersion).toBe(14);
+    expect(meta.schemaVersion).toBe(15);
     expect(hasEnabledColumn(db)).toBe(true);
     expect(hasAllowlistTable(db)).toBe(true);
     expect(meta.enabled).toBe(1);
@@ -405,7 +416,7 @@ describe("migrate", () => {
       enabled: number;
       quickBrowseExternal: number;
     };
-    expect(meta.schemaVersion).toBe(14);
+    expect(meta.schemaVersion).toBe(15);
     expect(hasAllowlistTable(db)).toBe(true);
     expect(hasHistoryTable(db)).toBe(true);
     expect(hasSearchEngineColumn(db)).toBe(true);
@@ -460,7 +471,7 @@ describe("migrate", () => {
       enabled: number;
       quickBrowseExternal: number;
     };
-    expect(meta.schemaVersion).toBe(14);
+    expect(meta.schemaVersion).toBe(15);
     expect(hasHistoryTable(db)).toBe(true);
     expect(hasSearchEngineColumn(db)).toBe(true);
     expect(hasSiteZoomTable(db)).toBe(true);
@@ -507,7 +518,7 @@ describe("migrate", () => {
       searchEngine: string;
       quickBrowseExternal: number;
     };
-    expect(meta.schemaVersion).toBe(14);
+    expect(meta.schemaVersion).toBe(15);
     expect(hasSearchEngineColumn(db)).toBe(true);
     // The new column defaults to duckduckgo on the existing row.
     expect(meta.searchEngine).toBe("duckduckgo");
@@ -555,7 +566,7 @@ describe("migrate", () => {
       searchEngine: string;
       quickBrowseExternal: number;
     };
-    expect(meta.schemaVersion).toBe(14);
+    expect(meta.schemaVersion).toBe(15);
     expect(hasSiteZoomTable(db)).toBe(true);
     expect(hasLayoutColumns(db)).toBe(true);
     expect(hasDownloadsTable(db)).toBe(true);
@@ -615,7 +626,7 @@ describe("migrate", () => {
       layoutRatio: number;
       layoutFocused: string;
     };
-    expect(meta.schemaVersion).toBe(14);
+    expect(meta.schemaVersion).toBe(15);
     // The downloads table is present and empty.
     expect(hasDownloadsTable(db)).toBe(true);
     const downloadCount = db
@@ -685,7 +696,7 @@ describe("migrate", () => {
       layoutRatio: number;
       layoutFocused: string;
     };
-    expect(meta.schemaVersion).toBe(14);
+    expect(meta.schemaVersion).toBe(15);
     // The window_state table is present.
     expect(hasWindowStateTable(db)).toBe(true);
     // The quick-browse toggle column is added and defaults to 1 (ON).
@@ -755,7 +766,7 @@ describe("migrate", () => {
       layoutRatio: number;
       layoutFocused: string;
     };
-    expect(meta.schemaVersion).toBe(14);
+    expect(meta.schemaVersion).toBe(15);
     // Step 11 adds the window_state table.
     expect(hasWindowStateTable(db)).toBe(true);
     // Step 9 adds the quick-browse toggle column, defaulting to 1 (ON).
@@ -798,7 +809,7 @@ describe("migrate", () => {
       layoutFocused: string;
       defaultSessionMigratedAt: number | null;
     };
-    expect(meta.schemaVersion).toBe(14);
+    expect(meta.schemaVersion).toBe(15);
     expect(hasEnabledColumn(db)).toBe(true);
     expect(hasAllowlistTable(db)).toBe(true);
     expect(meta.enabled).toBe(1);
@@ -870,7 +881,7 @@ describe("migrate", () => {
       layoutFocused: string;
       defaultSessionMigratedAt: number | null;
     };
-    expect(meta.schemaVersion).toBe(14);
+    expect(meta.schemaVersion).toBe(15);
     // The window_state table is present after the upgrade.
     expect(hasWindowStateTable(db)).toBe(true);
     // The new column exists and, for an UPGRADED database, reads null (unmigrated).
@@ -909,7 +920,7 @@ describe("migrate", () => {
     const meta = db
       .prepare("SELECT schemaVersion, activeSpaceId FROM meta WHERE id=0")
       .get() as { schemaVersion: number; activeSpaceId: string };
-    expect(meta.schemaVersion).toBe(14);
+    expect(meta.schemaVersion).toBe(15);
     // The window_state table is created and starts EMPTY (no seed row).
     expect(hasWindowStateTable(db)).toBe(true);
     const windowStateCount = db
@@ -946,7 +957,7 @@ describe("migrate", () => {
       updateDismissedVersion: string | null;
       updateLastCheckedAt: number | null;
     };
-    expect(meta.schemaVersion).toBe(14);
+    expect(meta.schemaVersion).toBe(15);
     // The updateCheckEnabled column defaults to 1 (on); the two nullable
     // columns default to null (never dismissed, never checked).
     expect(meta.updateCheckEnabled).toBe(1);
@@ -989,7 +1000,7 @@ describe("migrate", () => {
     const meta = db.prepare("SELECT schemaVersion FROM meta WHERE id=0").get() as {
       schemaVersion: number;
     };
-    expect(meta.schemaVersion).toBe(14);
+    expect(meta.schemaVersion).toBe(15);
 
     const rows = db
       .prepare("SELECT id, theme FROM spaces ORDER BY position")
@@ -1057,10 +1068,10 @@ describe("migrate", () => {
     db.close();
   });
 
-  test("is a no-op on a database already at the current version (v14) with non-default layout values, quickBrowseExternal, updateCheckEnabled, and a set default-session marker, leaving the site_zoom and downloads rows untouched", () => {
-    const path = join(tempDir, "v14.db");
+  test("is a no-op on a database already at the current version (v15) with non-default layout values, quickBrowseExternal, updateCheckEnabled, and a set default-session marker, leaving the site_zoom and downloads rows untouched", () => {
+    const path = join(tempDir, "v15.db");
     const db = new Database(path);
-    db.exec(V14_DDL);
+    db.exec(V15_DDL);
     // Seed enabled=0, a non-default searchEngine, NON-default layout values,
     // quickBrowseExternal=0, updateCheckEnabled=0 with a dismissed version and a
     // set last-checked time, and a NON-null default-session marker so a spurious
@@ -1069,7 +1080,7 @@ describe("migrate", () => {
     // non-default chrome columns) so a re-create would be observable.
     db.prepare(
       "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled,searchEngine,layoutMode,layoutLeftTabId,layoutRightTabId,layoutRatio,layoutFocused,quickBrowseExternal,defaultSessionMigratedAt,updateCheckEnabled,updateDismissedVersion,updateLastCheckedAt) " +
-        "VALUES (0, 14, 'space-10', 0, 'google', 'split', 'tL', 'tR', 0.35, 'right', 0, 12345, 0, '9.9.9', 55555)",
+        "VALUES (0, 15, 'space-10', 0, 'google', 'split', 'tL', 'tR', 0.35, 'right', 0, 12345, 0, '9.9.9', 55555)",
     ).run();
     db.prepare(
       "INSERT INTO site_zoom(host,factor,updatedAt) VALUES ('example.com', 1.5, 42)",
@@ -1104,7 +1115,7 @@ describe("migrate", () => {
       updateDismissedVersion: string | null;
       updateLastCheckedAt: number | null;
     };
-    expect(meta.schemaVersion).toBe(14);
+    expect(meta.schemaVersion).toBe(15);
     expect(meta.activeSpaceId).toBe("space-10");
     expect(meta.enabled).toBe(0);
     expect(meta.searchEngine).toBe("google");
@@ -1142,6 +1153,49 @@ describe("migrate", () => {
         )
         .get(),
     ).toEqual({ x: 5, y: 6, width: 900, height: 700, maximized: 1, sidebarWidth: 320, sidebarCollapsed: 1 });
+    db.close();
+  });
+
+  test("upgrades a v14 database to the current version (v15), creating the favorites table and a NULL tabs.favoriteId", () => {
+    const path = join(tempDir, "v14-to-v15.db");
+    const db = new Database(path);
+    db.exec(V14_DDL);
+    db.prepare(
+      "INSERT INTO meta(id,schemaVersion,activeSpaceId) VALUES (0, 14, 'space-1')",
+    ).run();
+    seedRows(db, "space-1");
+
+    expect(
+      db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='favorites'").get(),
+    ).toBeUndefined();
+
+    migrate(db);
+
+    const meta = db.prepare("SELECT schemaVersion FROM meta WHERE id=0").get() as {
+      schemaVersion: number;
+    };
+    expect(meta.schemaVersion).toBe(15);
+    expect(
+      db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='favorites'").get(),
+    ).toBeDefined();
+    const tab = db.prepare("SELECT id, favoriteId FROM tabs WHERE id='t1'").get() as {
+      id: string;
+      favoriteId: string | null;
+    };
+    expect(tab.favoriteId).toBeNull();
+    db.close();
+  });
+
+  test("the fresh (create) schema has both the favorites table and tabs.favoriteId", () => {
+    const path = join(tempDir, "fresh.db");
+    const db = new Database(path);
+    migrate(db);
+
+    expect(
+      db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='favorites'").get(),
+    ).toBeDefined();
+    const cols = db.prepare("PRAGMA table_info(tabs)").all() as { name: string }[];
+    expect(cols.some((c) => c.name === "favoriteId")).toBe(true);
     db.close();
   });
 });
@@ -1473,7 +1527,7 @@ describe("readChromePrefs / writeChromePrefs", () => {
     const meta = inspect.prepare("SELECT schemaVersion FROM meta WHERE id=0").get() as {
       schemaVersion: number;
     };
-    expect(meta.schemaVersion).toBe(14);
+    expect(meta.schemaVersion).toBe(15);
     inspect.close();
   });
 });
@@ -1502,7 +1556,7 @@ describe("readBlockingEnabled / writeBlockingEnabled", () => {
     const meta = inspect
       .prepare("SELECT schemaVersion, activeSpaceId, enabled FROM meta WHERE id=0")
       .get() as { schemaVersion: number; activeSpaceId: string; enabled: number };
-    expect(meta.schemaVersion).toBe(14);
+    expect(meta.schemaVersion).toBe(15);
     expect(meta.activeSpaceId).toBe("space-x");
     expect(meta.enabled).toBe(0);
     inspect.close();
@@ -2231,5 +2285,74 @@ describe("downloads helpers", () => {
     const spaces = store!.spaces();
     expect(spaces.find((s) => s.id === "space-a")!.theme).toEqual(gradient);
     expect(spaces.find((s) => s.id === "space-b")!.theme).toBeNull();
+  });
+
+  test("favorites and a linked tab survive a debounced save and reopen, in position order", () => {
+    const path = join(tempDir, "zeo.db");
+    const seed = new Database(path);
+    seed.exec(V15_DDL);
+    seed.prepare(
+      "INSERT INTO meta(id,schemaVersion,activeSpaceId) VALUES (0, 15, 'space-a')",
+    ).run();
+    seed.prepare(
+      "INSERT INTO profiles(id,name,createdAt,position) VALUES ('p1','Personal',1,0)",
+    ).run();
+    seed.prepare(
+      "INSERT INTO spaces(id,name,profileId,createdAt,activeTabId,position) VALUES ('space-a','A','p1',1,NULL,0)",
+    ).run();
+    seed.close();
+
+    let store = loadStore();
+    expect(store).not.toBeNull();
+
+    const tab = store!.create({ url: "https://a.test", title: "A" });
+    const other = store!.create({ url: "https://b.test", title: "B" });
+    const favorite = store!.addFavorite(tab.id);
+    store!.addFavorite(other.id);
+
+    scheduleSave(store!);
+    flush(store!);
+    closeDb();
+
+    store = loadStore();
+    expect(store).not.toBeNull();
+    const favorites = store!.favorites();
+    expect(favorites.map((f) => f.id)).toEqual([favorite.id, expect.any(String)]);
+    expect(favorites[0].url).toBe("https://a.test");
+    expect(favorites[0].position).toBe(0);
+    expect(favorites[1].position).toBe(1);
+    const linked = store!.list().find((t) => t.id === tab.id)!;
+    expect(linked.favoriteId).toBe(favorite.id);
+  });
+
+  test("deleting a favorite row directly nulls tabs.favoriteId (ON DELETE SET NULL)", () => {
+    const path = join(tempDir, "zeo.db");
+    const seed = new Database(path);
+    seed.exec(V15_DDL);
+    seed.prepare(
+      "INSERT INTO meta(id,schemaVersion,activeSpaceId) VALUES (0, 15, 'space-a')",
+    ).run();
+    seed.prepare(
+      "INSERT INTO profiles(id,name,createdAt,position) VALUES ('p1','Personal',1,0)",
+    ).run();
+    seed.prepare(
+      "INSERT INTO spaces(id,name,profileId,createdAt,activeTabId,position) VALUES ('space-a','A','p1',1,'t1',0)",
+    ).run();
+    seed.prepare(
+      "INSERT INTO favorites(id,url,title,faviconUrl,position,createdAt) VALUES ('f1','https://a.test','A',NULL,0,1)",
+    ).run();
+    seed.prepare(
+      "INSERT INTO tabs(id,spaceId,url,title,faviconUrl,createdAt,pinned,lastActiveAt,archivedAt,position,favoriteId) " +
+        "VALUES ('t1','space-a','https://a.test','A',NULL,1,0,1,NULL,0,'f1')",
+    ).run();
+    seed.pragma("foreign_keys = ON");
+    seed.prepare("DELETE FROM favorites WHERE id='f1'").run();
+
+    expect(seed.prepare("SELECT id FROM favorites WHERE id='f1'").get()).toBeUndefined();
+    const tab = seed.prepare("SELECT favoriteId FROM tabs WHERE id='t1'").get() as {
+      favoriteId: string | null;
+    };
+    expect(tab.favoriteId).toBeNull();
+    seed.close();
   });
 });

@@ -10,14 +10,27 @@ import {
   isFinished,
   promoteQuickBrowse,
   titleForUrl,
+  FAVORITES_MAX,
+  clearableTabIds,
 } from "@zeo/core";
 import type { CommandContext, CommandDescriptor, CommandId } from "@zeo/core";
-import { clearHistory, clearFinishedDownloadRows } from "./db.js";
+import { clearHistory } from "./db.js";
+import { clearFinishedDownloadRows } from "./db-downloads.js";
 import { runtime } from "./state.js";
 import { broadcast, pushCommandBar } from "./broadcast.js";
 import { layoutOverlay } from "./overlay.js";
 import { openCommandBar, closeCommandBar, recomputeSuggestions } from "./command-bar.js";
-import { createTab, closeTab, pinTab, unpinTab, moveTabToTop, moveTabToBottom, archiveTab } from "./tabs.js";
+import {
+  createTab,
+  closeTab,
+  pinTab,
+  unpinTab,
+  moveTabToTop,
+  moveTabToBottom,
+  archiveTab,
+  clearTodayTabs,
+} from "./tabs.js";
+import { addFavorite, removeFavorite } from "./favorites.js";
 import { createViewFor, setActive } from "./views.js";
 import { createSpaceAndActivate, deleteSpace } from "./spaces.js";
 import { setBlockingEnabled, allowSite, disallowSite } from "./blocking.js";
@@ -44,6 +57,8 @@ export function commandContextOf(): CommandContext {
   const spaceCount = runtime.store.spaces().length;
   const hasFinishedDownload = runtime.downloads.items.some(isFinished);
   const activeTabId = runtime.store.activeTabId;
+  const favoritesFull = runtime.store.favorites().length === FAVORITES_MAX;
+  const clearableTabCount = clearableTabIds(runtime.store.list()).length;
   if (activeTabId === null) {
     return {
       activeTab: null,
@@ -54,6 +69,8 @@ export function commandContextOf(): CommandContext {
       find: { open: runtime.find.open, hasQuery: runtime.find.query.trim().length > 0 },
       layoutMode: runtime.layout.mode,
       openTabCount: runtime.store.list().length,
+      favoritesFull,
+      clearableTabCount,
     };
   }
   const tab = runtime.store.list().find((t) => t.id === activeTabId);
@@ -66,6 +83,7 @@ export function commandContextOf(): CommandContext {
   return {
     activeTab: {
       pinned: tab?.pinned ?? false,
+      favorite: tab?.favoriteId !== null && tab?.favoriteId !== undefined,
       canGoBack: wc?.navigationHistory.canGoBack() ?? false,
       canGoForward: wc?.navigationHistory.canGoForward() ?? false,
       siteHost,
@@ -80,6 +98,8 @@ export function commandContextOf(): CommandContext {
     find: { open: runtime.find.open, hasQuery: runtime.find.query.trim().length > 0 },
     layoutMode: runtime.layout.mode,
     openTabCount: runtime.store.list().length,
+    favoritesFull,
+    clearableTabCount,
   };
 }
 
@@ -97,6 +117,14 @@ const commandHandlers: Record<CommandId, () => void> = {
   "tab.moveToTop": () => moveTabToTop(runtime.store.activeTabId!),
   "tab.moveToBottom": () => moveTabToBottom(runtime.store.activeTabId!),
   "tab.archive": () => archiveTab(runtime.store.activeTabId!),
+  "tab.favorite": () => addFavorite(runtime.store.activeTabId!),
+  "tab.unfavorite": () => {
+    const tab = runtime.store.list().find((t) => t.id === runtime.store.activeTabId);
+    if (tab?.favoriteId !== null && tab?.favoriteId !== undefined) {
+      removeFavorite(tab.favoriteId);
+    }
+  },
+  "tabs.clearToday": () => clearTodayTabs(),
   "tab.copy-url": () => {
     const tab = runtime.store.list().find((t) => t.id === runtime.store.activeTabId);
     if (tab !== undefined) {

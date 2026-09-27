@@ -15,7 +15,7 @@ import {
   updateDownload,
   deleteDownload,
   clearFinishedDownloadRows,
-} from "./db.js";
+} from "./db-downloads.js";
 import {
   removeDownloadSequenced,
   applyDownloadEvent,

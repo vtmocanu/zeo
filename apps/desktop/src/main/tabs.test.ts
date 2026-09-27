@@ -25,7 +25,7 @@ import type { WebContentsView } from "electron";
 import { SpaceStore, initialBlockingState } from "@zeo/core";
 import type { Space, Tab } from "@zeo/core";
 import { runtime } from "./state.js";
-import { forgetTab, openPopupAsTab } from "./tabs.js";
+import { forgetTab, openPopupAsTab, clearTodayTabs } from "./tabs.js";
 
 describe("forgetTab", () => {
   const tabId = "tab-1";
@@ -176,5 +176,49 @@ describe("openPopupAsTab", () => {
     expect(created).toBeDefined();
     expect(ownerTabs.map((t) => t.id)).toEqual([inactiveOwner.id, created!.id]);
     expect(runtime.views.size).toBe(0);
+  });
+});
+
+describe("clearTodayTabs", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    runtime.store = new SpaceStore();
+    runtime.win = null;
+    runtime.views.clear();
+  });
+
+  afterEach(() => {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+  });
+
+  test("archives only the pinned/favorite-excluded today tabs, in list() order, leaving pinned and favorite tabs open", () => {
+    const store = runtime.store;
+    const pinned = store.create({ url: "https://p.test", title: "P" });
+    store.pin(pinned.id);
+    const a = store.create({ url: "https://a.test", title: "A" });
+    const b = store.create({ url: "https://b.test", title: "B" });
+    const favoriteTab = store.create({ url: "https://f.test", title: "F" });
+    store.addFavorite(favoriteTab.id);
+
+    clearTodayTabs();
+
+    const openIds = store.list().map((t) => t.id);
+    expect(openIds).toEqual([pinned.id, favoriteTab.id]);
+    // archived() is newest-first; both share one archiveToday stamp, so ties
+    // break by descending archivalSeq — b (archived second) sorts first.
+    const archivedIds = store.archived().map((t) => t.id);
+    expect(archivedIds).toEqual([b.id, a.id]);
+  });
+
+  test("is a no-op with no today tabs to archive", () => {
+    const store = runtime.store;
+    const pinned = store.create({ url: "https://p.test", title: "P" });
+    store.pin(pinned.id);
+
+    clearTodayTabs();
+
+    expect(store.list().map((t) => t.id)).toEqual([pinned.id]);
+    expect(store.archived()).toEqual([]);
   });
 });

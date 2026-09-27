@@ -133,6 +133,12 @@ export interface RuntimeState {
   rebuildMenu: (() => void) | null;
   createWindow: ((seed: boolean) => void) | null;
   openPopupAsTab: ((ownerTabId: string, url: string) => void) | null;
+  /**
+   * Registered by `tabs.ts` at load so `favorites.ts`'s native context menu can
+   * close a favorite tab's open instance without importing `tabs.ts` (madge
+   * cycle guard, PRD 10.4).
+   */
+  closeTabHook: ((id: string) => void) | null;
   update: UpdateState;
   updateDismissedVersion: string | null;
   updateCheckInFlight: Promise<void> | null;
@@ -217,6 +223,7 @@ export const runtime: RuntimeState = {
   rebuildMenu: null,
   createWindow: null,
   openPopupAsTab: null,
+  closeTabHook: null,
   update: {
     enabled: true,
     origin: "direct",
