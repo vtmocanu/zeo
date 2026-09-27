@@ -335,7 +335,9 @@ export function CommandBar() {
       />
       <div
         ref={panelRef}
-        className={hasList ? "command-bar command-bar--has-list" : "command-bar"}
+        className={
+          hasList ? "command-bar motion-enter command-bar--has-list" : "command-bar motion-enter"
+        }
         data-testid="command-bar"
         role="dialog"
         aria-modal="true"

@@ -14,6 +14,14 @@
   overflow-x: auto;
   overflow-y: hidden;
   scrollbar-width: none;
+  /* N1: `overflow-y: hidden` clips the focus ring's top/bottom edges when it
+     is flush with a `.space-item`'s 28px box (the global 2px ring, 1px
+     offset, needs 3px of clearance). This vertical padding gives it that
+     clearance; it grows `.space-switcher`'s own box past `.bottom-bar`'s
+     fixed 32px height, but `.bottom-bar` sets no `overflow`, so the strip
+     just overflows into the sidebar's own gap/padding around it rather than
+     changing `--bottom-bar-height` (32px, mirrored in core sidebar.ts). */
+  padding-block: var(--space-2);
 }
 
 .space-switcher::-webkit-scrollbar {
@@ -81,6 +89,13 @@
   width: 10px;
   height: 10px;
   opacity: 1;
+}
+
+/* Reduced motion (N4): drop the size change, keep the opacity cross-fade. */
+@media (prefers-reduced-motion: reduce) {
+  .space-item__dot {
+    transition: opacity var(--motion-fast) var(--ease-standard);
+  }
 }
 
 /* The space name editor above the bottom bar: create, rename, new profile. */

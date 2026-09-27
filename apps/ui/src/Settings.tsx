@@ -1,5 +1,6 @@
 import {
   createContext,
+  useCallback,
   useContext,
   useEffect,
   useRef,
@@ -250,6 +251,15 @@ export function Settings() {
 
   const scrimRef = useEnterMotion<HTMLDivElement>(state?.settingsOpen ?? false, "motion-fade");
   const sheetRef = useEnterMotion<HTMLDivElement>(state?.settingsOpen ?? false);
+  // N5: a stable callback ref (sheetRef and setSheetElement are both stable
+  // across renders) so React never detaches/reattaches it on every render.
+  const setSheetRef = useCallback(
+    (node: HTMLDivElement | null) => {
+      sheetRef.current = node;
+      setSheetElement(node);
+    },
+    [sheetRef],
+  );
 
   return (
     <div
@@ -260,10 +270,7 @@ export function Settings() {
       onClick={onScrimClick}
     >
       <div
-        ref={(node) => {
-          sheetRef.current = node;
-          setSheetElement(node);
-        }}
+        ref={setSheetRef}
         className="settings"
         data-testid="settings"
         role="dialog"

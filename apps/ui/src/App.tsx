@@ -26,7 +26,6 @@ import {
   sidebarSections,
   siteKeyForUrl,
   sidebarVisible,
-  themeTokens,
   toReorderIndex,
 } from "@zeo/core";
 import { ARCHIVED_VIEW_ID, BottomBar, SpaceNameEditor, type SpaceEdit } from "./BottomBar.js";
@@ -35,7 +34,13 @@ import { Favicon } from "./Favicon.js";
 import { DRAG_THRESHOLD, suppressNextClick } from "./drag.js";
 import { FavoritesGrid } from "./FavoritesGrid.js";
 import { Icon } from "./icons.js";
-import { motionDisabled, motionMs, replayClass } from "./motion.js";
+import {
+  motionDisabled,
+  motionMs,
+  outgoingTintDecision,
+  replaySpaceMotion,
+  spaceSwitchDirectionClass,
+} from "./motion.js";
 import { UrlPill } from "./UrlPill.js";
 import {
   SidebarResizeHandle,
@@ -632,27 +637,19 @@ export function App() {
     if (switchResult && !motionDisabled()) {
       const element = spaceRef.current;
       if (element) {
-        const directionClass =
-          switchResult.direction === "forward"
-            ? "sidebar__space--enter-forward"
-            : switchResult.direction === "backward"
-              ? "sidebar__space--enter-backward"
-              : "sidebar__space--enter-fade";
+        const directionClass = spaceSwitchDirectionClass(switchResult.direction);
         element.dataset.spaceMotion = switchResult.direction ?? "fade";
-        replayClass(element, directionClass);
+        replaySpaceMotion(element, directionClass);
       }
-      const previousTokens = themeTokens(previousRef.current.theme, appearance);
-      const nextTokens = themeTokens(nextTheme, appearance);
-      if (
-        previousTokens["--tint"] !== nextTokens["--tint"] ||
-        previousTokens["--tint-opacity"] !== nextTokens["--tint-opacity"]
-      ) {
+      // Read `previousRef.current.theme` before the refresh effect below (in
+      // its own, later-declared useLayoutEffect) overwrites it: effects run
+      // in declaration order within a commit, so this always compares
+      // against the theme that was actually on screen, even when it was
+      // edited (not switched) since the last switch.
+      const decision = outgoingTintDecision(previousRef.current.theme, nextTheme, appearance);
+      if (decision) {
         tintKeyRef.current += 1;
-        setOutgoingTint({
-          key: String(tintKeyRef.current),
-          tint: previousTokens["--tint"],
-          opacity: Number(previousTokens["--tint-opacity"]),
-        });
+        setOutgoingTint({ key: String(tintKeyRef.current), tint: decision.tint, opacity: decision.opacity });
         setTintReplayKey((key) => key + 1);
       }
     }
@@ -662,6 +659,17 @@ export function App() {
     // state broadcast; `state` and `appearance` are read fresh each time it
     // does run.
   }, [state.activeSpaceId]);
+
+  // Refreshes `previousRef.current.theme` on every commit where the active
+  // space's OWN theme changes (editing it in ThemePicker, not switching
+  // spaces), so a later switch's outgoing tint compares against what was
+  // actually last painted rather than a theme from before the edit (PRD
+  // 10.7 §4). Declared after the switch effect above so it always runs
+  // after it within the same commit.
+  const activeTheme = activeSpaceTheme(state);
+  useLayoutEffect(() => {
+    previousRef.current = { activeSpaceId: state.activeSpaceId, theme: activeTheme };
+  }, [state.activeSpaceId, activeTheme]);
 
   const clearOutgoingTint = useCallback((key: string) => {
     setOutgoingTint((current) => (current?.key === key ? null : current));

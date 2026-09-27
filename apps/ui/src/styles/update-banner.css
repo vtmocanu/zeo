@@ -37,7 +37,7 @@
 
 .update-banner__action {
   appearance: none;
-  min-height: 28px;
+  min-height: var(--hit-target);
   padding: 0 9px;
   border: none;
   border-radius: var(--radius-control);

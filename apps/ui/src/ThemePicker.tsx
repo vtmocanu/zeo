@@ -132,7 +132,13 @@ export function ThemePicker({
 }: ThemePickerProps): ReactElement {
   const [draft, setDraft] = useState<SpaceTheme | null>(space.theme);
   const [stopIndex, setStopIndex] = useState<0 | 1>(0);
-  const rootRef = useRef<HTMLDivElement>(null);
+  // N5: `useEnterMotion`'s RefObject also serves as the dismiss-on-outside-
+  // press root ref below, so there is no second, inline callback ref
+  // re-attaching on every render just to fan the node out to two refs.
+  // PRD 10.7 §3, §5: the picker only ever mounts while open, so `open` is
+  // always true; `useEnterMotion` still runs the initial "replay" step,
+  // which plays the enter animation on mount.
+  const motionRef = useEnterMotion<HTMLDivElement>(true);
   const pressedKindRef = useRef<HTMLButtonElement>(null);
   const swatchRefs = useRef<(HTMLButtonElement | null)[]>([]);
   // Every theme sent since the last externally-originated change, oldest
@@ -181,7 +187,7 @@ export function ThemePicker({
   // focus (to a page view or another window).
   useEffect(() => {
     const onPointerDown = (event: PointerEvent): void => {
-      const root = rootRef.current;
+      const root = motionRef.current;
       if (root !== null && event.target instanceof Node && !root.contains(event.target)) {
         onCloseRef.current();
       }
@@ -250,17 +256,10 @@ export function ThemePicker({
   };
 
   const title = `${space.name} theme`;
-  // PRD 10.7 §3, §5: the picker only ever mounts while open, so `open` is
-  // always true; `useEnterMotion` still runs the initial "replay" step,
-  // which plays the enter animation on mount.
-  const motionRef = useEnterMotion<HTMLDivElement>(true);
 
   return (
     <div
-      ref={(node) => {
-        motionRef.current = node;
-        rootRef.current = node;
-      }}
+      ref={motionRef}
       className="theme-picker"
       role="dialog"
       aria-label={title}

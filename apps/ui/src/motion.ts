@@ -6,6 +6,7 @@
  * `@zeo/core`'s `motion.ts`.
  */
 import { useLayoutEffect, useRef, type RefObject } from "react";
+import { themeTokens, type Appearance, type SpaceTheme } from "@zeo/core";
 
 export type MotionToken = "--motion-fast" | "--motion-base" | "--motion-space";
 
@@ -36,6 +37,46 @@ export function motionDisabled(): boolean {
  *  `className`, forces a reflow by reading `offsetWidth`, then re-adds it. */
 export function replayClass(element: HTMLElement, className: string): void {
   element.classList.remove(className);
+  void element.offsetWidth;
+  element.classList.add(className);
+}
+
+export type SpaceSwitchDirectionClass =
+  | "sidebar__space--enter-forward"
+  | "sidebar__space--enter-backward"
+  | "sidebar__space--enter-fade";
+
+const SPACE_MOTION_CLASSES: readonly SpaceSwitchDirectionClass[] = [
+  "sidebar__space--enter-forward",
+  "sidebar__space--enter-backward",
+  "sidebar__space--enter-fade",
+];
+
+/** Maps a `detectSpaceSwitch` direction (`null` meaning "fade") to the CSS
+ *  class that animates it. */
+export function spaceSwitchDirectionClass(
+  direction: "forward" | "backward" | null,
+): SpaceSwitchDirectionClass {
+  return direction === "forward"
+    ? "sidebar__space--enter-forward"
+    : direction === "backward"
+      ? "sidebar__space--enter-backward"
+      : "sidebar__space--enter-fade";
+}
+
+/**
+ * Restarts the sidebar space-switch animation on `element`: removes all
+ * three `sidebar__space--enter-*` classes (so a stale one from a previous
+ * switch can never outrank the current one in source order), forces a
+ * reflow, then adds `className`.
+ */
+export function replaySpaceMotion(
+  element: HTMLElement,
+  className: SpaceSwitchDirectionClass,
+): void {
+  for (const name of SPACE_MOTION_CLASSES) {
+    element.classList.remove(name);
+  }
   void element.offsetWidth;
   element.classList.add(className);
 }
@@ -78,4 +119,39 @@ export function useEnterMotion<T extends HTMLElement>(
   }, [open, className]);
 
   return ref;
+}
+
+export interface OutgoingTint {
+  tint: string;
+  opacity: number;
+}
+
+/**
+ * The pure decision behind the space-switch tint cross-fade: given the
+ * theme that was actually on screen before the switch and the theme that is
+ * about to show, is there an outgoing tint to paint and fade out?
+ *
+ * Comparing resolved tokens (not `SpaceTheme` identity) means editing the
+ * active space's theme and then switching away still cross-fades: the
+ * caller is responsible for refreshing the "previous" theme on every commit
+ * (PRD 10.7 §4), not just when the active space id changes, so this always
+ * sees the theme that was last painted.
+ */
+export function outgoingTintDecision(
+  previousTheme: SpaceTheme | null,
+  nextTheme: SpaceTheme | null,
+  appearance: Appearance,
+): OutgoingTint | null {
+  const previousTokens = themeTokens(previousTheme, appearance);
+  const nextTokens = themeTokens(nextTheme, appearance);
+  if (
+    previousTokens["--tint"] === nextTokens["--tint"] &&
+    previousTokens["--tint-opacity"] === nextTokens["--tint-opacity"]
+  ) {
+    return null;
+  }
+  return {
+    tint: previousTokens["--tint"],
+    opacity: Number(previousTokens["--tint-opacity"]),
+  };
 }

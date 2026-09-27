@@ -32,7 +32,10 @@
    `z-index: 2` lifts it over the sticky pinned section (z-index 1), which
    otherwise swallows the strip across the pinned band. Nothing else inside the
    sidebar is positioned above it (menus and popovers are separate surfaces),
-   and the window row's 8px right padding keeps its buttons clear of the 6px strip. */
+   and the window row's 8px right padding keeps its buttons clear of the 6px strip.
+   N2 (known, left as is): the global focus ring on this strip is clipped by
+   `.sidebar { overflow: clip }` on its right edge, so only the inner
+   vertical edge of the ring shows. */
 .sidebar__resize-handle {
   position: absolute;
   z-index: 2;

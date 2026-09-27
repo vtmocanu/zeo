@@ -77,8 +77,10 @@
   opacity: 1;
 }
 
-/* Trailing badges share one type: 11/600 tabular figures in secondary ink. */
-.tab-item__zoom,
+/* Trailing badges share one type: 11/600 tabular figures in secondary ink.
+   The zoom badge's text lives on `.tab-item__zoom-label` (see below), not on
+   the `.tab-item__zoom` button itself. */
+.tab-item__zoom-label,
 .tab-item__shield {
   display: inline-flex;
   align-items: center;
@@ -88,6 +90,10 @@
   font-variant-numeric: tabular-nums;
   line-height: 1;
   color: var(--ink-secondary);
+}
+
+.tab-item__zoom {
+  flex: 0 0 auto;
 }
 
 /* Blocked-request count: shield icon and number. Always visible while
@@ -112,7 +118,10 @@
 }
 
 /* Per-site zoom badge on the active tab's row: a chip that resets the host to
-   actual size on click. */
+   actual size on click. §7's 28px hit target lives on the transparent
+   button; the visible pill (background, radius, padding, 18px height) moves
+   to the inner `.tab-item__zoom-label` so the badge still reads as an 18px
+   chip inside a full-size hit target. */
 .tab-item__zoom {
   appearance: none;
   display: inline-flex;
@@ -120,16 +129,21 @@
   justify-content: center;
   min-width: var(--hit-target);
   min-height: var(--hit-target);
-  padding: 0 5px;
   border: none;
-  border-radius: var(--radius-control);
-  background: var(--fill-subtle);
+  background: none;
   font-family: inherit;
   cursor: pointer;
+}
+
+.tab-item__zoom-label {
+  height: 18px;
+  padding: 0 5px;
+  border-radius: var(--radius-control);
+  background: var(--fill-subtle);
   transition: var(--transition-control);
 }
 
-.tab-item__zoom:hover {
+.tab-item__zoom:hover .tab-item__zoom-label {
   background: var(--surface-hover);
   color: var(--ink-primary);
 }
