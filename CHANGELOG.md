@@ -11,28 +11,29 @@ milestone, a minor bump only for very large breakthroughs.
 
 ## [0.0.34] - 2026-09-27
 
+### Added
+
+- An in-app confirmation dialog. Clearing browsing history now asks "Clear
+  browsing history?" with the entry and visit counts, and Cancel is focused by
+  default.
+
 ### Changed
 
 - Settings opens as a centered sheet over a dimmed window instead of filling
   the page card: a 200 px section list with line icons, grouped settings in
   rounded wells with hairline separators, and a close button. Escape, the close
   button or a click on the dimmed area closes it. The Blocking section is now
-  called Content blocking, and Find in Page is unavailable while settings is
-  open.
+  called Content blocking. Opening settings closes an open find session, and
+  Find in Page is unavailable while settings is open.
 - Find in page is a compact floating pill 8 px inside the top-right corner of
   the page it searches. In split view it sits on the pane the search belongs
   to and follows divider drags and sidebar changes.
-- The quick-browse window has a 48 px top bar with the page title above its
-  URL, an accent "Open in Tab" button, "Move to Space…" and a Dismiss icon
-  button; the bar drags the window.
+- The quick-browse window is translucent and has a 48 px top bar with the page
+  title above its URL, an accent "Open in Tab" button, "Move to Space…" and a
+  Dismiss icon button (formerly Promote / Promote to space…); the bar drags the
+  window.
 - Split view outlines the focused pane's card with a soft accent ring, and the
   divider shows a small grip that highlights while dragging.
-
-### Added
-
-- An in-app confirmation dialog. Clearing browsing history now asks "Clear
-  browsing history?" with the entry and visit counts, and Cancel is focused by
-  default.
 
 ### Fixed
 

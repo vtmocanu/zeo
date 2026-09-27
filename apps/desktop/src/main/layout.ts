@@ -81,7 +81,10 @@ export function ensureDividerView(): void {
  * focused pane's view. Every op is guarded so a pane view destroyed mid-reconcile
  * is skipped, not fatal. On every exit path, re-lays an open find overlay via
  * {@link layoutOverlay} so its card-anchored pill follows a split/ratio/pane
- * change. Called everywhere the layout or the active view can change.
+ * change. In split mode it first closes (broadcasting and returning focus) an
+ * open find session bound to a tab that is no longer active, via
+ * {@link closeFindOffActiveTab}. Called everywhere the layout or the active view
+ * can change.
  */
 export function applyLayout(): void {
   if (runtime.win === null) {
