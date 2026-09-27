@@ -27,7 +27,7 @@ export interface SettingsSection {
  */
 export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   { id: "general", title: "General" },
-  { id: "blocking", title: "Blocking" },
+  { id: "blocking", title: "Content blocking" },
   { id: "profiles", title: "Profiles" },
   { id: "history", title: "History" },
   { id: "about", title: "About" },

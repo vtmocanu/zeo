@@ -5,7 +5,8 @@ import {
   type ChangeEvent as ReactChangeEvent,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
-import type { FindState } from "@zeo/core";
+import { FIND_BAR_HEIGHT, FIND_BAR_SHADOW_MARGIN, type FindState } from "@zeo/core";
+import { Icon } from "./icons.js";
 
 /**
  * The find-in-page surface of the single overlay WebContentsView, mounted by
@@ -14,8 +15,9 @@ import type { FindState } from "@zeo/core";
  * A thin renderer with no business logic: it holds only the input's local text
  * plus the pushed active-match/total counts, and reaches main exclusively
  * through `window.zeo`. Main owns `findInPage`, the highlight lifecycle, and the
- * overlay's bounds/visibility/focus; the renderer just fills the viewport main
- * sizes for it (360×44).
+ * overlay's bounds/visibility/focus. Main sizes the view to the pill grown by
+ * `FIND_BAR_SHADOW_MARGIN` on every side (`findBarBounds`), so the frame pads
+ * by that margin and the 38px pill fills what is left, its shadow unclipped.
  *
  * The counter reads `activeMatch`/`matchCount` from the pushed `TabsState.find`
  * (delivered on `onStateChange`), never from local state. The input's `value`
@@ -121,55 +123,69 @@ export function FindBar() {
   };
 
   return (
-    <div className="find-bar" data-testid="find-bar">
-      <input
-        ref={inputRef}
-        className="find-bar__input"
-        data-testid="find-input"
-        type="text"
-        value={value}
-        spellCheck={false}
-        autoComplete="off"
-        onFocus={(event) => event.currentTarget.select()}
-        onChange={onChange}
-        onKeyDown={onKeyDown}
-      />
-      <span className="find-bar__count" data-testid="find-count">
-        {`${activeMatch}/${matchCount}`}
-      </span>
-      <button
-        type="button"
-        className="find-bar__button"
-        data-testid="find-previous"
-        aria-label="Previous match"
-        onClick={() => {
-          void window.zeo?.find.previous().catch(() => {});
-        }}
+    <div className="find-bar-frame" style={{ padding: FIND_BAR_SHADOW_MARGIN }}>
+      <div
+        className="find-bar"
+        data-testid="find-bar"
+        role="search"
+        style={{ height: FIND_BAR_HEIGHT }}
       >
-        ↑
-      </button>
-      <button
-        type="button"
-        className="find-bar__button"
-        data-testid="find-next"
-        aria-label="Next match"
-        onClick={() => {
-          void window.zeo?.find.next().catch(() => {});
-        }}
-      >
-        ↓
-      </button>
-      <button
-        type="button"
-        className="find-bar__button"
-        data-testid="find-close"
-        aria-label="Close find"
-        onClick={() => {
-          void window.zeo?.find.close().catch(() => {});
-        }}
-      >
-        ✕
-      </button>
+        <Icon name="search" size={14} />
+        <input
+          ref={inputRef}
+          className="find-bar__input"
+          data-testid="find-input"
+          type="text"
+          aria-label="Find in page"
+          placeholder="Find in page"
+          value={value}
+          spellCheck={false}
+          autoComplete="off"
+          onFocus={(event) => event.currentTarget.select()}
+          onChange={onChange}
+          onKeyDown={onKeyDown}
+        />
+        <span className="find-bar__count" data-testid="find-count">
+          {`${activeMatch}/${matchCount}`}
+        </span>
+        <span className="find-bar__sep" aria-hidden="true" />
+        <button
+          type="button"
+          className="find-bar__button"
+          data-testid="find-previous"
+          aria-label="Previous match"
+          title="Previous match (Shift+Return)"
+          onClick={() => {
+            void window.zeo?.find.previous().catch(() => {});
+          }}
+        >
+          <Icon name="chevron-up" size={14} />
+        </button>
+        <button
+          type="button"
+          className="find-bar__button"
+          data-testid="find-next"
+          aria-label="Next match"
+          title="Next match (Return)"
+          onClick={() => {
+            void window.zeo?.find.next().catch(() => {});
+          }}
+        >
+          <Icon name="chevron-down" size={14} />
+        </button>
+        <button
+          type="button"
+          className="find-bar__button"
+          data-testid="find-close"
+          aria-label="Close find"
+          title="Close (Esc)"
+          onClick={() => {
+            void window.zeo?.find.close().catch(() => {});
+          }}
+        >
+          <Icon name="close" size={14} />
+        </button>
+      </div>
     </div>
   );
 }

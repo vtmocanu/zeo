@@ -20,7 +20,7 @@ describe("SETTINGS_SECTIONS", () => {
     ]);
     expect(SETTINGS_SECTIONS.map((s) => s.title)).toEqual([
       "General",
-      "Blocking",
+      "Content blocking",
       "Profiles",
       "History",
       "About",

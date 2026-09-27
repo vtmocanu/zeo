@@ -8,7 +8,12 @@ import { createServer } from "node:http";
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 // PRD 9.1 — shared view-URL poll helper (VIEW_POLL_TIMEOUT_MS-bounded).
-import { waitForViewUrl } from "./helpers/view";
+import { waitForViewUrl, waitForViewsIdle } from "./helpers/view";
+// PRD 10.6 — the sheet geometry and the token probe the sheet cases compare
+// against, so the spec follows @zeo/core and tokens.css if a value moves.
+import { settingsBounds, settingsSheetRect } from "@zeo/core";
+import type { Rect } from "@zeo/core";
+import { tokenBackground } from "./helpers/token";
 
 // Absolute path to the built Electron main entry, resolved from this test file
 // (e2e is ESM, so no __dirname). Layout mirrors blocking.spec.ts / history.spec.ts:
@@ -16,8 +21,8 @@ import { waitForViewUrl } from "./helpers/view";
 const mainPath = fileURLToPath(new URL("../../apps/desktop/out/main/index.js", import.meta.url));
 
 // --- Minimal typed view of the preload-injected `window.zeo` bridge. ------------
-// e2e deliberately does NOT depend on @zeo/core; we redeclare only the slice these
-// PRD 6.5 settings tests touch (structurally compatible with @zeo/core's ZeoApi).
+// The bridge types are not imported from @zeo/core (only its geometry is); we
+// redeclare the slice these settings tests touch (structurally @zeo/core's ZeoApi).
 // Only the fields we assert on are load-bearing. `setSearchEngine` is typed with a
 // plain `string` id (not the catalog union) so a test can pass an INVALID id and
 // assert the TypeError rejection, mirroring how blocking.spec.ts types allowSite.
@@ -48,6 +53,7 @@ interface BridgeState {
   settings: { searchEngine: string };
   settingsSection: string;
   settingsSectionNonce: number;
+  settingsSession: number;
 }
 interface BridgeSpacesState {
   spaces: BridgeSpace[];
@@ -80,7 +86,13 @@ interface ZeoBridge {
   tabs: {
     create(url?: string): Promise<BridgeTab>;
     navigate(id: string, url: string): Promise<void>;
+    activate(id: string): Promise<void>;
     list(): Promise<BridgeState>;
+  };
+  // PRD 10.6 — the find slice the settings/find exclusion case drives.
+  find: {
+    open(): Promise<void>;
+    state(): Promise<{ open: boolean }>;
   };
   spaces: {
     setProfile(spaceId: string, profileId: string): Promise<void>;
@@ -657,8 +669,9 @@ test.describe("PRD 6.5 settings sections + search engine (offline)", () => {
       await expect(settings.getByTestId("settings-history-retention")).toContainText("90 days");
       // Stats reflect the two seeded entries/visits (read on the section's mount,
       // so poll the rendered text).
-      await expect(settings.getByTestId("settings-history-stats")).toContainText("2 entries");
-      await expect(settings.getByTestId("settings-history-stats")).toContainText("2 visits");
+      await expect(settings.getByTestId("settings-history-stats")).toHaveText(
+        historyStatsLabel(2, 2),
+      );
 
       // A single click of Clear does NOT clear — it only reveals the confirm step.
       await settings.getByTestId("settings-history-clear").click();
@@ -672,8 +685,291 @@ test.describe("PRD 6.5 settings sections + search engine (offline)", () => {
           message: "expected history.stats() to report zero after confirm",
         })
         .toEqual({ entries: 0, visits: 0 });
-      await expect(settings.getByTestId("settings-history-stats")).toContainText("0 entries");
-      await expect(settings.getByTestId("settings-history-stats")).toContainText("0 visits");
+      await expect(settings.getByTestId("settings-history-stats")).toHaveText(
+        historyStatsLabel(0, 0),
+      );
+    } finally {
+      await app.close();
+      await server.close();
+      rmSync(userDataDir, { recursive: true, force: true });
+    }
+  });
+
+  // The settings renderer stays mounted across a close (main only detaches the
+  // native view), so an open confirm dialog and its stats must not survive a
+  // close/reopen: closing must reset the dialog, and reopening must re-read
+  // stats rather than show whatever was current when it closed.
+  test("closing settings resets an open clear dialog; reopening re-reads stats and refocuses Cancel", async () => {
+    const userDataDir = mkdtempSync(join(tmpdir(), "zeo-settings-"));
+    const server = await startHistoryFixtureServer();
+    const { app, sidebar } = await launch(userDataDir);
+    try {
+      const tabId = await freshHistory(app, sidebar);
+      await navigateAndRecord(sidebar, tabId, `${server.base}/a.html`, 1);
+
+      let settings = await openSettings(app, sidebar, "settings.openHistory");
+      await expect(settings.getByTestId("settings-history-stats")).toHaveText(
+        historyStatsLabel(1, 1),
+      );
+      await settings.getByTestId("settings-history-clear").click();
+      const dialog = settings.getByTestId("settings-history-clear-dialog");
+      await expect(dialog).toBeVisible();
+
+      // Close settings (via the settings.close command) while the dialog is open.
+      await runCommand(sidebar, "settings.close");
+      await expect
+        .poll(() => settingsOpen(sidebar), { message: "expected settings.close to close settings" })
+        .toBe(false);
+
+      // Seed another visit while settings is closed: a stale reopen would still
+      // show "1 entries".
+      await navigateAndRecord(sidebar, tabId, `${server.base}/b.html`, 2);
+
+      settings = await openSettings(app, sidebar, "settings.openHistory");
+      // The dialog is not already open on reopen.
+      await expect(settings.getByTestId("settings-history-clear-dialog")).toHaveCount(0);
+      await expect(settings.getByTestId("settings-history-stats")).toHaveText(
+        historyStatsLabel(2, 2),
+      );
+
+      await settings.getByTestId("settings-history-clear").click();
+      const reopenedDialog = settings.getByTestId("settings-history-clear-dialog");
+      await expect(reopenedDialog).toBeVisible();
+      const cancel = settings.getByTestId("settings-history-clear-cancel");
+      await expect(cancel).toBeFocused();
+      const focusedTestId = await settings.evaluate(
+        () => (document.activeElement as HTMLElement | null)?.dataset.testid ?? null,
+      );
+      expect(focusedTestId).toBe("settings-history-clear-cancel");
+      await expect(reopenedDialog).toContainText("This removes 2 entries and 2 visits.");
+    } finally {
+      await app.close();
+      await server.close();
+      rmSync(userDataDir, { recursive: true, force: true });
+    }
+  });
+
+  // A rejected history.stats() must not disable the clear trigger forever, and
+  // a rejected history.clear() must keep the dialog open with an inline error
+  // instead of silently doing nothing — and a same-tick double confirm must
+  // fire history.clear() only once.
+  test("a failed stats read still enables the trigger; a failed clear keeps the dialog open with an inline error", async () => {
+    const userDataDir = mkdtempSync(join(tmpdir(), "zeo-settings-"));
+    const { app, sidebar } = await launch(userDataDir);
+    try {
+      await app.evaluate(({ ipcMain }) => {
+        ipcMain.removeHandler("zeo:history:stats");
+        ipcMain.handle("zeo:history:stats", () => {
+          throw new Error("boom");
+        });
+      });
+
+      const settings = await openSettings(app, sidebar, "settings.openHistory");
+      const trigger = settings.getByTestId("settings-history-clear");
+      await expect(trigger).toBeEnabled();
+      await expect(settings.getByTestId("settings-history-stats")).toContainText("unavailable");
+
+      await trigger.click();
+      const dialog = settings.getByTestId("settings-history-clear-dialog");
+      await expect(dialog).toBeVisible();
+      // Count-free wording: no counts are known.
+      await expect(dialog).toContainText("This removes all browsing history.");
+      await expect(dialog).not.toContainText("entries");
+
+      // Replace the clear handler with one that counts invocations and rejects
+      // only once the test releases it (via __zeoReleaseHistoryClear), so the
+      // disabled-Confirm assertion below has no timing dependence on a fixed
+      // delay racing the test.
+      await app.evaluate(({ ipcMain }) => {
+        const g = globalThis as unknown as {
+          __zeoHistoryClearCalls: number;
+          __zeoReleaseHistoryClear?: () => void;
+        };
+        g.__zeoHistoryClearCalls = 0;
+        ipcMain.removeHandler("zeo:history:clear");
+        ipcMain.handle("zeo:history:clear", () => {
+          g.__zeoHistoryClearCalls += 1;
+          return new Promise((_resolve, reject) => {
+            g.__zeoReleaseHistoryClear = () => reject(new Error("clear failed"));
+          });
+        });
+      });
+
+      const confirm = settings.getByTestId("settings-history-clear-confirm");
+      await confirm.dblclick();
+      await expect(confirm).toBeDisabled();
+      expect(
+        await app.evaluate(
+          () => (globalThis as unknown as { __zeoHistoryClearCalls: number }).__zeoHistoryClearCalls,
+        ),
+      ).toBe(1);
+
+      // Release the pending clear so it rejects.
+      await app.evaluate(() => {
+        (globalThis as unknown as { __zeoReleaseHistoryClear?: () => void }).__zeoReleaseHistoryClear?.();
+      });
+
+      const error = settings.getByTestId("settings-history-clear-dialog-error");
+      await expect(error).toBeVisible();
+      await expect(error).toHaveAttribute("role", "alert");
+      await expect(dialog).toBeVisible();
+      await expect(confirm).toBeEnabled();
+      // ConfirmDialog's `useEffect([error])` refocuses Cancel once the inline
+      // error appears, so focus returns into the dialog instead of staying
+      // wherever the disabled Confirm left it.
+      await expect(settings.getByTestId("settings-history-clear-cancel")).toBeFocused();
+    } finally {
+      await app.close();
+      rmSync(userDataDir, { recursive: true, force: true });
+    }
+  });
+
+  // Every new settings session remounts HistorySection (keyed on main's
+  // `settingsSession`), so its dialog state resets even when a quick
+  // close→reopen reaches the still-mounted settings renderer as broadcasts
+  // React renders together and `open` never reads false there. That
+  // coalescing depends on renderer scheduling and cannot be forced here, so
+  // this pins the remount itself: a DOM node tagged in one session is gone
+  // after a cold reopen, while a warm section-open keeps the same node.
+  test("a cold settings reopen remounts the history section; a warm section-open does not", async () => {
+    const userDataDir = mkdtempSync(join(tmpdir(), "zeo-settings-"));
+    const { app, sidebar } = await launch(userDataDir);
+    const TAG = "__zeoSessionTag";
+    const isTagged = (page: Page): Promise<boolean> =>
+      page
+        .getByTestId("settings-history-stats")
+        .evaluate((el, tag) => (el as unknown as Record<string, unknown>)[tag] === true, TAG);
+    try {
+      let settings = await openSettings(app, sidebar, "settings.openHistory");
+      await settings.getByTestId("settings-history-clear").click();
+      await expect(settings.getByTestId("settings-history-clear-dialog")).toBeVisible();
+      await settings
+        .getByTestId("settings-history-stats")
+        .evaluate((el, tag) => {
+          (el as unknown as Record<string, unknown>)[tag] = true;
+        }, TAG);
+      const sessionBefore = (await tabsList(sidebar)).settingsSession;
+
+      // A warm section-open while settings is open is the same session.
+      await runCommand(sidebar, "settings.openHistory");
+      expect((await tabsList(sidebar)).settingsSession).toBe(sessionBefore);
+      expect(await isTagged(settings)).toBe(true);
+      await expect(settings.getByTestId("settings-history-clear-dialog")).toBeVisible();
+
+      // A cold reopen is a new session: a fresh section, with no dialog.
+      await runCommand(sidebar, "settings.close");
+      await expect
+        .poll(() => settingsOpen(sidebar), { message: "expected settings.close to close settings" })
+        .toBe(false);
+      settings = await openSettings(app, sidebar, "settings.openHistory");
+      expect((await tabsList(sidebar)).settingsSession).toBe(sessionBefore + 1);
+      await expect.poll(() => isTagged(settings), { message: "expected a remounted section" }).toBe(false);
+      await expect(settings.getByTestId("settings-history-clear-dialog")).toHaveCount(0);
+    } finally {
+      await app.close();
+      rmSync(userDataDir, { recursive: true, force: true });
+    }
+  });
+
+  // A clear started in one settings session must not touch a later session:
+  // each new session remounts HistorySection (keyed on `settingsSession`), so
+  // the superseded instance's continuations can only reach unmounted state;
+  // within a mounted instance `sessionRef` additionally guards them across a
+  // close. Here the clear is still in flight when settings is closed and
+  // reopened, and the reopened session opens its own dialog; once the stale
+  // promise is released (and rejects), that dialog must be untouched (no
+  // error, Confirm enabled) rather than inheriting the stale failure.
+  test("a stale clear from a superseded session leaves the reopened dialog untouched", async () => {
+    const userDataDir = mkdtempSync(join(tmpdir(), "zeo-settings-"));
+    const server = await startHistoryFixtureServer();
+    const { app, sidebar } = await launch(userDataDir);
+    try {
+      const tabId = await freshHistory(app, sidebar);
+      await navigateAndRecord(sidebar, tabId, `${server.base}/a.html`, 1);
+
+      // A rejecting `zeo:history:clear` handler gated behind
+      // `__zeoReleaseHistoryClear`, same pattern as the failed-clear test
+      // above, plus a `__zeoHistoryClearReleased` flag the test can poll to
+      // know the rejection has actually been delivered to main before it
+      // asserts anything about the (ignored) renderer-side settle.
+      await app.evaluate(({ ipcMain }) => {
+        const g = globalThis as unknown as {
+          __zeoHistoryClearReleased: boolean;
+          __zeoReleaseHistoryClear?: () => void;
+        };
+        g.__zeoHistoryClearReleased = false;
+        ipcMain.removeHandler("zeo:history:clear");
+        ipcMain.handle("zeo:history:clear", () => {
+          return new Promise((_resolve, reject) => {
+            g.__zeoReleaseHistoryClear = () => {
+              g.__zeoHistoryClearReleased = true;
+              reject(new Error("stale clear"));
+            };
+          });
+        });
+      });
+
+      let settings = await openSettings(app, sidebar, "settings.openHistory");
+      await settings.getByTestId("settings-history-clear").click();
+      await expect(settings.getByTestId("settings-history-clear-dialog")).toBeVisible();
+      await settings.getByTestId("settings-history-clear-confirm").click();
+      // The clear is now in flight (Confirm disabled) when settings closes.
+      await expect(settings.getByTestId("settings-history-clear-confirm")).toBeDisabled();
+
+      // Close settings the same way the close/reopen test does, while the
+      // clear from this (now superseded) session is still pending.
+      const sessionBefore = (await tabsList(sidebar)).settingsSession;
+      await runCommand(sidebar, "settings.close");
+      await expect
+        .poll(() => settingsOpen(sidebar), { message: "expected settings.close to close settings" })
+        .toBe(false);
+
+      settings = await openSettings(app, sidebar, "settings.openHistory");
+      // A cold reopen starts exactly one new session; a warm section-open
+      // while settings is already open does not.
+      expect((await tabsList(sidebar)).settingsSession).toBe(sessionBefore + 1);
+      await runCommand(sidebar, "settings.openHistory");
+      expect((await tabsList(sidebar)).settingsSession).toBe(sessionBefore + 1);
+      // The dialog is not already open on reopen (a fresh session).
+      await expect(settings.getByTestId("settings-history-clear-dialog")).toHaveCount(0);
+
+      // Open the dialog in the new session BEFORE the stale clear settles, so
+      // an unguarded settle would land in live, rendered state: its error would
+      // show in this dialog.
+      await settings.getByTestId("settings-history-clear").click();
+      const reopenedDialog = settings.getByTestId("settings-history-clear-dialog");
+      await expect(reopenedDialog).toBeVisible();
+
+      // Release the stale clear now that a newer session is live, and wait for
+      // main to have rejected it.
+      await app.evaluate(() => {
+        (globalThis as unknown as { __zeoReleaseHistoryClear?: () => void }).__zeoReleaseHistoryClear?.();
+      });
+      await expect
+        .poll(
+          () =>
+            app.evaluate(
+              () =>
+                (globalThis as unknown as { __zeoHistoryClearReleased: boolean })
+                  .__zeoHistoryClearReleased,
+            ),
+          { message: "expected the stale clear handler to have rejected" },
+        )
+        .toBe(true);
+      // Barrier: IPC replies reach the renderer in order, so once a later
+      // `history.stats()` round-trip resolves, the stale rejection's
+      // continuation has already run.
+      await settings.evaluate(async () => {
+        await (
+          window as unknown as { zeo: { history: { stats(): Promise<unknown> } } }
+        ).zeo.history.stats();
+      });
+
+      // The stale settle never touched this session: the open dialog shows no
+      // error and its Confirm stays enabled.
+      await expect(reopenedDialog).toBeVisible();
+      await expect(settings.getByTestId("settings-history-clear-dialog-error")).toHaveCount(0);
+      await expect(settings.getByTestId("settings-history-clear-confirm")).toBeEnabled();
     } finally {
       await app.close();
       await server.close();
@@ -746,6 +1042,15 @@ function historyStats(sidebar: Page): Promise<{ entries: number; visits: number 
   });
 }
 
+/**
+ * The exact "loaded" rendering of the settings history stats row, mirroring
+ * `historyStatsText`'s `"loaded"` branch (apps/ui/src/history-clear.ts), so
+ * tests can assert the full text rather than a substring.
+ */
+function historyStatsLabel(entries: number, visits: number): string {
+  return `${entries} entries · ${visits} visits`;
+}
+
 /** Navigate a tab over the sidebar bridge (records synchronously in did-navigate). */
 function navigate(sidebar: Page, id: string, url: string): Promise<void> {
   return sidebar.evaluate(
@@ -799,3 +1104,469 @@ async function freshHistory(app: ElectronApplication, sidebar: Page): Promise<st
   expect(await recent(sidebar)).toEqual([]);
   return id;
 }
+
+// --- PRD 10.6 settings sheet ---------------------------------------------------
+
+/** The main window's content size, as main reads it for `settingsBounds`. */
+function contentSize(app: ElectronApplication): Promise<{ width: number; height: number }> {
+  return app.evaluate(({ BrowserWindow }) => {
+    const [width, height] = BrowserWindow.getAllWindows()[0].getContentSize();
+    return { width, height };
+  });
+}
+
+/** Resize the main window's content area (main relays out every view on resize). */
+function setContentSize(app: ElectronApplication, width: number, height: number): Promise<void> {
+  return app.evaluate(
+    ({ BrowserWindow }, size) => {
+      BrowserWindow.getAllWindows()[0].setContentSize(size.width, size.height);
+    },
+    { width, height },
+  );
+}
+
+/**
+ * The settings child view's native bounds, read in main among the window's
+ * child views by its `view=settings` url. `null` when it is not attached (the
+ * view is removed from the window on close).
+ */
+function settingsViewBounds(app: ElectronApplication): Promise<Rect | null> {
+  return app.evaluate(({ BrowserWindow }) => {
+    const win = BrowserWindow.getAllWindows()[0];
+    for (const child of win.contentView.children) {
+      const wc = (child as { webContents?: { getURL(): string } }).webContents;
+      if (wc != null && wc.getURL().includes("view=settings")) {
+        const b = child.getBounds();
+        return { x: b.x, y: b.y, width: b.width, height: b.height };
+      }
+    }
+    return null;
+  });
+}
+
+/** The sheet's client rect plus the viewport it was laid out in. */
+function sheetGeometry(
+  settings: Page,
+): Promise<{ rect: Rect; innerWidth: number; innerHeight: number }> {
+  return settings.getByTestId("settings").evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    return {
+      rect: { x: r.x, y: r.y, width: r.width, height: r.height },
+      innerWidth: window.innerWidth,
+      innerHeight: window.innerHeight,
+    };
+  });
+}
+
+/**
+ * Wait out a close that must NOT happen. A close is an async bridge round trip
+ * from the settings view, so an immediate read cannot tell "did not close"
+ * from "has not closed yet"; this holds `settingsOpen === true` over a window
+ * well past that round trip.
+ */
+async function expectStaysOpen(sidebar: Page, why: string): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 600));
+  expect(await settingsOpen(sidebar), why).toBe(true);
+}
+
+test.describe("PRD 10.6 settings sheet", () => {
+  test("the settings view covers the whole window before and after a resize", async () => {
+    const userDataDir = mkdtempSync(join(tmpdir(), "zeo-settings-"));
+    const { app, sidebar } = await launch(userDataDir);
+    try {
+      await openSettings(app, sidebar, "settings.open");
+      const coversWindow = async (): Promise<unknown> => {
+        const [bounds, size] = await Promise.all([settingsViewBounds(app), contentSize(app)]);
+        const want = { x: 0, y: 0, width: size.width, height: size.height };
+        // settingsBounds is the formula main applies; it must be the full window.
+        expect(settingsBounds(size.width, size.height)).toEqual(want);
+        return JSON.stringify(bounds) === JSON.stringify(want) ? "ok" : { bounds, want };
+      };
+      await expect.poll(coversWindow).toBe("ok");
+      const before = await contentSize(app);
+
+      await setContentSize(app, 900, 520);
+      await expect.poll(() => contentSize(app)).toEqual({ width: 900, height: 520 });
+      // The size really changed, so the second check is not the first one again.
+      expect(before).not.toEqual({ width: 900, height: 520 });
+      await expect.poll(coversWindow).toBe("ok");
+      expect(await settingsViewBounds(app)).toEqual({ x: 0, y: 0, width: 900, height: 520 });
+    } finally {
+      await app.close();
+      rmSync(userDataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("the sheet sits at settingsSheetRect at 1280×800, 900×520 and 640×400", async () => {
+    const userDataDir = mkdtempSync(join(tmpdir(), "zeo-settings-"));
+    const { app, sidebar } = await launch(userDataDir);
+    try {
+      const settings = await openSettings(app, sidebar, "settings.open");
+      const measured: string[] = [];
+      for (const [w, h] of [
+        [1280, 800],
+        [900, 520],
+        [640, 400],
+      ]) {
+        await setContentSize(app, w, h);
+        // The renderer re-lays the sheet on `resize`; wait until its viewport is
+        // the new content size, then compare against the formula for THAT size.
+        await expect
+          .poll(
+            async () => {
+              const size = await contentSize(app);
+              const g = await sheetGeometry(settings);
+              const want = settingsSheetRect(g.innerWidth, g.innerHeight);
+              return g.innerWidth === size.width &&
+                g.innerHeight === size.height &&
+                JSON.stringify(g.rect) === JSON.stringify(want)
+                ? "ok"
+                : { size, geometry: g, want };
+            },
+            { message: `sheet rect at ${w}×${h}` },
+          )
+          .toBe("ok");
+        const g = await sheetGeometry(settings);
+        measured.push(`${w}×${h}->${g.innerWidth}×${g.innerHeight}`);
+        // The sheet always fits with its margin, down to the minimum window.
+        expect(g.rect.width).toBeGreaterThan(0);
+        expect(g.rect.x).toBeGreaterThanOrEqual(0);
+        expect(g.rect.y).toBeGreaterThanOrEqual(0);
+      }
+      test.info().annotations.push({ type: "viewport-sizes", description: measured.join(", ") });
+      // Three distinct viewports, or the loop checked one geometry three times.
+      const sizes = measured.map((m) => m.split("->")[1]);
+      expect(new Set(sizes).size, `measured viewports: ${measured.join(", ")}`).toBe(3);
+    } finally {
+      await app.close();
+      rmSync(userDataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("the page is transparent and the scrim paints --scrim", async () => {
+    const userDataDir = mkdtempSync(join(tmpdir(), "zeo-settings-"));
+    const { app, sidebar } = await launch(userDataDir);
+    try {
+      const settings = await openSettings(app, sidebar, "settings.open");
+      const look = await settings.evaluate(() => ({
+        html: getComputedStyle(document.documentElement).backgroundColor,
+        body: getComputedStyle(document.body).backgroundColor,
+      }));
+      expect(look).toEqual({ html: "rgba(0, 0, 0, 0)", body: "rgba(0, 0, 0, 0)" });
+
+      const scrim = await tokenBackground(settings, "--scrim");
+      expect(scrim).not.toBe("rgba(0, 0, 0, 0)");
+      await expect(settings.getByTestId("settings-scrim")).toHaveCSS("background-color", scrim);
+      // The scrim fills the viewport.
+      const box = await settings.getByTestId("settings-scrim").evaluate((el) => {
+        const r = el.getBoundingClientRect();
+        return { x: r.x, y: r.y, width: r.width, height: r.height, w: innerWidth, h: innerHeight };
+      });
+      expect(box).toEqual({ x: 0, y: 0, width: box.w, height: box.h, w: box.w, h: box.h });
+    } finally {
+      await app.close();
+      rmSync(userDataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("a scrim click and the close button close the sheet; clicks inside it do not", async () => {
+    const userDataDir = mkdtempSync(join(tmpdir(), "zeo-settings-"));
+    const { app, sidebar } = await launch(userDataDir);
+    try {
+      let settings = await openSettings(app, sidebar, "settings.open");
+      const corner = await settings.evaluate(() => ({ x: 4, y: window.innerHeight - 4 }));
+
+      // The bottom-left corner is scrim (the sheet has a 24 px margin at least),
+      // over where the sidebar sits: the click closes the sheet.
+      const hit = await settings.evaluate(
+        (p) => document.elementFromPoint(p.x, p.y)?.getAttribute("data-testid") ?? null,
+        corner,
+      );
+      expect(hit).toBe("settings-scrim");
+      await settings.mouse.click(corner.x, corner.y);
+      await expect
+        .poll(() => settingsOpen(sidebar), { message: "expected a scrim click to close settings" })
+        .toBe(false);
+
+      // A click inside the sheet (its panel title) does not close it.
+      settings = await openSettings(app, sidebar, "settings.open");
+      await settings.locator(".settings__panel-title").click();
+      await expectStaysOpen(sidebar, "a click inside the sheet must not close it");
+
+      // A press that starts inside the sheet and is released over the scrim (a
+      // text selection dragged out) does not close it either: the click lands on
+      // the scrim, but the press did not.
+      const title = await settings.locator(".settings__panel-title").boundingBox();
+      if (title === null) {
+        throw new Error("panel title has no box");
+      }
+      await settings.mouse.move(title.x + 4, title.y + title.height / 2);
+      await settings.mouse.down();
+      await settings.mouse.move(corner.x, corner.y, { steps: 6 });
+      await settings.mouse.up();
+      await expectStaysOpen(
+        sidebar,
+        "a press inside the sheet released on the scrim must not close it",
+      );
+
+      // The close button closes it.
+      await expect(settings.getByTestId("settings-close")).toHaveAccessibleName("Close settings");
+      await settings.getByTestId("settings-close").click();
+      await expect
+        .poll(() => settingsOpen(sidebar), { message: "expected settings-close to close settings" })
+        .toBe(false);
+    } finally {
+      await app.close();
+      rmSync(userDataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("the selected section row paints --accent-soft and the sheet is a labelled dialog", async () => {
+    const userDataDir = mkdtempSync(join(tmpdir(), "zeo-settings-"));
+    const { app, sidebar } = await launch(userDataDir);
+    try {
+      const settings = await openSettings(app, sidebar, "settings.open");
+      const sheet = settings.getByTestId("settings");
+      await expect(sheet).toHaveAttribute("role", "dialog");
+      await expect(sheet).toHaveAttribute("aria-modal", "true");
+      await expect(sheet).toHaveAccessibleName("Settings");
+      await expect(settings.getByTestId("settings-section-blocking")).toHaveText(
+        "Content blocking",
+      );
+
+      const accentSoft = await tokenBackground(settings, "--accent-soft");
+      await expect(settings.locator(SELECTED("general"))).toHaveCount(1);
+      await expect(settings.getByTestId("settings-section-general")).toHaveCSS(
+        "background-color",
+        accentSoft,
+      );
+      // An unselected row does not (the probe discriminates).
+      await expect(settings.getByTestId("settings-section-about")).not.toHaveCSS(
+        "background-color",
+        accentSoft,
+      );
+
+      // The fill follows the selection, and holds while the pointer is still
+      // over the clicked row (the selected fill outranks :hover).
+      const about = settings.getByTestId("settings-section-about");
+      await about.click();
+      await expect(settings.locator(SELECTED("about"))).toHaveCount(1);
+      expect(
+        await about.evaluate((el) => el.matches(":hover")),
+        "the pointer is still over the clicked row",
+      ).toBe(true);
+      await expect(about).toHaveCSS("background-color", accentSoft);
+      // Control: hovering an unselected row does paint the hover fill, so the
+      // :hover rule is live in this page and the check above discriminates.
+      const hover = await tokenBackground(settings, "--popover-hover");
+      expect(hover).not.toBe(accentSoft);
+      const general = settings.getByTestId("settings-section-general");
+      await general.hover();
+      await expect(general).toHaveCSS("background-color", hover);
+
+      // Resting (pointer off the nav): the selected row keeps the fill.
+      const panel = await settings.locator(".settings__panel-title").boundingBox();
+      if (panel === null) {
+        throw new Error("panel title has no box");
+      }
+      await settings.mouse.move(panel.x + 4, panel.y + panel.height / 2);
+      await expect(settings.getByTestId("settings-section-about")).toHaveCSS(
+        "background-color",
+        accentSoft,
+      );
+      await expect(settings.getByTestId("settings-section-general")).not.toHaveCSS(
+        "background-color",
+        accentSoft,
+      );
+    } finally {
+      await app.close();
+      rmSync(userDataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("every General well holds rows, and a well's second row has a 1 px top border", async () => {
+    const userDataDir = mkdtempSync(join(tmpdir(), "zeo-settings-"));
+    const { app, sidebar } = await launch(userDataDir);
+    try {
+      const settings = await openSettings(app, sidebar, "settings.openGeneral");
+      await expect(settings.locator(SELECTED("general"))).toHaveCount(1);
+      await expect(settings.getByTestId("settings-search-engine-google")).toHaveCount(1);
+
+      const wells = await settings.locator(".settings__panel .settings__well").evaluateAll((els) =>
+        els.map((well) => {
+          const rows = Array.from(well.children).filter((c) =>
+            c.classList.contains("settings__row"),
+          );
+          const border = (el: Element | undefined): string =>
+            el === undefined
+              ? ""
+              : `${getComputedStyle(el).borderTopWidth} ${getComputedStyle(el).borderTopStyle}`;
+          return { rows: rows.length, first: border(rows[0]), second: border(rows[1]) };
+        }),
+      );
+      expect(wells.length, "General renders at least one well").toBeGreaterThan(0);
+      for (const [i, well] of wells.entries()) {
+        expect(well.rows, `well ${i} holds a row`).toBeGreaterThanOrEqual(1);
+        // The first row has no separator; only a row after a row does.
+        expect(well.first, `well ${i} first row`).toBe("0px none");
+        if (well.rows >= 2) {
+          expect(well.second, `well ${i} second row`).toBe("1px solid");
+        }
+      }
+      // At least one multi-row well, or the separator check never ran.
+      expect(
+        wells.some((w) => w.rows >= 2),
+        JSON.stringify(wells),
+      ).toBe(true);
+    } finally {
+      await app.close();
+      rmSync(userDataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("history clear goes through an alertdialog: Escape and Cancel keep history, confirm clears", async () => {
+    const userDataDir = mkdtempSync(join(tmpdir(), "zeo-settings-"));
+    const server = await startHistoryFixtureServer();
+    const { app, sidebar } = await launch(userDataDir);
+    try {
+      const tabId = await freshHistory(app, sidebar);
+      await navigateAndRecord(sidebar, tabId, `${server.base}/a.html`, 1);
+      await navigateAndRecord(sidebar, tabId, `${server.base}/b.html`, 2);
+      await waitForViewsIdle(app);
+
+      const settings = await openSettings(app, sidebar, "settings.openHistory");
+      const stats = settings.getByTestId("settings-history-stats");
+      await expect(stats).toContainText("2 entries");
+      await expect(stats).toContainText("2 visits");
+      const trigger = settings.getByTestId("settings-history-clear");
+      const dialog = settings.getByTestId("settings-history-clear-dialog");
+      const cancel = settings.getByTestId("settings-history-clear-cancel");
+      const confirm = settings.getByTestId("settings-history-clear-confirm");
+      // The trigger is gated on loaded stats; once they show, it is enabled.
+      await expect(trigger).toBeEnabled();
+
+      // --- Escape: the dialog closes, the sheet stays, history is intact. ---
+      await trigger.click();
+      await expect(dialog).toBeVisible();
+      await expect(dialog).toHaveAttribute("role", "alertdialog");
+      await expect(dialog).toHaveAttribute("aria-modal", "true");
+      await expect(dialog).toContainText("This removes 2 entries and 2 visits.");
+      await expect(cancel).toBeFocused();
+      // Tab and Shift+Tab cycle between the two buttons.
+      await settings.keyboard.press("Tab");
+      await expect(confirm).toBeFocused();
+      await settings.keyboard.press("Tab");
+      await expect(cancel).toBeFocused();
+      await settings.keyboard.press("Shift+Tab");
+      await expect(confirm).toBeFocused();
+      await settings.keyboard.press("Shift+Tab");
+      await expect(cancel).toBeFocused();
+
+      await settings.keyboard.press("Escape");
+      await expect(dialog).toHaveCount(0);
+      await expectStaysOpen(sidebar, "Escape in the dialog must not close the settings sheet");
+      expect(await historyStats(sidebar)).toEqual({ entries: 2, visits: 2 });
+      await expect(stats).toContainText("2 entries");
+
+      // --- Cancel: same, and focus returns to the trigger. ---
+      await trigger.click();
+      await expect(dialog).toBeVisible();
+      await expect(cancel).toBeFocused();
+      await cancel.click();
+      await expect(dialog).toHaveCount(0);
+      await expect(trigger).toBeFocused();
+      expect(await settingsOpen(sidebar)).toBe(true);
+      expect(await historyStats(sidebar)).toEqual({ entries: 2, visits: 2 });
+      await expect(stats).toContainText("2 entries");
+
+      // --- Section nav is inert while the dialog is open, even with focus on
+      // <body> (outside the dialog): ArrowDown + Enter must not switch the
+      // section, which would unmount the History section and its dialog. ---
+      await trigger.click();
+      await expect(dialog).toBeVisible();
+      await expect(settings.locator(SELECTED("history"))).toHaveCount(1);
+      const focusedTag = await settings.evaluate(() => {
+        (document.activeElement as HTMLElement | null)?.blur();
+        return document.activeElement?.tagName ?? null;
+      });
+      // The keys really land on <body>, not inside the dialog.
+      expect(focusedTag).toBe("BODY");
+      await settings.keyboard.press("ArrowDown");
+      await settings.keyboard.press("Enter");
+      // The count already holds before the keys, so let React commit any
+      // re-render they caused (two frames) before reading it.
+      await settings.evaluate(
+        () =>
+          new Promise<void>((resolve) =>
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+          ),
+      );
+      await expect(dialog).toHaveCount(1);
+      await expect(settings.locator(SELECTED("history"))).toHaveCount(1);
+      await expect(settings.locator(HIGHLIGHT("history"))).toHaveCount(1);
+      await expect(stats).toContainText("2 entries");
+      await cancel.click();
+      await expect(dialog).toHaveCount(0);
+      expect(await historyStats(sidebar)).toEqual({ entries: 2, visits: 2 });
+
+      // --- Confirm: clears. ---
+      await trigger.click();
+      await expect(dialog).toBeVisible();
+      await confirm.click();
+      await expect(dialog).toHaveCount(0);
+      await expect(stats).toContainText("0 entries");
+      await expect(stats).toContainText("0 visits");
+      expect(await historyStats(sidebar)).toEqual({ entries: 0, visits: 0 });
+      expect(await settingsOpen(sidebar)).toBe(true);
+    } finally {
+      await app.close();
+      await server.close();
+      rmSync(userDataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("opening settings closes an open find session, and find stays closed while settings is open", async () => {
+    const userDataDir = mkdtempSync(join(tmpdir(), "zeo-settings-"));
+    const { app, sidebar } = await launch(userDataDir);
+    const findOpen = (): Promise<boolean> =>
+      sidebar.evaluate(async () => {
+        const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+        return (await zeo.find.state()).open;
+      });
+    try {
+      await sidebar.evaluate(async () => {
+        const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+        const tab = await zeo.tabs.create("data:text/html,ZEOSETTINGS_FIND");
+        await zeo.tabs.activate(tab.id);
+      });
+      await waitForViewUrl(app, "ZEOSETTINGS_FIND");
+      await waitForViewsIdle(app);
+
+      await sidebar.evaluate(() => {
+        const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+        return zeo.find.open();
+      });
+      await expect.poll(findOpen, { message: "expected find to open" }).toBe(true);
+
+      await openSettings(app, sidebar, "settings.open");
+      await expect
+        .poll(findOpen, { message: "expected settings.open to close the find session" })
+        .toBe(false);
+
+      // While settings is open, neither the command nor the bridge reopens find.
+      await runCommand(sidebar, "find.open").catch(() => undefined);
+      await sidebar
+        .evaluate(() => {
+          const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+          return zeo.find.open();
+        })
+        .catch(() => undefined);
+      // openFindSession is synchronous in main, so the state is final here.
+      expect(await findOpen()).toBe(false);
+      expect(await settingsOpen(sidebar)).toBe(true);
+    } finally {
+      await app.close();
+      rmSync(userDataDir, { recursive: true, force: true });
+    }
+  });
+});

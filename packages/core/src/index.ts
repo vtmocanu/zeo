@@ -179,11 +179,19 @@ export {
   COMMAND_BAR_LIST_PADDING_BOTTOM,
   commandBarPanelRect,
   settingsBounds,
+  settingsSheetRect,
+  SETTINGS_SHEET_WIDTH,
+  SETTINGS_SHEET_HEIGHT,
+  SHEET_MARGIN,
   FIND_BAR_WIDTH,
   FIND_BAR_HEIGHT,
   FIND_BAR_INSET,
-  FIND_BAR_TOP,
+  FIND_PILL_MIN_WIDTH,
+  FIND_BAR_SHADOW_MARGIN,
+  findAnchorRect,
+  findPillRect,
   findBarBounds,
+  windowCardRects,
   QUICK_BROWSE_WIDTH,
   QUICK_BROWSE_HEIGHT,
   QUICK_BROWSE_CHROME_HEIGHT,
@@ -191,6 +199,7 @@ export {
   DIVIDER_WIDTH,
   splitPaneBounds,
 } from "./layout.js";
+export type { WindowCardRect } from "./layout.js";
 export {
   SIDEBAR_DEFAULT_WIDTH,
   SIDEBAR_MIN_WIDTH,

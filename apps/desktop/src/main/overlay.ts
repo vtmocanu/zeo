@@ -1,4 +1,4 @@
-import { commandBarPanelRect, findBarBounds } from "@zeo/core";
+import { commandBarPanelRect, contentRect, findAnchorRect, findBarBounds } from "@zeo/core";
 import { runtime } from "./state.js";
 
 /**
@@ -6,10 +6,14 @@ import { runtime } from "./state.js";
  * covers the whole window content area (the renderer draws a scrim and places
  * the panel with {@link commandBarPanelRect}), so every click in the window
  * lands in the overlay while the bar is open. The find bar keeps its
- * region-sized {@link findBarBounds} rect. A no-op unless both the window and
- * the overlay exist. When the window is too small for the surface the overlay
- * is hidden and left hidden until a later bounds pass has room. Otherwise, while
- * the surface is open, the overlay is (re-)shown. Returns whether it left the
+ * card-anchored {@link findBarBounds} rect, anchored to the split pane owning
+ * `runtime.find.tabId` (or the single content region) via
+ * {@link findAnchorRect}, bounded by the PAGE region ({@link contentRect}) so
+ * a split pane narrower than `FIND_PILL_MIN_WIDTH` still leaves the pill's
+ * controls on-screen. A no-op unless both the window and the overlay
+ * exist. When the window is too small for the surface the overlay is hidden
+ * and left hidden until a later bounds pass has room. Otherwise, while the
+ * surface is open, the overlay is (re-)shown. Returns whether it left the
  * overlay shown, so callers can drive focus off that rather than force
  * visibility. Called on open, on query change and on window resize.
  */
@@ -20,7 +24,10 @@ export function layoutOverlay(): boolean {
   const [width, height] = runtime.win.getContentSize();
   const find = runtime.commandBar.surface === "find";
   const bounds = find
-    ? findBarBounds(width, height, runtime.chrome)
+    ? findBarBounds(
+        findAnchorRect(width, height, runtime.chrome, runtime.layout, runtime.find.tabId),
+        contentRect(width, height, runtime.chrome),
+      )
     : commandBarPanelRect(width, height, 0).width === 0
       ? { x: 0, y: 0, width: 0, height: 0 }
       : { x: 0, y: 0, width, height };

@@ -77,14 +77,21 @@ export function closeFindSession(returnFocus = true): void {
 /**
  * Opens (or re-focuses) the find session on the active tab (PRD 6.3 §3
  * `open()`). With no active tab it is a no-op — the IPC handler and command
- * enablement reject that case. When already open it just re-focuses the overlay
- * input (the find bar selects its text on focus). Otherwise it closes the command
- * bar if open (mutual exclusion), opens a fresh session, flips the overlay to the
- * find surface, lays it out with {@link findBarBounds}, and pushes/broadcasts.
+ * enablement reject that case. Also a no-op while `runtime.settingsOpen` is
+ * true: `IPC.findOpen` bypasses command enablement, and the settings view
+ * shares the same preload, so without this guard a find pill could float over
+ * the settings sheet (PRD §2/§4, AC5). When already open it just re-focuses the
+ * overlay input (the find bar selects its text on focus). Otherwise it closes
+ * the command bar if open (mutual exclusion), opens a fresh session, flips the
+ * overlay to the find surface, lays it out with {@link findBarBounds}, and
+ * pushes/broadcasts.
  */
 export function openFindSession(): void {
   const activeTabId = runtime.store.activeTabId;
   if (activeTabId === null) {
+    return;
+  }
+  if (runtime.settingsOpen) {
     return;
   }
   if (runtime.find.open) {

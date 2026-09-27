@@ -497,6 +497,10 @@ describe("find commands", () => {
     expect(isCommandEnabled("find.open", context({ activeTab: null }))).toBe(false);
   });
 
+  test("find.open is disabled while settings is open, even with an active tab", () => {
+    expect(isCommandEnabled("find.open", context({ activeTab: activeTab(), settingsOpen: true }))).toBe(false);
+  });
+
   test("find.close is registered once with no accelerator and no menu", () => {
     const matches = COMMANDS.filter((c) => c.id === "find.close");
     expect(matches).toHaveLength(1);
