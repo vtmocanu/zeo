@@ -9,6 +9,8 @@ milestone, a minor bump only for very large breakthroughs.
 
 ## [Unreleased]
 
+## [0.0.29] - 2026-09-27
+
 ### Added
 
 - Theme tokens: `themeTokens()` in `@zeo/core` maps a space theme (one hue or
