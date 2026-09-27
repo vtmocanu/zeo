@@ -13,6 +13,9 @@
 
 .space-item {
   appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
   border: 1px solid transparent;
   background: none;
   color: var(--ink-primary);
@@ -24,6 +27,23 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   cursor: pointer;
+}
+
+/* The name sits in its own span so ellipsis still works in a flex row. */
+.space-item__name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Theme dot (PRD 10.3 §8): the space's swatch color or gradient, neutral
+   when the space is untinted. */
+.space-item__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+  background: var(--space-dot, var(--ink-secondary));
 }
 
 .space-item:hover {

@@ -7,6 +7,7 @@ import {
 } from "react";
 import {
   SETTINGS_SECTIONS,
+  activeSpaceTheme,
   nextSection,
   prevSection,
   SEARCH_ENGINES,
@@ -48,9 +49,9 @@ import { useThemeTokens } from "./theme.js";
  * `Cmd+,` toggle is owned by the main process, not here.
  */
 export function Settings() {
-  useThemeTokens(null);
   // The mirrored application state; null until the first snapshot/broadcast lands.
   const [state, setState] = useState<TabsState | null>(null);
+  useThemeTokens(activeSpaceTheme(state));
   // The section whose body is shown, and the renderer-local keyboard cursor.
   const [selected, setSelected] = useState<SettingsSectionId>("general");
   const [highlight, setHighlight] = useState<SettingsSectionId>("general");

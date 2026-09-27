@@ -1,6 +1,6 @@
 import { useLayoutEffect, useEffect, useState } from "react";
-import type { Appearance, SpaceTheme } from "@zeo/core";
-import { themeTokens } from "@zeo/core";
+import type { Appearance, SpaceTheme, TabsState } from "@zeo/core";
+import { activeSpaceTheme, themeTokens } from "@zeo/core";
 
 /**
  * Applies every semantic token returned by `themeTokens(theme, appearance)` to
@@ -57,4 +57,36 @@ export function useThemeTokens(theme: SpaceTheme | null): void {
   useLayoutEffect(() => {
     applyThemeTokens(document.documentElement, theme, appearance);
   }, [theme, appearance]);
+}
+
+/**
+ * The active space's theme for a surface that keeps no {@link TabsState} of its
+ * own (the overlay): mirrors state broadcasts, seeded from `tabs.list()` unless
+ * a broadcast already arrived, and yields `null` until either lands or without
+ * the bridge (a bare browser dev-open).
+ */
+export function useActiveSpaceTheme(): SpaceTheme | null {
+  const [state, setState] = useState<TabsState | null>(null);
+
+  useEffect(() => {
+    if (!window.zeo) {
+      return;
+    }
+    let sawBroadcast = false;
+    const unsubscribe = window.zeo.onStateChange((s) => {
+      sawBroadcast = true;
+      setState(s);
+    });
+    void window.zeo.tabs
+      .list()
+      .then((s) => {
+        if (!sawBroadcast) {
+          setState(s);
+        }
+      })
+      .catch(() => {});
+    return unsubscribe;
+  }, []);
+
+  return activeSpaceTheme(state);
 }
