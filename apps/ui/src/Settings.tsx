@@ -1062,9 +1062,9 @@ function ProfilesSection({
  * from under an in-flight clear that superseded it. This guard is scoped to
  * settings open/close transitions only: within one session, Cancel closes
  * the dialog immediately but does not cancel the in-flight clear itself, so
- * a stale confirm still owns `clearing`/Confirm's disabled state until it
- * settles (harmless — Cancel already dropped the dialog that would have
- * shown the result). Likewise, closing mid-clear and reopening lets a second
+ * that clear still owns `clearing`/Confirm's disabled state until it
+ * settles, and a dialog reopened in the same session shows its result (its
+ * error, or it closes on success) since it is the same clear. Likewise, closing mid-clear and reopening lets a second
  * clear start in the new session while the first is still pending; the two
  * are independent and the session check keeps the first from ever writing
  * into the second's state.

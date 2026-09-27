@@ -814,8 +814,8 @@ test.describe("PRD 6.5 settings sections + search engine (offline)", () => {
       await expect(dialog).toBeVisible();
       await expect(confirm).toBeEnabled();
       // ConfirmDialog's `useEffect([error])` refocuses Cancel once the inline
-      // error appears, so a failed clear never strands focus on the (still
-      // enabled) Confirm button.
+      // error appears, so focus returns into the dialog instead of staying
+      // wherever the disabled Confirm left it.
       await expect(settings.getByTestId("settings-history-clear-cancel")).toBeFocused();
     } finally {
       await app.close();
@@ -827,10 +827,9 @@ test.describe("PRD 6.5 settings sections + search engine (offline)", () => {
   // `sessionRef` in HistorySection is bumped on every open/close transition,
   // and `onConfirmClear`'s continuations compare against it before touching
   // state. Here the clear is still in flight when settings is closed and
-  // reopened; once the stale promise is released (and rejects), the reopened
-  // session's dialog must show no error, and a freshly opened dialog must be
-  // untouched (no error, Confirm enabled) rather than inheriting the stale
-  // failure.
+  // reopened, and the reopened session opens its own dialog; once the stale
+  // promise is released (and rejects), that dialog must be untouched (no
+  // error, Confirm enabled) rather than inheriting the stale failure.
   test("a stale clear from a superseded session leaves the reopened dialog untouched", async () => {
     const userDataDir = mkdtempSync(join(tmpdir(), "zeo-settings-"));
     const server = await startHistoryFixtureServer();
@@ -879,9 +878,15 @@ test.describe("PRD 6.5 settings sections + search engine (offline)", () => {
       // The dialog is not already open on reopen (a fresh session).
       await expect(settings.getByTestId("settings-history-clear-dialog")).toHaveCount(0);
 
-      // Release the stale clear now that a newer session is live, and wait
-      // for main to have actually thrown before asserting anything about the
-      // (session-guarded, so ignored) renderer-side settle.
+      // Open the dialog in the new session BEFORE the stale clear settles, so
+      // an unguarded settle would land in live, rendered state: its error would
+      // show in this dialog.
+      await settings.getByTestId("settings-history-clear").click();
+      const reopenedDialog = settings.getByTestId("settings-history-clear-dialog");
+      await expect(reopenedDialog).toBeVisible();
+
+      // Release the stale clear now that a newer session is live, and wait for
+      // main to have rejected it.
       await app.evaluate(() => {
         (globalThis as unknown as { __zeoReleaseHistoryClear?: () => void }).__zeoReleaseHistoryClear?.();
       });
@@ -896,15 +901,17 @@ test.describe("PRD 6.5 settings sections + search engine (offline)", () => {
           { message: "expected the stale clear handler to have rejected" },
         )
         .toBe(true);
-      // Give the renderer a turn of the event loop to receive and (no-op)
-      // process the stale rejection before asserting its absence.
-      await settings.evaluate(() => new Promise<void>((resolve) => setTimeout(resolve, 50)));
-      await expect(settings.getByTestId("settings-history-clear-dialog-error")).toHaveCount(0);
+      // Barrier: IPC replies reach the renderer in order, so once a later
+      // `history.stats()` round-trip resolves, the stale rejection's
+      // continuation has already run.
+      await settings.evaluate(async () => {
+        await (
+          window as unknown as { zeo: { history: { stats(): Promise<unknown> } } }
+        ).zeo.history.stats();
+      });
 
-      // Opening the dialog fresh in this session must show no error and an
-      // enabled Confirm: the stale settle never touched this session's state.
-      await settings.getByTestId("settings-history-clear").click();
-      const reopenedDialog = settings.getByTestId("settings-history-clear-dialog");
+      // The stale settle never touched this session: the open dialog shows no
+      // error and its Confirm stays enabled.
       await expect(reopenedDialog).toBeVisible();
       await expect(settings.getByTestId("settings-history-clear-dialog-error")).toHaveCount(0);
       await expect(settings.getByTestId("settings-history-clear-confirm")).toBeEnabled();
