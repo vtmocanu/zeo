@@ -22,6 +22,7 @@ import { writeWindowLayout, readWindowLayout } from "./db.js";
 import { runtime, moduleDir, LAYOUT_SAVE_DEBOUNCE_MS } from "./state.js";
 import { broadcast } from "./broadcast.js";
 import { createViewFor, destroyView, ensureActiveView, raiseOverlays } from "./views.js";
+import { layoutOverlay } from "./overlay.js";
 
 /**
  * The usable page width a split `ratio` applies to: the content width minus the
@@ -78,8 +79,9 @@ export function ensureDividerView(): void {
  * missing, bounds the two panes and the divider via {@link splitPaneBounds}, shows
  * them, hides every other tracked view, re-raises the z-order, and focuses the
  * focused pane's view. Every op is guarded so a pane view destroyed mid-reconcile
- * is skipped, not fatal. Called everywhere the layout or the active view can
- * change.
+ * is skipped, not fatal. On every exit path, re-lays an open find overlay via
+ * {@link layoutOverlay} so its card-anchored pill follows a split/ratio/pane
+ * change. Called everywhere the layout or the active view can change.
  */
 export function applyLayout(): void {
   if (runtime.win === null) {
@@ -91,6 +93,9 @@ export function applyLayout(): void {
       runtime.dividerView.setVisible(false);
     }
     ensureActiveView();
+    if (runtime.find.open) {
+      layoutOverlay();
+    }
     return;
   }
   // Split: materialize each pane's view if it has none yet (mirroring
@@ -134,6 +139,9 @@ export function applyLayout(): void {
     if (focusedView !== undefined && !focusedView.webContents.isDestroyed()) {
       focusedView.webContents.focus();
     }
+  }
+  if (runtime.find.open) {
+    layoutOverlay();
   }
 }
 
