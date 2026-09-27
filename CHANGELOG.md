@@ -39,6 +39,14 @@ milestone, a minor bump only for very large breakthroughs.
 
 - An open find session in split view now closes when another pane's tab
   becomes active, instead of staying bound to the pane that lost focus.
+- In a narrow split pane the find pill keeps a usable minimum width and
+  extends past the pane (staying inside the page area), so its next and close
+  buttons remain clickable.
+- Closing settings closes an open "Clear browsing history?" dialog, and
+  reopening settings re-reads the history counts.
+- Clearing history works even when the counts cannot be read, Confirm is
+  disabled while a clear is in progress, and a failed clear shows an error in
+  the dialog.
 
 ## [0.0.33] - 2026-09-27
 
