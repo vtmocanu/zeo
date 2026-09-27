@@ -1,4 +1,6 @@
 export type { Tab } from "./tab.js";
+export { FAVORITES_MAX } from "./favorites.js";
+export type { Favorite, FavoriteContextMenuResult } from "./favorites.js";
 export type { Space } from "./space.js";
 export type { Profile } from "./profile.js";
 export { TabStore } from "./tab-store.js";
@@ -15,6 +17,7 @@ export type {
   ProfileRow,
   SpaceRow,
   TabRow,
+  FavoriteRow,
   PersistedState,
 } from "./persistence.js";
 export type {
@@ -43,6 +46,7 @@ export type {
   SpaceMenuAction,
   DividerGeometry,
   SplitViewApi,
+  FavoritesApi,
 } from "./ipc.js";
 export { IPC } from "./ipc.js";
 export type { BlockingState } from "./blocking.js";
@@ -267,3 +271,19 @@ export {
   pickerSetIntensity,
 } from "./space-theme.js";
 export type { ThemeKind } from "./space-theme.js";
+export {
+  URL_PILL_HEIGHT,
+  TAB_ROW_HEIGHT,
+  FAVORITE_TILE_HEIGHT,
+  FAVORITE_TILE_GAP,
+  FAVORITES_MAX_COLUMNS,
+  BOTTOM_BAR_HEIGHT,
+  sidebarSections,
+  clearableTabIds,
+  urlPillLabel,
+  favoriteGridColumns,
+  toReorderIndex,
+  favoriteInsertIndex,
+  belowPinnedClip,
+} from "./sidebar.js";
+export type { SidebarSections, TileBox } from "./sidebar.js";

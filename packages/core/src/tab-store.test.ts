@@ -125,6 +125,7 @@ describe("TabStore.list / snapshot", () => {
       pinned: false,
       lastActiveAt: 0,
       archivedAt: null,
+      favoriteId: null,
     });
 
     expect(store.list().map((tab) => tab.id)).toEqual(["t1"]);
@@ -149,6 +150,7 @@ describe("TabStore.list / snapshot", () => {
         "archivedAt",
         "createdAt",
         "faviconUrl",
+        "favoriteId",
         "id",
         "lastActiveAt",
         "pinned",
@@ -354,6 +356,23 @@ describe("TabStore.reorder", () => {
     // t2 stays unpinned; pinned group untouched.
     expect(store.list().map((t) => t.id)).toEqual(["t1", "t3", "t2"]);
     expect(store.list().find((t) => t.id === "t2")?.pinned).toBe(false);
+  });
+
+  test("groups are three-way (pinned, today, favorite): reordering a today tab never pulls in a favorite tab", () => {
+    const store = makeStore();
+    store.create({ url: "https://f.test", favoriteId: "fav1" }); // t1 = F (favorite, unpinned)
+    store.create({ url: "https://a.test" }); // t2 = a (today)
+    store.create({ url: "https://b.test" }); // t3 = b (today, active)
+    // Internal array order is [F, a, b]; F and b are both unpinned, so a
+    // two-way "pinned === target.pinned" group would wrongly include F.
+
+    store.reorder("t3", 1); // move b within its (today-only) group
+    // Today-only group is [a, b]; clamped to index 1 (last slot) -> unchanged.
+    expect(store.list().filter((t) => !t.pinned && t.favoriteId === null).map((t) => t.id)).toEqual(
+      ["t2", "t3"],
+    );
+    // The favorite group is untouched by the today-group reorder.
+    expect(store.list().filter((t) => t.favoriteId !== null).map((t) => t.id)).toEqual(["t1"]);
   });
 
   test("throws on an unknown id", () => {
@@ -863,6 +882,7 @@ describe("TabStore.rebaseActivity", () => {
       pinned: false,
       lastActiveAt,
       archivedAt,
+      favoriteId: null,
     };
   }
 
@@ -1104,5 +1124,192 @@ describe("TabStore.updateMeta", () => {
     store.create({ url: "https://a.test" }); // t1
 
     expect(store.updateMeta("nonexistent", { title: "X" })).toBe(false);
+  });
+});
+
+describe("TabStore.setFavorite", () => {
+  test("sets favoriteId and moves the record to the end of the array", () => {
+    const store = makeStore();
+    store.create({ url: "https://a.test" }); // t1
+    store.create({ url: "https://b.test" }); // t2
+    store.create({ url: "https://c.test" }); // t3
+
+    store.setFavorite("t1", "fav1");
+    expect(store.list().map((t) => t.id)).toEqual(["t2", "t3", "t1"]);
+    expect(store.list().find((t) => t.id === "t1")?.favoriteId).toBe("fav1");
+  });
+
+  test("a non-null value unpins the tab", () => {
+    const store = makeStore();
+    store.create({ url: "https://a.test" }); // t1
+    store.pin("t1");
+
+    store.setFavorite("t1", "fav1");
+    const tab = store.list().find((t) => t.id === "t1");
+    expect(tab?.pinned).toBe(false);
+    expect(tab?.favoriteId).toBe("fav1");
+  });
+
+  test("clearing back to null also moves the record to the end", () => {
+    const store = makeStore();
+    store.create({ url: "https://a.test" }); // t1
+    store.create({ url: "https://b.test", favoriteId: "fav1" }); // t2
+    store.create({ url: "https://c.test" }); // t3
+
+    store.setFavorite("t2", null);
+    expect(store.list().map((t) => t.id)).toEqual(["t1", "t3", "t2"]);
+    expect(store.list().find((t) => t.id === "t2")?.favoriteId).toBeNull();
+  });
+
+  test("throws on an unknown id", () => {
+    const store = makeStore();
+    expect(() => store.setFavorite("nope", "fav1")).toThrow();
+  });
+
+  test("throws on an archived id", () => {
+    const store = makeStore();
+    store.create({ url: "https://a.test" }); // t1
+    store.create({ url: "https://b.test" }); // t2 (active)
+    store.archive("t1");
+    expect(() => store.setFavorite("t1", "fav1")).toThrow(/archived/);
+  });
+});
+
+describe("TabStore.pin / archive reject favorite tabs", () => {
+  test("pin throws on a favorite tab", () => {
+    const store = makeStore();
+    store.create({ url: "https://a.test", favoriteId: "fav1" }); // t1
+    expect(() => store.pin("t1")).toThrow(/favorite/);
+  });
+
+  test("archive throws on a favorite tab", () => {
+    const store = makeStore();
+    store.create({ url: "https://a.test" }); // t1 (active)
+    store.create({ url: "https://b.test", favoriteId: "fav1" }); // t2
+    expect(() => store.archive("t2")).toThrow(/favorite/);
+  });
+
+  test("archiveIdle skips favorite tabs like pinned ones", () => {
+    const { store, setClock } = makeClockStore();
+    store.create({ url: "https://a.test" }); // t1
+    store.create({ url: "https://b.test", favoriteId: "fav1" }); // t2
+    store.activate("t1"); // t2 is now idle and not active, but is a favorite
+    setClock(1000 + 10_000);
+    expect(store.archiveIdle(1000)).toEqual([]);
+    expect(store.list().map((t) => t.id)).toEqual(["t1", "t2"]);
+  });
+});
+
+describe("TabStore.list groups pinned, today, favorite", () => {
+  test("list() returns pinned, then today, then favorite tabs", () => {
+    const store = makeStore();
+    store.create({ url: "https://a.test" }); // t1
+    store.create({ url: "https://b.test" }); // t2
+    store.create({ url: "https://c.test" }); // t3
+    store.pin("t1");
+    store.setFavorite("t2", "fav1");
+
+    expect(store.list().map((t) => t.id)).toEqual(["t1", "t3", "t2"]);
+  });
+
+  test("reorder on [a, F, b] (favorite b's neighbor a in today) moves b to 0 giving today [b, a], F untouched", () => {
+    const store = makeStore();
+    const a = store.create({ url: "https://a.test" }); // t1
+    store.create({ url: "https://f.test", favoriteId: "fav1" }); // t2 = F
+    const b = store.create({ url: "https://b.test" }); // t3
+
+    // Today group in array order: [a, b]; favorite group: [F].
+    store.reorder(b.id, 0);
+
+    expect(store.list().map((t) => t.id)).toEqual([b.id, a.id, "t2"]);
+    expect(store.list().find((t) => t.id === "t2")?.favoriteId).toBe("fav1");
+  });
+});
+
+describe("TabStore.archiveToday", () => {
+  test("archives every open today tab, including the active one, with one now() stamp", () => {
+    const { store, setClock } = makeClockStore();
+    store.create({ url: "https://a.test" }); // t1
+    store.create({ url: "https://b.test" }); // t2 (active)
+    store.pin("t1");
+
+    setClock(5000);
+    const archived = store.archiveToday();
+    expect(archived).toEqual(["t2"]);
+    expect(store.archived().map((t) => t.archivedAt)).toEqual([5000]);
+  });
+
+  test("does not archive pinned or favorite tabs", () => {
+    const store = makeStore();
+    store.create({ url: "https://a.test" }); // t1
+    store.pin("t1");
+    store.create({ url: "https://b.test", favoriteId: "fav1" }); // t2
+    store.create({ url: "https://c.test" }); // t3 (active, today)
+
+    const archived = store.archiveToday();
+    expect(archived).toEqual(["t3"]);
+    expect(store.list().map((t) => t.id).sort()).toEqual(["t1", "t2"]);
+  });
+
+  test("re-points active to the MRU remaining pinned or favorite tab when the active tab was archived", () => {
+    const store = makeStore();
+    store.create({ url: "https://a.test" }); // t1
+    store.pin("t1");
+    store.create({ url: "https://b.test" }); // t2 (active, today)
+
+    store.archiveToday();
+    expect(store.activeTabId).toBe("t1");
+  });
+
+  test("active becomes null when nothing remains after clearing", () => {
+    const store = makeStore();
+    store.create({ url: "https://a.test" }); // t1 (active, today)
+
+    store.archiveToday();
+    expect(store.activeTabId).toBeNull();
+  });
+
+  test("returns [] on a second call", () => {
+    const store = makeStore();
+    store.create({ url: "https://a.test" }); // t1
+
+    store.archiveToday();
+    expect(store.archiveToday()).toEqual([]);
+  });
+
+  test("re-points active to the true MRU among remaining pinned/favorite tabs, not merely the first one", () => {
+    const store = makeStore();
+    store.create({ url: "https://p.test" }); // t1 = P (created first, oldest)
+    store.pin("t1");
+    store.create({ url: "https://f.test", favoriteId: "fav1" }); // t2 = F (created after P, more recent)
+    store.create({ url: "https://c.test" }); // t3 (active, today)
+
+    // F has a more recent lastActiveAt than P (created later), but P is FIRST
+    // in array/list() order (pinned group first) — a "first open tab"
+    // fallback would wrongly pick P instead of the true MRU, F.
+    store.archiveToday();
+    expect(store.activeTabId).toBe("t2");
+  });
+
+  test("leaves the active pointer unchanged when the active tab is pinned or a favorite", () => {
+    const store = makeStore();
+    store.create({ url: "https://a.test" }); // t1 (today)
+    store.create({ url: "https://p.test" }); // t2 = P (active)
+    store.pin("t2");
+
+    store.archiveToday();
+    expect(store.activeTabId).toBe("t2");
+  });
+
+  test("stamps archivalSeq for multiple today tabs in list() order", () => {
+    const store = makeFrozenStore();
+    store.create({ url: "https://a.test" }); // t1
+    store.create({ url: "https://b.test" }); // t2 (active)
+
+    store.archiveToday();
+    // Both share one archivedAt (frozen clock); archived() ties break by
+    // archivalSeq desc, so the LAST-stamped (last in list() order) tab comes
+    // first: t1 before t2 in list() -> t2 stamped last -> archived() = [t2, t1].
+    expect(store.archived().map((t) => t.id)).toEqual(["t2", "t1"]);
   });
 });

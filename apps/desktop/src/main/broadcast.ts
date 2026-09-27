@@ -88,6 +88,22 @@ export function scheduleDownloadsBroadcast(): void {
 }
 
 /**
+ * Runs `fn` and, on a throw, broadcasts the current (correct) state before
+ * rethrowing — so a tab/favorite command the sidebar sent against a now-stale
+ * row (e.g. activating/closing a tab the idle sweep just archived, #41) still
+ * triggers a stateChange that removes the stale row, even though the invoke
+ * rejects and the renderer swallows it with `.catch(() => {})`.
+ */
+export function withResync<T>(fn: () => T): T {
+  try {
+    return fn();
+  } catch (err) {
+    broadcast();
+    throw err;
+  }
+}
+
+/**
  * Records that an INACTIVE-space tab's metadata changed: persist and refresh the
  * command catalog, but push no snapshot. An inactive space's tab is never on
  * screen, so the renderer needs no new {@link fullSnapshot}; the change must still

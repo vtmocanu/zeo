@@ -1,5 +1,34 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
+// Hoisted spies for clearTodayTabs's per-tab teardown: the vi.mock factories
+// below wrap the REAL unloadView/preserveSurvivingPane/broadcast (so every
+// other test in this file keeps their true behavior) while also recording
+// calls, so clearTodayTabs's contract (unloadView + preserveSurvivingPane
+// per archived id, one broadcast, none when nothing archived) is observable.
+const h = vi.hoisted(() => ({
+  unloadView: vi.fn<(id: string) => void>(),
+  preserveSurvivingPane: vi.fn<(closedId: string) => void>(),
+  broadcast: vi.fn<(opts?: { persist?: boolean }) => void>(),
+}));
+
+vi.mock("./views.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./views.js")>();
+  h.unloadView.mockImplementation(actual.unloadView);
+  return { ...actual, unloadView: h.unloadView };
+});
+
+vi.mock("./layout.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./layout.js")>();
+  h.preserveSurvivingPane.mockImplementation(actual.preserveSurvivingPane);
+  return { ...actual, preserveSurvivingPane: h.preserveSurvivingPane };
+});
+
+vi.mock("./broadcast.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./broadcast.js")>();
+  h.broadcast.mockImplementation(actual.broadcast);
+  return { ...actual, broadcast: h.broadcast };
+});
+
 // tabs.ts imports electron at runtime (`ipcMain`, `Menu`, `clipboard`) and, like
 // its transitive imports (views/layout/history/zoom), self-registers IPC via a
 // top-level `ipcMain.handle(...)` block at module load. Mock electron the same
@@ -25,7 +54,7 @@ import type { WebContentsView } from "electron";
 import { SpaceStore, initialBlockingState } from "@zeo/core";
 import type { Space, Tab } from "@zeo/core";
 import { runtime } from "./state.js";
-import { forgetTab, openPopupAsTab } from "./tabs.js";
+import { forgetTab, openPopupAsTab, clearTodayTabs, showTabContextMenu } from "./tabs.js";
 
 describe("forgetTab", () => {
   const tabId = "tab-1";
@@ -176,5 +205,100 @@ describe("openPopupAsTab", () => {
     expect(created).toBeDefined();
     expect(ownerTabs.map((t) => t.id)).toEqual([inactiveOwner.id, created!.id]);
     expect(runtime.views.size).toBe(0);
+  });
+});
+
+describe("clearTodayTabs", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    runtime.store = new SpaceStore();
+    runtime.win = null;
+    runtime.views.clear();
+    h.unloadView.mockClear();
+    h.preserveSurvivingPane.mockClear();
+    h.broadcast.mockClear();
+  });
+
+  afterEach(() => {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+  });
+
+  test("archives only the pinned/favorite-excluded today tabs, in list() order, leaving pinned and favorite tabs open", () => {
+    const store = runtime.store;
+    const pinned = store.create({ url: "https://p.test", title: "P" });
+    store.pin(pinned.id);
+    const a = store.create({ url: "https://a.test", title: "A" });
+    const b = store.create({ url: "https://b.test", title: "B" });
+    const favoriteTab = store.create({ url: "https://f.test", title: "F" });
+    store.addFavorite(favoriteTab.id);
+
+    clearTodayTabs();
+
+    const openIds = store.list().map((t) => t.id);
+    expect(openIds).toEqual([pinned.id, favoriteTab.id]);
+    // archived() is newest-first; both share one archiveToday stamp, so ties
+    // break by descending archivalSeq — b (archived second) sorts first.
+    const archivedIds = store.archived().map((t) => t.id);
+    expect(archivedIds).toEqual([b.id, a.id]);
+
+    // unloadView and preserveSurvivingPane run once per archived id (a, b —
+    // archiveToday's own return order), and the layout/broadcast fire exactly
+    // once for the whole batch, not once per tab.
+    expect(h.unloadView.mock.calls.map(([id]) => id)).toEqual([a.id, b.id]);
+    expect(h.preserveSurvivingPane.mock.calls.map(([id]) => id)).toEqual([a.id, b.id]);
+    expect(h.broadcast).toHaveBeenCalledTimes(1);
+  });
+
+  test("is a no-op with no today tabs to archive: no unloadView, no preserveSurvivingPane, no broadcast", () => {
+    const store = runtime.store;
+    const pinned = store.create({ url: "https://p.test", title: "P" });
+    store.pin(pinned.id);
+
+    clearTodayTabs();
+
+    expect(store.list().map((t) => t.id)).toEqual([pinned.id]);
+    expect(store.archived()).toEqual([]);
+    expect(h.unloadView).not.toHaveBeenCalled();
+    expect(h.preserveSurvivingPane).not.toHaveBeenCalled();
+    expect(h.broadcast).not.toHaveBeenCalled();
+  });
+});
+
+describe("showTabContextMenu", () => {
+  beforeEach(() => {
+    runtime.store = new SpaceStore();
+    runtime.win = null;
+    runtime.views.clear();
+  });
+
+  function itemsFor(id: string): { id: string; enabled: boolean }[] {
+    return showTabContextMenu(id, 0, 0).items.map(({ id: itemId, enabled }) => ({ id: itemId, enabled }));
+  }
+
+  test("Move to Bottom on the last today tab is disabled when an open favorite tab follows (three-way group)", () => {
+    const store = runtime.store;
+    const today = store.create({ url: "https://today.test", title: "Today" });
+    const favoriteTab = store.create({ url: "https://fav.test", title: "Fav" });
+    store.addFavorite(favoriteTab.id);
+
+    // list() order is [today, favoriteTab] (list() returns pinned, then today,
+    // then favorite; the group key is what matters here). The today
+    // group contains ONLY `today`, so it is both first and last in its own
+    // group — Move to Bottom must be disabled, not enabled because a
+    // differently-grouped favorite tab happens to follow it in list() order.
+    const moveToBottom = itemsFor(today.id).find((i) => i.id === "moveToBottom")!;
+    expect(moveToBottom.enabled).toBe(false);
+  });
+
+  test("Move to Bottom stays enabled between two today tabs, unaffected by a trailing favorite", () => {
+    const store = runtime.store;
+    const first = store.create({ url: "https://a.test", title: "A" });
+    store.create({ url: "https://b.test", title: "B" });
+    const favoriteTab = store.create({ url: "https://fav.test", title: "Fav" });
+    store.addFavorite(favoriteTab.id);
+
+    const moveToBottom = itemsFor(first.id).find((i) => i.id === "moveToBottom")!;
+    expect(moveToBottom.enabled).toBe(true);
   });
 });

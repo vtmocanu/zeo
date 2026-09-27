@@ -579,6 +579,26 @@ describe("SpaceStore routed tab ops target a tab's owning space", () => {
   });
 });
 
+describe("SpaceStore.reorder groups (three-way, via TabStore)", () => {
+  test("reordering a today tab never pulls in a favorite tab sharing the unpinned flag", () => {
+    const store = makeStore();
+    const f = store.create({ url: "https://f.test" }); // t1
+    store.addFavorite(f.id); // F, still unpinned
+    const a = store.create({ url: "https://a.test" }); // t2 = a (today)
+    const b = store.create({ url: "https://b.test" }); // t3 = b (today, active)
+    // Internal array order is [F, a, b]; F and b are both unpinned, so a
+    // two-way "pinned === target.pinned" group would wrongly include F.
+
+    store.reorder(b.id, 1);
+    expect(
+      store.list().filter((t) => !t.pinned && t.favoriteId === null).map((t) => t.id),
+    ).toEqual([a.id, b.id]);
+    expect(store.list().filter((t) => t.favoriteId !== null).map((t) => t.id)).toEqual([
+      f.id,
+    ]);
+  });
+});
+
 describe("SpaceStore.spaceOfTab ownership tracking", () => {
   test("tracks create, createInSpace, close, remove, and deleteSpace", () => {
     const store = makeStore();
@@ -793,6 +813,7 @@ describe("SpaceStore.updateMeta", () => {
     expect(store.updateMeta(a.id, { title: "A2" })).toEqual({
       changed: true,
       inActiveSpace: true,
+      favoritesChanged: false,
     });
   });
 
@@ -802,6 +823,7 @@ describe("SpaceStore.updateMeta", () => {
     expect(store.updateMeta(a.id, { title: "A" })).toEqual({
       changed: false,
       inActiveSpace: true,
+      favoritesChanged: false,
     });
   });
 
@@ -813,6 +835,7 @@ describe("SpaceStore.updateMeta", () => {
     expect(store.updateMeta(w.id, { title: "W2" })).toEqual({
       changed: true,
       inActiveSpace: false,
+      favoritesChanged: false,
     });
   });
 
@@ -823,7 +846,7 @@ describe("SpaceStore.updateMeta", () => {
     expect(() => {
       result = store.updateMeta("ghost", { title: "X" });
     }).not.toThrow();
-    expect(result).toEqual({ changed: false, inActiveSpace: false });
+    expect(result).toEqual({ changed: false, inActiveSpace: false, favoritesChanged: false });
   });
 });
 
@@ -1252,5 +1275,401 @@ describe("SpaceStore.allArchivedTabs", () => {
     const store = makeStore();
     store.create({ url: "https://a.test" });
     expect(store.allArchivedTabs()).toEqual([]);
+  });
+});
+
+describe("SpaceStore favorites", () => {
+  test("addFavorite copies url/title/faviconUrl and links the tab", () => {
+    const store = makeStore();
+    const a = store.create({ url: "https://a.test", title: "A" });
+    store.updateMeta(a.id, { faviconUrl: "https://a.test/icon.png" });
+
+    const favorite = store.addFavorite(a.id);
+    expect(favorite.url).toBe("https://a.test");
+    expect(favorite.title).toBe("A");
+    expect(favorite.faviconUrl).toBe("https://a.test/icon.png");
+    expect(favorite.position).toBe(0);
+    expect(store.favorites()).toEqual([favorite]);
+    expect(store.list().find((t) => t.id === a.id)?.favoriteId).toBe(favorite.id);
+  });
+
+  test("addFavorite unpins the tab", () => {
+    const store = makeStore();
+    const a = store.create({ url: "https://a.test" });
+    store.pin(a.id);
+
+    store.addFavorite(a.id);
+    expect(store.list().find((t) => t.id === a.id)?.pinned).toBe(false);
+  });
+
+  test("addFavorite throws on an unknown tab", () => {
+    const store = makeStore();
+    expect(() => store.addFavorite("nope")).toThrow();
+  });
+
+  test("addFavorite throws on an archived tab", () => {
+    const store = makeStore();
+    const a = store.create({ url: "https://a.test" });
+    store.create({ url: "https://b.test" }); // keep an active tab
+    store.archive(a.id);
+    expect(() => store.addFavorite(a.id)).toThrow(/archived/);
+  });
+
+  test("addFavorite throws on a tab outside the active space", () => {
+    const store = makeStore();
+    const personal = store.activeSpaceId;
+    const work = store.createSpace("Work");
+    const w = store.createInSpace(work.id, { url: "https://w.test" });
+    store.setActiveSpace(personal);
+    expect(() => store.addFavorite(w.id)).toThrow(/outside the active space/);
+  });
+
+  test("addFavorite throws on a tab that already has a favoriteId", () => {
+    const store = makeStore();
+    const a = store.create({ url: "https://a.test" });
+    store.addFavorite(a.id);
+    const b = store.create({ url: "https://b.test" });
+    store.setActiveSpace(store.activeSpaceId);
+    // a is now a favorite tab; adding it again must throw.
+    expect(() => store.addFavorite(a.id)).toThrow();
+    void b;
+  });
+
+  test("the 13th favorite throws Favorites are full: 12", () => {
+    const store = makeStore();
+    for (let i = 0; i < 12; i++) {
+      const tab = store.create({ url: `https://s${i}.test` });
+      store.addFavorite(tab.id);
+    }
+    const overflow = store.create({ url: "https://overflow.test" });
+    expect(() => store.addFavorite(overflow.id)).toThrow("Favorites are full: 12");
+  });
+
+  test("duplicate urls are allowed across favorites", () => {
+    const store = makeStore();
+    const a = store.create({ url: "https://dup.test", title: "A" });
+    const b = store.create({ url: "https://dup.test", title: "B" });
+    const favA = store.addFavorite(a.id);
+    const favB = store.addFavorite(b.id);
+    expect(favA.url).toBe(favB.url);
+    expect(favA.id).not.toBe(favB.id);
+  });
+
+  test("removeFavorite unlinks the tab in every space that has one open and returns those ids", () => {
+    const store = makeStore();
+    const personal = store.activeSpaceId;
+    const a = store.create({ url: "https://a.test" });
+    const favorite = store.addFavorite(a.id);
+
+    const work = store.createSpace("Work");
+    store.setActiveSpace(work.id);
+    const wTab = store.createFavoriteTab(favorite.id);
+
+    store.setActiveSpace(personal);
+    const unlinked = store.removeFavorite(favorite.id);
+
+    expect(unlinked.sort()).toEqual([a.id, wTab.id].sort());
+    expect(store.favorites()).toEqual([]);
+    expect(store.list().find((t) => t.id === a.id)?.favoriteId).toBeNull();
+    store.setActiveSpace(work.id);
+    expect(store.list().find((t) => t.id === wTab.id)?.favoriteId).toBeNull();
+  });
+
+  test("removeFavorite throws on an unknown id", () => {
+    const store = makeStore();
+    expect(() => store.removeFavorite("nope")).toThrow();
+  });
+
+  test("removeFavorite renumbers the remaining favorites", () => {
+    const store = makeStore();
+    const a = store.create({ url: "https://a.test" });
+    const b = store.create({ url: "https://b.test" });
+    const c = store.create({ url: "https://c.test" });
+    const favA = store.addFavorite(a.id);
+    store.addFavorite(b.id);
+    const favC = store.addFavorite(c.id);
+
+    store.removeFavorite(favA.id);
+    expect(store.favorites().map((f) => f.id)).toEqual([
+      store.favorites()[0].id,
+      favC.id,
+    ]);
+    expect(store.favorites().map((f) => f.position)).toEqual([0, 1]);
+  });
+
+  test("reorderFavorite has TabStore.reorder semantics", () => {
+    const store = makeStore();
+    const a = store.create({ url: "https://a.test" });
+    const b = store.create({ url: "https://b.test" });
+    const c = store.create({ url: "https://c.test" });
+    const favA = store.addFavorite(a.id);
+    store.addFavorite(b.id);
+    const favC = store.addFavorite(c.id);
+
+    store.reorderFavorite(favC.id, 0);
+    expect(store.favorites().map((f) => f.id)).toEqual([
+      favC.id,
+      favA.id,
+      store.favorites()[2].id,
+    ]);
+    expect(store.favorites().map((f) => f.position)).toEqual([0, 1, 2]);
+
+    expect(() => store.reorderFavorite("nope", 0)).toThrow();
+    expect(() => store.reorderFavorite(favC.id, 1.5)).toThrow(/non-integer/);
+    // Clamped to the pre-removal length.
+    store.reorderFavorite(favC.id, 100);
+    expect(store.favorites()[2].id).toBe(favC.id);
+  });
+
+  test("favoriteTabId returns the active space's open tab for a favorite, or null", () => {
+    const store = makeStore();
+    const a = store.create({ url: "https://a.test" });
+    const favorite = store.addFavorite(a.id);
+    expect(store.favoriteTabId(favorite.id)).toBe(a.id);
+    expect(store.favoriteTabId("nope")).toBeNull();
+  });
+
+  test("createFavoriteTab creates one open tab per favorite per space and activates it", () => {
+    const store = makeStore();
+    const personal = store.activeSpaceId;
+    const a = store.create({ url: "https://a.test", title: "A" });
+    const favorite = store.addFavorite(a.id);
+
+    const work = store.createSpace("Work");
+    store.setActiveSpace(work.id);
+    const wTab = store.createFavoriteTab(favorite.id);
+    expect(wTab.url).toBe("https://a.test");
+    expect(wTab.favoriteId).toBe(favorite.id);
+    expect(store.activeTabId).toBe(wTab.id);
+
+    expect(() => store.createFavoriteTab(favorite.id)).toThrow();
+    expect(() => store.createFavoriteTab("nope")).toThrow();
+
+    store.setActiveSpace(personal);
+    expect(store.favoriteTabId(favorite.id)).toBe(a.id);
+  });
+
+  test("one favorite can have one open tab per space, across two spaces", () => {
+    const store = makeStore();
+    const personal = store.activeSpaceId;
+    const a = store.create({ url: "https://a.test" });
+    const favorite = store.addFavorite(a.id);
+
+    const work = store.createSpace("Work");
+    store.setActiveSpace(work.id);
+    const wTab = store.createFavoriteTab(favorite.id);
+
+    store.setActiveSpace(personal);
+    expect(store.favoriteTabId(favorite.id)).toBe(a.id);
+    store.setActiveSpace(work.id);
+    expect(store.favoriteTabId(favorite.id)).toBe(wTab.id);
+  });
+
+  test("deleteSpace leaves favorites untouched", () => {
+    const store = makeStore();
+    const personal = store.activeSpaceId;
+    const a = store.create({ url: "https://a.test" });
+    const favorite = store.addFavorite(a.id);
+
+    const work = store.createSpace("Work");
+    store.setActiveSpace(work.id);
+    store.createFavoriteTab(favorite.id);
+    store.setActiveSpace(personal);
+
+    store.deleteSpace(work.id);
+    expect(store.favorites()).toEqual([favorite]);
+  });
+
+  test("updateMeta propagates a favicon change to the linked favorite when the site matches", () => {
+    const store = makeStore();
+    const a = store.create({ url: "https://a.test/path" });
+    const favorite = store.addFavorite(a.id);
+
+    const result = store.updateMeta(a.id, { faviconUrl: "https://a.test/icon.png" });
+    expect(result.favoritesChanged).toBe(true);
+    expect(store.favorites().find((f) => f.id === favorite.id)?.faviconUrl).toBe(
+      "https://a.test/icon.png",
+    );
+  });
+
+  test("updateMeta does not propagate a favicon change from a different site", () => {
+    const store = makeStore();
+    const a = store.create({ url: "https://a.test" });
+    const favorite = store.addFavorite(a.id);
+    // Simulate the tab navigating to a different site while keeping the link.
+    store.updateMeta(a.id, { url: "https://other.test" });
+
+    const result = store.updateMeta(a.id, { faviconUrl: "https://other.test/icon.png" });
+    expect(result.favoritesChanged).toBe(false);
+    expect(store.favorites().find((f) => f.id === favorite.id)?.faviconUrl).toBeNull();
+  });
+
+  test("archiveToday delegates to the active space's TabStore", () => {
+    const store = makeStore();
+    const a = store.create({ url: "https://a.test" });
+    void a;
+    const archived = store.archiveToday();
+    expect(archived.length).toBe(1);
+    expect(store.list()).toEqual([]);
+  });
+
+  test("archiveToday only affects the active space, leaving other spaces' today tabs open", () => {
+    const store = makeStore();
+    const personalId = store.activeSpaceId;
+    store.create({ url: "https://p.test" }); // Personal today tab
+
+    const work = store.createSpace("Work");
+    store.setActiveSpace(work.id);
+    const w = store.create({ url: "https://w.test" }); // Work today tab
+
+    store.setActiveSpace(personalId);
+    store.archiveToday();
+
+    expect(store.list()).toEqual([]);
+    store.setActiveSpace(work.id);
+    expect(store.list().map((t) => t.id)).toEqual([w.id]);
+  });
+
+  test("updateMeta with a null faviconUrl does not change the linked favorite's faviconUrl", () => {
+    const store = makeStore();
+    const a = store.create({ url: "https://a.test/path" });
+    store.updateMeta(a.id, { faviconUrl: "https://a.test/icon.png" });
+    const favorite = store.addFavorite(a.id);
+    expect(favorite.faviconUrl).toBe("https://a.test/icon.png");
+
+    const result = store.updateMeta(a.id, { faviconUrl: null });
+    expect(result.favoritesChanged).toBe(false);
+    expect(store.favorites().find((f) => f.id === favorite.id)?.faviconUrl).toBe(
+      "https://a.test/icon.png",
+    );
+  });
+
+  test("removeFavorite leaves the unlinked tab as the last today row of its space", () => {
+    const store = makeStore();
+    const a = store.create({ url: "https://a.test" });
+    const b = store.create({ url: "https://b.test" });
+    const favorite = store.addFavorite(a.id);
+
+    store.removeFavorite(favorite.id);
+    expect(store.list().map((t) => t.id)).toEqual([b.id, a.id]);
+  });
+
+  test("snapshot().favorites equals favorites()", () => {
+    const store = makeStore();
+    const a = store.create({ url: "https://a.test" });
+    store.addFavorite(a.id);
+    expect(store.snapshot().favorites).toEqual(store.favorites());
+  });
+});
+
+describe("SpaceStore favorites persistence round trip", () => {
+  test("favorites, links, and the active open tile survive toPersisted -> fromPersisted", () => {
+    const store = makeStore();
+    const a = store.create({ url: "https://a.test", title: "A" });
+    const b = store.create({ url: "https://b.test", title: "B" });
+    const favA = store.addFavorite(a.id);
+    store.addFavorite(b.id);
+    store.activate(a.id);
+
+    const restored = deserializeStore(store.toPersisted());
+    expect(restored.favorites()).toEqual(store.favorites());
+    expect(restored.list().find((t) => t.id === a.id)?.favoriteId).toBe(favA.id);
+    expect(restored.activeTabId).toBe(a.id);
+  });
+
+  test("repair: a favoriteId naming no restored favorite becomes null", () => {
+    const store = makeStore();
+    const persisted = store.toPersisted();
+    const spaceId = persisted.spaces[0].id;
+    persisted.tabs.push({
+      id: "tGhost",
+      spaceId,
+      url: "https://ghost.test",
+      title: "Ghost",
+      faviconUrl: null,
+      createdAt: 1,
+      pinned: false,
+      lastActiveAt: 1,
+      archivedAt: null,
+      position: 0,
+      favoriteId: "missing-favorite",
+    });
+    const restored = deserializeStore(persisted);
+    expect(restored.list().find((t) => t.id === "tGhost")?.favoriteId).toBeNull();
+  });
+
+  test("repair: a favoriteId on an archived row becomes null", () => {
+    const store = makeStore();
+    const a = store.create({ url: "https://a.test" });
+    const favorite = store.addFavorite(a.id);
+    const persisted = store.toPersisted();
+    const tabRow = persisted.tabs.find((t) => t.id === a.id)!;
+    tabRow.archivedAt = 999;
+
+    const restored = deserializeStore(persisted);
+    const archived = restored.archived().find((t) => t.id === a.id);
+    expect(archived?.favoriteId).toBeNull();
+    void favorite;
+  });
+
+  test("repair: a second open tab in the same space for the same favorite loses it (first in position order wins)", () => {
+    const store = makeStore();
+    const a = store.create({ url: "https://a.test" });
+    const favorite = store.addFavorite(a.id);
+    const persisted = store.toPersisted();
+    const spaceId = persisted.spaces[0].id;
+    persisted.tabs.push({
+      id: "tDup",
+      spaceId,
+      url: favorite.url,
+      title: favorite.title,
+      faviconUrl: null,
+      createdAt: 2,
+      pinned: false,
+      lastActiveAt: 2,
+      archivedAt: null,
+      position: 1,
+      favoriteId: favorite.id,
+    });
+
+    const restored = deserializeStore(persisted);
+    expect(restored.list().find((t) => t.id === a.id)?.favoriteId).toBe(favorite.id);
+    expect(restored.list().find((t) => t.id === "tDup")?.favoriteId).toBeNull();
+  });
+
+  test("fromPersisted sorts favorites by position and renumbers them, regardless of row order or gaps", () => {
+    const store = makeStore();
+    const a = store.create({ url: "https://a.test" });
+    const b = store.create({ url: "https://b.test" });
+    const favA = store.addFavorite(a.id);
+    const favB = store.addFavorite(b.id);
+    const persisted = store.toPersisted();
+
+    // Shuffle the row order and give the positions gaps: B (pos 5) before A
+    // (pos 2) in the array — the sort by position, not array order, must win.
+    const rowA = persisted.favorites.find((f) => f.id === favA.id)!;
+    const rowB = persisted.favorites.find((f) => f.id === favB.id)!;
+    persisted.favorites = [
+      { ...rowB, position: 5 },
+      { ...rowA, position: 2 },
+    ];
+
+    const restored = deserializeStore(persisted);
+    expect(restored.favorites().map((f) => f.id)).toEqual([favA.id, favB.id]);
+    expect(restored.favorites().map((f) => f.position)).toEqual([0, 1]);
+  });
+
+  test("repair: a repaired favorite tab persisted pinned=true restores unpinned", () => {
+    const store = makeStore();
+    const a = store.create({ url: "https://a.test" });
+    const favorite = store.addFavorite(a.id);
+    const persisted = store.toPersisted();
+    const tabRow = persisted.tabs.find((t) => t.id === a.id)!;
+    tabRow.pinned = true;
+
+    const restored = deserializeStore(persisted);
+    const tab = restored.list().find((t) => t.id === a.id);
+    expect(tab?.favoriteId).toBe(favorite.id);
+    expect(tab?.pinned).toBe(false);
   });
 });

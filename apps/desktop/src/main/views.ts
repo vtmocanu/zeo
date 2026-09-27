@@ -148,11 +148,17 @@ export function createViewFor(tab: Tab, spaceId: string, urlOverride?: string): 
   });
   view.webContents.on("page-favicon-updated", (_event, favicons: string[]) => {
     const faviconUrl = favicons.length > 0 ? favicons[0] : null;
-    const { changed, inActiveSpace } = runtime.store.updateMeta(tab.id, { faviconUrl });
+    const { changed, inActiveSpace, favoritesChanged } = runtime.store.updateMeta(tab.id, {
+      faviconUrl,
+    });
     if (!changed) {
       return;
     }
-    if (inActiveSpace) {
+    // A same-site favicon update can also propagate onto the linked favorite's
+    // `faviconUrl` (favoritesChanged) — the global favorites grid is drawn in
+    // every space, so that change must push a full snapshot even when this
+    // tab's own space is not the active one.
+    if (inActiveSpace || favoritesChanged) {
       broadcast();
     } else {
       noteInactiveChange();

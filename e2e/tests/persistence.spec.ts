@@ -23,6 +23,17 @@ interface BridgeTab {
   title: string;
   faviconUrl: string | null;
   pinned: boolean;
+  // PRD 10.4 — the favorite this tab is the instance of, or null.
+  favoriteId: string | null;
+}
+// PRD 10.4 — structurally @zeo/core's `Favorite`.
+interface BridgeFavorite {
+  id: string;
+  url: string;
+  title: string;
+  faviconUrl: string | null;
+  position: number;
+  createdAt: number;
 }
 interface BridgeSpace {
   id: string;
@@ -43,10 +54,12 @@ interface BridgeState extends BridgeSpacesState {
   tabs: BridgeTab[];
   activeTabId: string | null;
   archived: BridgeTab[];
+  favorites: BridgeFavorite[];
 }
 interface ZeoBridge {
   tabs: {
     create(url?: string): Promise<BridgeTab>;
+    close(id: string): Promise<void>;
     archive(id: string): Promise<void>;
     pin(id: string): Promise<void>;
     activate(id: string): Promise<void>;
@@ -69,6 +82,11 @@ interface ZeoBridge {
   };
   commands: {
     run(id: string): Promise<void>;
+  };
+  // PRD 10.4 — the favorites slice the favorites relaunch test drives.
+  favorites: {
+    add(tabId: string): Promise<BridgeFavorite>;
+    reorder(favoriteId: string, toIndex: number): Promise<void>;
   };
 }
 /** Structurally @zeo/core's `ChromeState`. */
@@ -617,6 +635,119 @@ test.describe("PRD 10.2 sidebar chrome restore", () => {
           }, token),
         )
         .toBe(8);
+    } finally {
+      await second.app.close();
+    }
+  });
+});
+
+/**
+ * The favorites order and the open tabs' favorite links, straight from a
+ * launch's `zeo.db` (read-only, `node:sqlite`). `null` while the file or a
+ * table is momentarily unreadable.
+ */
+function readSavedFavorites(
+  userDataDir: string,
+): { favorites: string[]; links: { id: string; favoriteId: string }[]; activeTabIds: (string | null)[] } | null {
+  let db: DatabaseSync | undefined;
+  try {
+    db = new DatabaseSync(join(userDataDir, "zeo.db"), { readOnly: true });
+    const favorites = (
+      db.prepare("SELECT id FROM favorites ORDER BY position").all() as { id: string }[]
+    ).map((r) => r.id);
+    const links = (
+      db
+        .prepare(
+          "SELECT id, favoriteId FROM tabs WHERE favoriteId IS NOT NULL AND archivedAt IS NULL ORDER BY id",
+        )
+        .all() as { id: string; favoriteId: string }[]
+    ).map((r) => ({ id: r.id, favoriteId: r.favoriteId }));
+    const activeTabIds = (
+      db.prepare("SELECT activeTabId FROM spaces ORDER BY position").all() as {
+        activeTabId: string | null;
+      }[]
+    ).map((r) => r.activeTabId);
+    return { favorites, links, activeTabIds };
+  } catch {
+    return null;
+  } finally {
+    db?.close();
+  }
+}
+
+// PRD 10.4 — favorites are global and persisted in their own table; each open
+// favorite tab keeps its `favoriteId` link. Two favorites (reordered so the
+// saved order is not creation order), one of them with an open tab that is the
+// active tab, the other with its tab closed.
+test.describe("PRD 10.4 favorites relaunch", () => {
+  test("two favorites, their order, one open favorite tab and the active tile survive relaunch", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "zeo-favorites-"));
+    const tokenA = "ZEOFAV_PERSIST_A";
+    const tokenB = "ZEOFAV_PERSIST_B";
+
+    const first = await launch(dir);
+    let ids: { tabA: string; favA: string; favB: string; urlA: string; urlB: string };
+    try {
+      ids = await first.sidebar.evaluate(
+        async (tokens) => {
+          const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+          const tabA = await zeo.tabs.create("data:text/html," + tokens.a);
+          const tabB = await zeo.tabs.create("data:text/html," + tokens.b);
+          const favA = await zeo.favorites.add(tabA.id);
+          const favB = await zeo.favorites.add(tabB.id);
+          // Saved order becomes [B, A]; B's tab closes, A's stays open and active.
+          await zeo.favorites.reorder(favB.id, 0);
+          await zeo.tabs.close(tabB.id);
+          await zeo.tabs.activate(tabA.id);
+          return { tabA: tabA.id, favA: favA.id, favB: favB.id, urlA: favA.url, urlB: favB.url };
+        },
+        { a: tokenA, b: tokenB },
+      );
+      const live = await readState(first.sidebar);
+      expect(live.favorites.map((f) => f.id)).toEqual([ids.favB, ids.favA]);
+      expect(live.activeTabId).toBe(ids.tabA);
+
+      // Poll the database instead of sleeping past the save debounce.
+      await expect
+        .poll(() => readSavedFavorites(dir), { timeout: 10_000 })
+        .toEqual({
+          favorites: [ids.favB, ids.favA],
+          links: [{ id: ids.tabA, favoriteId: ids.favA }],
+          activeTabIds: [ids.tabA],
+        });
+    } finally {
+      await first.app.close();
+    }
+
+    const second = await launch(dir);
+    try {
+      const restored = await readState(second.sidebar);
+      expect(restored.favorites.map((f) => ({ id: f.id, url: f.url, position: f.position }))).toEqual([
+        { id: ids.favB, url: ids.urlB, position: 0 },
+        { id: ids.favA, url: ids.urlA, position: 1 },
+      ]);
+      // Exactly one open favorite tab, A's, linked and active; B has none.
+      expect(
+        restored.tabs.filter((t) => t.favoriteId !== null).map((t) => ({ id: t.id, favoriteId: t.favoriteId })),
+      ).toEqual([{ id: ids.tabA, favoriteId: ids.favA }]);
+      expect(restored.activeTabId).toBe(ids.tabA);
+      await waitForViewUrl(second.app, tokenA);
+
+      const tiles = second.sidebar.getByTestId("favorite-tile");
+      await expect(tiles).toHaveCount(2);
+      expect(
+        await tiles.evaluateAll((els) => els.map((e) => e.getAttribute("data-favorite-id"))),
+      ).toEqual([ids.favB, ids.favA]);
+      const tileA = second.sidebar.locator(`[data-testid="favorite-tile"][data-favorite-id="${ids.favA}"]`);
+      const tileB = second.sidebar.locator(`[data-testid="favorite-tile"][data-favorite-id="${ids.favB}"]`);
+      await expect(tileA).toHaveAttribute("aria-current", "true");
+      await expect(tileA).toHaveAttribute("data-open", "true");
+      await expect(tileB).not.toHaveAttribute("aria-current", "true");
+      await expect(tileB).toHaveAttribute("data-open", "false");
+      // A favorite tab never renders as a row after restore either.
+      await expect(
+        second.sidebar.locator(`[data-testid="tab-item"][data-tab-id="${ids.tabA}"]`),
+      ).toHaveCount(0);
     } finally {
       await second.app.close();
     }

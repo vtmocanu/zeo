@@ -9,6 +9,8 @@ import type {
   CommandId,
   DividerGeometry,
   Download,
+  Favorite,
+  FavoriteContextMenuResult,
   FindState,
   HistoryEntry,
   HistoryVisit,
@@ -175,6 +177,15 @@ const api = {
     openRelease: (): Promise<void> => ipcRenderer.invoke(IPC.updateOpenRelease),
     copyUpgradeCommand: (): Promise<void> => ipcRenderer.invoke(IPC.updateCopyCommand),
     state: (): Promise<UpdateState> => ipcRenderer.invoke(IPC.updateState),
+  },
+  favorites: {
+    open: (favoriteId: string): Promise<void> => ipcRenderer.invoke(IPC.favoritesOpen, favoriteId),
+    add: (tabId: string): Promise<Favorite> => ipcRenderer.invoke(IPC.favoritesAdd, tabId),
+    remove: (favoriteId: string): Promise<void> => ipcRenderer.invoke(IPC.favoritesRemove, favoriteId),
+    reorder: (favoriteId: string, toIndex: number): Promise<void> =>
+      ipcRenderer.invoke(IPC.favoritesReorder, favoriteId, toIndex),
+    showContextMenu: (favoriteId: string, x: number, y: number): Promise<FavoriteContextMenuResult> =>
+      ipcRenderer.invoke(IPC.favoritesContextMenu, favoriteId, x, y),
   },
   onStateChange: (listener: (state: TabsState) => void): (() => void) => {
     const handler = (_event: Electron.IpcRendererEvent, state: TabsState): void => listener(state);

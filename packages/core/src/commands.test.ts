@@ -13,6 +13,9 @@ const ALL_IDS: CommandId[] = [
   "tab.close",
   "tab.pin",
   "tab.unpin",
+  "tab.favorite",
+  "tab.unfavorite",
+  "tabs.clearToday",
   "tab.archive",
   "tab.copy-url",
   "tab.moveToTop",
@@ -76,6 +79,8 @@ function context(partial: Partial<CommandContext> = {}): CommandContext {
     find: partial.find ?? { open: false, hasQuery: false },
     layoutMode: partial.layoutMode ?? "single",
     openTabCount: partial.openTabCount ?? 1,
+    favoritesFull: partial.favoritesFull ?? false,
+    clearableTabCount: partial.clearableTabCount ?? 0,
   };
 }
 
@@ -88,6 +93,7 @@ function activeTab(
 ): NonNullable<CommandContext["activeTab"]> {
   return {
     pinned: false,
+    favorite: false,
     canGoBack: false,
     canGoForward: false,
     siteHost: "example.com",
@@ -312,9 +318,10 @@ describe("isCommandEnabled — active-tab-gated commands", () => {
     expect(isCommandEnabled("tab.reload", context({ activeTab: null }))).toBe(false);
   });
 
-  test("tab.pin needs an unpinned active tab", () => {
+  test("tab.pin needs an unpinned, non-favorite active tab", () => {
     expect(isCommandEnabled("tab.pin", context({ activeTab: activeTab({ pinned: false }) }))).toBe(true);
     expect(isCommandEnabled("tab.pin", context({ activeTab: activeTab({ pinned: true }) }))).toBe(false);
+    expect(isCommandEnabled("tab.pin", context({ activeTab: activeTab({ favorite: true }) }))).toBe(false);
     expect(isCommandEnabled("tab.pin", context({ activeTab: null }))).toBe(false);
   });
 
@@ -324,10 +331,37 @@ describe("isCommandEnabled — active-tab-gated commands", () => {
     expect(isCommandEnabled("tab.unpin", context({ activeTab: null }))).toBe(false);
   });
 
-  test("tab.archive needs an unpinned active tab", () => {
+  test("tab.archive needs an unpinned, non-favorite active tab", () => {
     expect(isCommandEnabled("tab.archive", context({ activeTab: activeTab({ pinned: false }) }))).toBe(true);
     expect(isCommandEnabled("tab.archive", context({ activeTab: activeTab({ pinned: true }) }))).toBe(false);
+    expect(isCommandEnabled("tab.archive", context({ activeTab: activeTab({ favorite: true }) }))).toBe(false);
     expect(isCommandEnabled("tab.archive", context({ activeTab: null }))).toBe(false);
+  });
+
+  test("tab.favorite needs a non-favorite active tab and !favoritesFull", () => {
+    expect(isCommandEnabled("tab.favorite", context({ activeTab: activeTab({ favorite: false }) }))).toBe(true);
+    expect(isCommandEnabled("tab.favorite", context({ activeTab: activeTab({ favorite: true }) }))).toBe(false);
+    expect(
+      isCommandEnabled(
+        "tab.favorite",
+        context({ activeTab: activeTab({ favorite: false }), favoritesFull: true }),
+      ),
+    ).toBe(false);
+    expect(isCommandEnabled("tab.favorite", context({ activeTab: null }))).toBe(false);
+  });
+
+  test("tab.unfavorite needs a favorite active tab", () => {
+    expect(isCommandEnabled("tab.unfavorite", context({ activeTab: activeTab({ favorite: true }) }))).toBe(true);
+    expect(isCommandEnabled("tab.unfavorite", context({ activeTab: activeTab({ favorite: false }) }))).toBe(false);
+    expect(isCommandEnabled("tab.unfavorite", context({ activeTab: null }))).toBe(false);
+  });
+
+  test("tabs.clearToday needs clearableTabCount > 0, independent of an active tab", () => {
+    expect(isCommandEnabled("tabs.clearToday", context({ clearableTabCount: 1 }))).toBe(true);
+    expect(isCommandEnabled("tabs.clearToday", context({ clearableTabCount: 0 }))).toBe(false);
+    expect(
+      isCommandEnabled("tabs.clearToday", context({ activeTab: null, clearableTabCount: 1 })),
+    ).toBe(true);
   });
 
   test("tab.back needs canGoBack", () => {

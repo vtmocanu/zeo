@@ -17,4 +17,11 @@ export interface Tab {
   pinned: boolean;
   lastActiveAt: number;
   archivedAt: number | null;
+  /**
+   * The id of the {@link Favorite} this tab is the open instance of, or `null`
+   * for an ordinary tab. A tab with a non-null `favoriteId` is that favorite's
+   * instance in its space: it is never pinned, never archived, and is drawn as
+   * the favorite tile, not as a row.
+   */
+  favoriteId: string | null;
 }

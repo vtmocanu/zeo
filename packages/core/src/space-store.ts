@@ -8,6 +8,9 @@ import type { PersistedState, TabRow } from "./persistence.js";
 import { normalizeTheme } from "./theme.js";
 import type { SpaceTheme } from "./theme.js";
 import { cloneTheme, defaultSpaceTheme, encodeSpaceTheme, decodeSpaceTheme } from "./space-theme.js";
+import { siteKeyForUrl } from "./allowlist.js";
+import { FAVORITES_MAX } from "./favorites.js";
+import type { Favorite } from "./favorites.js";
 
 export interface SpaceStoreOptions {
   idFactory?: () => string;
@@ -36,6 +39,7 @@ function tabRowToTab(row: TabRow): Tab {
     pinned: row.pinned,
     lastActiveAt: row.lastActiveAt,
     archivedAt: row.archivedAt,
+    favoriteId: row.favoriteId,
   };
 }
 
@@ -84,6 +88,11 @@ export class SpaceStore {
    * archived tab keeps its owner entry (archive/restore do not touch this map).
    */
   private readonly ownerByTab = new Map<string, string>();
+  /**
+   * The global, ordered favorites list — shared across every space. `position`
+   * always equals array index; every mutation calls {@link renumberFavorites}.
+   */
+  private readonly favoriteList: Favorite[] = [];
   private activeId: string;
   private readonly idFactory: () => string;
   private readonly now: () => number;
@@ -473,6 +482,150 @@ export class SpaceStore {
     return this.active().activeTab;
   }
 
+  // --- Favorites (global, cross-space) --------------------------------------
+
+  /** Renumbers every favorite's `position` to its array index. */
+  private renumberFavorites(): void {
+    this.favoriteList.forEach((favorite, position) => {
+      favorite.position = position;
+    });
+  }
+
+  /** The global favorites, in display order, as defensive copies. */
+  favorites(): Favorite[] {
+    return this.favoriteList.map((favorite) => ({ ...favorite }));
+  }
+
+  /**
+   * Adds a favorite copied from tab `tabId`. Throws when the tab is unknown,
+   * owned by a space other than the active one, archived, already a favorite,
+   * or when the list is already at {@link FAVORITES_MAX} (`Favorites are full:
+   * 12`). Otherwise appends `{ id, url, title, faviconUrl }` copied from the
+   * tab (`createdAt` from the clock) and links the tab to it via
+   * `TabStore.setFavorite`, which also unpins it. Duplicate urls are allowed.
+   */
+  addFavorite(tabId: string): Favorite {
+    const owner = this.ownerByTab.get(tabId);
+    if (owner === undefined) {
+      throw new Error(`Cannot favorite unknown tab: ${tabId}`);
+    }
+    if (owner !== this.activeId) {
+      throw new Error(`Cannot favorite a tab outside the active space: ${tabId}`);
+    }
+    const store = this.spacesById.get(owner)!.tabs;
+    const tab =
+      store.list().find((candidate) => candidate.id === tabId) ??
+      store.archived().find((candidate) => candidate.id === tabId);
+    if (tab === undefined) {
+      throw new Error(`Cannot favorite unknown tab: ${tabId}`);
+    }
+    if (tab.archivedAt !== null) {
+      throw new Error(`Cannot favorite an archived tab: ${tabId}`);
+    }
+    if (tab.favoriteId !== null) {
+      throw new Error(`Tab is already a favorite: ${tabId}`);
+    }
+    if (this.favoriteList.length === FAVORITES_MAX) {
+      throw new Error(`Favorites are full: ${FAVORITES_MAX}`);
+    }
+
+    const favorite: Favorite = {
+      id: this.idFactory(),
+      url: tab.url,
+      title: tab.title,
+      faviconUrl: tab.faviconUrl,
+      position: this.favoriteList.length,
+      createdAt: this.now(),
+    };
+    this.favoriteList.push(favorite);
+    store.setFavorite(tabId, favorite.id);
+    return { ...favorite };
+  }
+
+  /**
+   * Removes a favorite and unlinks every open tab across every space that
+   * references it (`setFavorite(tabId, null)`, moving each to the end of its
+   * space's today group). Returns the unlinked tab ids. Throws on an unknown
+   * favorite id.
+   */
+  removeFavorite(favoriteId: string): string[] {
+    const index = this.favoriteList.findIndex((favorite) => favorite.id === favoriteId);
+    if (index === -1) {
+      throw new Error(`Unknown favorite: ${favoriteId}`);
+    }
+    this.favoriteList.splice(index, 1);
+    this.renumberFavorites();
+
+    const unlinked: string[] = [];
+    for (const spaceId of this.order) {
+      const store = this.spacesById.get(spaceId)!.tabs;
+      for (const tab of store.list()) {
+        if (tab.favoriteId === favoriteId) {
+          store.setFavorite(tab.id, null);
+          unlinked.push(tab.id);
+        }
+      }
+    }
+    return unlinked;
+  }
+
+  /**
+   * Moves favorite `favoriteId` to `toIndex`, with `TabStore.reorder`
+   * semantics: a non-integer `toIndex` throws, an unknown id throws, and the
+   * index is clamped to `0..n-1` against the pre-removal length.
+   */
+  reorderFavorite(favoriteId: string, toIndex: number): void {
+    if (!Number.isInteger(toIndex)) {
+      throw new Error(`Cannot reorder to a non-integer index: ${toIndex}`);
+    }
+    const index = this.favoriteList.findIndex((favorite) => favorite.id === favoriteId);
+    if (index === -1) {
+      throw new Error(`Unknown favorite: ${favoriteId}`);
+    }
+    const clamped = Math.max(0, Math.min(toIndex, this.favoriteList.length - 1));
+    const [favorite] = this.favoriteList.splice(index, 1);
+    this.favoriteList.splice(clamped, 0, favorite);
+    this.renumberFavorites();
+  }
+
+  /**
+   * The active space's open tab id for `favoriteId`, or `null` when it has
+   * none open in the active space. Never throws — an unknown favorite id
+   * simply matches no tab.
+   */
+  favoriteTabId(favoriteId: string): string | null {
+    const tab = this.active().list().find((candidate) => candidate.favoriteId === favoriteId);
+    return tab ? tab.id : null;
+  }
+
+  /**
+   * Creates the favorite's tab in the active space (its url/title, linked via
+   * `favoriteId`); it becomes the active tab. Throws on an unknown favorite id
+   * or when the active space already has an open tab for it (at most one open
+   * tab per favorite per space).
+   */
+  createFavoriteTab(favoriteId: string): Tab {
+    const favorite = this.favoriteList.find((candidate) => candidate.id === favoriteId);
+    if (favorite === undefined) {
+      throw new Error(`Unknown favorite: ${favoriteId}`);
+    }
+    if (this.favoriteTabId(favoriteId) !== null) {
+      throw new Error(`Favorite tab already open in this space: ${favoriteId}`);
+    }
+    const tab = this.active().create({
+      url: favorite.url,
+      title: favorite.title,
+      favoriteId,
+    });
+    this.ownerByTab.set(tab.id, this.activeId);
+    return tab;
+  }
+
+  /** Archives the active space's today tabs. Delegates to `TabStore.archiveToday`. */
+  archiveToday(): string[] {
+    return this.active().archiveToday();
+  }
+
   // --- Cross-space operations ----------------------------------------------
 
   /**
@@ -531,21 +684,50 @@ export class SpaceStore {
    * stay alive but hidden), so this cannot be scoped to the active space. Never
    * throws: an id owned by no space is a silent no-op.
    *
-   * Returns `{ changed, inActiveSpace }`: `changed` is whether any stored value
-   * actually differed (so callers can skip a redundant broadcast), and
-   * `inActiveSpace` is whether the owning space is the currently-active one (both
-   * `false` for an unknown id).
+   * Returns `{ changed, inActiveSpace, favoritesChanged }`: `changed` is
+   * whether any stored value actually differed (so callers can skip a
+   * redundant broadcast), `inActiveSpace` is whether the owning space is the
+   * currently-active one (both `false` for an unknown id), and
+   * `favoritesChanged` is whether the tab's linked favorite's `faviconUrl` was
+   * also updated — which happens when a non-null `faviconUrl` update lands on a
+   * tab with a `favoriteId` whose site (`siteKeyForUrl`) matches the
+   * favorite's own url.
    */
   updateMeta(
     id: string,
     meta: { title?: string; faviconUrl?: string | null; url?: string },
-  ): { changed: boolean; inActiveSpace: boolean } {
+  ): { changed: boolean; inActiveSpace: boolean; favoritesChanged: boolean } {
     const owner = this.ownerByTab.get(id);
     if (owner === undefined) {
-      return { changed: false, inActiveSpace: false };
+      return { changed: false, inActiveSpace: false, favoritesChanged: false };
     }
-    const changed = this.spacesById.get(owner)!.tabs.updateMeta(id, meta);
-    return { changed, inActiveSpace: owner === this.activeId };
+    const store = this.spacesById.get(owner)!.tabs;
+    const changed = store.updateMeta(id, meta);
+
+    let favoritesChanged = false;
+    if (meta.faviconUrl !== undefined && meta.faviconUrl !== null) {
+      const tab =
+        store.list().find((candidate) => candidate.id === id) ??
+        store.archived().find((candidate) => candidate.id === id);
+      if (tab && tab.favoriteId !== null) {
+        const favorite = this.favoriteList.find((candidate) => candidate.id === tab.favoriteId);
+        if (favorite) {
+          const tabSiteKey = siteKeyForUrl(tab.url);
+          const favoriteSiteKey = siteKeyForUrl(favorite.url);
+          if (
+            tabSiteKey !== null &&
+            favoriteSiteKey !== null &&
+            tabSiteKey === favoriteSiteKey &&
+            favorite.faviconUrl !== meta.faviconUrl
+          ) {
+            favorite.faviconUrl = meta.faviconUrl;
+            favoritesChanged = true;
+          }
+        }
+      }
+    }
+
+    return { changed, inActiveSpace: owner === this.activeId, favoritesChanged };
   }
 
   /**
@@ -625,6 +807,7 @@ export class SpaceStore {
     return {
       ...this.spacesSnapshot(),
       ...this.active().snapshot(),
+      favorites: this.favorites(),
     };
   }
 
@@ -687,15 +870,19 @@ export class SpaceStore {
           lastActiveAt: tab.lastActiveAt,
           archivedAt: tab.archivedAt,
           position,
+          favoriteId: tab.favoriteId,
         });
       });
     }
+
+    const favorites = this.favorites();
 
     return {
       meta: { schemaVersion: SCHEMA_VERSION, activeSpaceId: this.activeId },
       profiles,
       spaces,
       tabs,
+      favorites,
     };
   }
 
@@ -710,6 +897,8 @@ export class SpaceStore {
    * (`archivedAt === null`) and archived, and handed to {@link TabStore.hydrate}
    * as open-then-archived.
    *
+   * Favorites are restored sorted by `position` and renumbered to `0..n-1`.
+   *
    * Repair rules, applied BEFORE the active pointers are set:
    * - A space's `activeTabId` restores only when it names an OPEN tab in the
    *   SAME space; an archived tab, a missing id, or a tab owned by another space
@@ -717,6 +906,11 @@ export class SpaceStore {
    *   tab).
    * - `meta.activeSpaceId` restores to the first space (in `position` order)
    *   when it is `null` or names no rebuilt space.
+   * - A tab's `favoriteId` restores to `null` when it names no restored
+   *   favorite, when the row is archived, or when an EARLIER (in `position`
+   *   order) open tab of the same space already claimed that favorite (the
+   *   first wins). A repaired favorite tab (non-null `favoriteId`) that was
+   *   persisted `pinned: true` restores unpinned.
    *
    * A state with zero spaces (only reachable from a hand-built
    * {@link PersistedState}; the desktop layer calls this only when there is
@@ -731,6 +925,14 @@ export class SpaceStore {
     }
 
     const store = new SpaceStore({ ...options, seed: false });
+
+    const orderedFavorites = [...state.favorites].sort(
+      (a, b) => a.position - b.position,
+    );
+    orderedFavorites.forEach((row, position) => {
+      store.favoriteList.push({ ...row, position });
+    });
+    const favoriteIds = new Set(store.favoriteList.map((favorite) => favorite.id));
 
     const orderedProfiles = [...state.profiles].sort(
       (a, b) => a.position - b.position,
@@ -759,10 +961,34 @@ export class SpaceStore {
       const spaceTabs = state.tabs
         .filter((tab) => tab.spaceId === row.id)
         .sort((a, b) => a.position - b.position);
-      const open = spaceTabs
+
+      // Repair each row's favoriteId (see the repair rules above), walking in
+      // position order so "first open tab wins" a duplicate favorite claim.
+      const usedFavoriteIds = new Set<string>();
+      const repairedSpaceTabs = spaceTabs.map((tabRow) => {
+        let favoriteId = tabRow.favoriteId;
+        if (favoriteId !== null) {
+          const isOpen = tabRow.archivedAt === null;
+          if (
+            !favoriteIds.has(favoriteId) ||
+            !isOpen ||
+            usedFavoriteIds.has(favoriteId)
+          ) {
+            favoriteId = null;
+          } else {
+            usedFavoriteIds.add(favoriteId);
+          }
+        }
+        const pinned = favoriteId !== null ? false : tabRow.pinned;
+        return favoriteId === tabRow.favoriteId && pinned === tabRow.pinned
+          ? tabRow
+          : { ...tabRow, favoriteId, pinned };
+      });
+
+      const open = repairedSpaceTabs
         .filter((tab) => tab.archivedAt === null)
         .map(tabRowToTab);
-      const archived = spaceTabs
+      const archived = repairedSpaceTabs
         .filter((tab) => tab.archivedAt !== null)
         .map(tabRowToTab);
       // Repair: an active tab is valid only when it is an OPEN tab in THIS

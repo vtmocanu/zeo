@@ -1041,6 +1041,8 @@ test.describe("zeo desktop app", () => {
     expect(res.tabId).toBe(id);
     expect(res.items.map((item) => item.id)).toEqual([
       "pin",
+      // PRD 10.4 — "Add to Favorites" sits second, right after pin/unpin.
+      "favorite",
       "moveToTop",
       "moveToBottom",
       "archive",
@@ -1049,6 +1051,7 @@ test.describe("zeo desktop app", () => {
     ]);
     const byId = new Map(res.items.map((item) => [item.id, item]));
     expect(byId.get("pin")).toMatchObject({ id: "pin", label: "Pin" });
+    expect(byId.get("favorite")).toMatchObject({ id: "favorite", label: "Add to Favorites", enabled: true });
     expect(byId.get("archive")?.enabled).toBe(true);
     expect(byId.get("close")?.enabled).toBe(true);
     expect(byId.get("copyUrl")?.enabled).toBe(true);
@@ -1066,13 +1069,15 @@ test.describe("zeo desktop app", () => {
     await row.click({ button: "right" });
     await expect
       .poll(async () => (await lastMenu())?.items.map((item) => item.id) ?? null)
-      .toEqual(["unpin", "moveToTop", "moveToBottom", "archive", "close", "copyUrl"]);
+      .toEqual(["unpin", "favorite", "moveToTop", "moveToBottom", "archive", "close", "copyUrl"]);
 
     const pinnedRes = (await lastMenu()) as BridgeMenuResult;
     expect(pinnedRes.tabId).toBe(id);
     const pinnedById = new Map(pinnedRes.items.map((item) => [item.id, item]));
     expect(pinnedById.get("unpin")).toMatchObject({ id: "unpin", label: "Unpin" });
     expect(pinnedById.has("pin")).toBe(false);
+    // PRD 10.4 — a pinned tab can still be favorited (addFavorite unpins it).
+    expect(pinnedById.get("favorite")).toMatchObject({ id: "favorite", label: "Add to Favorites", enabled: true });
     expect(pinnedById.get("archive")?.enabled).toBe(false);
     // Issue #135 — pinning moved the tab into the (now single-member) pinned
     // group, so both move items remain present but disabled.
@@ -3424,6 +3429,11 @@ test.describe("zeo desktop app", () => {
     "tab.new",
     "tab.close",
     "tab.pin",
+    // PRD 10.4 — tab.favorite (a non-favorite tab is active, favorites are not
+    // full) and tabs.clearToday (the space has open today tabs) follow tab.pin;
+    // tab.unpin and tab.unfavorite are disabled here, so they do not appear.
+    "tab.favorite",
+    "tabs.clearToday",
     "tab.archive",
     "tab.copy-url",
     // Issue #135 — tab.moveToTop / tab.moveToBottom are always enabled when a

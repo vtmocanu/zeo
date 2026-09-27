@@ -14,6 +14,7 @@ import type { PaneSide, WindowLayout } from "./split-view.js";
 import type { UpdateState } from "./update.js";
 import type { ChromeState } from "./chrome.js";
 import type { SpaceTheme } from "./theme.js";
+import type { Favorite, FavoriteContextMenuResult } from "./favorites.js";
 
 /**
  * A single space's tab payload, in the pre-space shape. This is what
@@ -41,7 +42,9 @@ export interface SpacesState {
  * slice, with NO blocking dimension. Produced by {@link SpaceStore.snapshot};
  * the store does not know about content blocking.
  */
-export interface StoreSnapshot extends SpacesState, TabsSlice {}
+export interface StoreSnapshot extends SpacesState, TabsSlice {
+  favorites: Favorite[];
+}
 
 /**
  * The full application state broadcast from main to renderers: the store
@@ -536,6 +539,20 @@ export interface ChromeApi {
 }
 
 /**
+ * The global-favorites bridge: `open` activates the active space's open tab
+ * for `favoriteId`, or creates one; `add`/`remove`/`reorder` mutate the
+ * favorites list; `showContextMenu` pops the native favorite-tile context menu
+ * and reports back its items.
+ */
+export interface FavoritesApi {
+  open(favoriteId: string): Promise<void>;
+  add(tabId: string): Promise<Favorite>;
+  remove(favoriteId: string): Promise<void>;
+  reorder(favoriteId: string, toIndex: number): Promise<void>;
+  showContextMenu(favoriteId: string, x: number, y: number): Promise<FavoriteContextMenuResult>;
+}
+
+/**
  * The full bridge surface exposed on `window.zeo` by the preload script.
  *
  * `onStateChange` registers a listener for main-pushed state updates and
@@ -558,6 +575,7 @@ export interface ZeoApi {
   splitView: SplitViewApi;
   chrome: ChromeApi;
   update: UpdateApi;
+  favorites: FavoritesApi;
   onStateChange(listener: (state: TabsState) => void): () => void;
   /** Registers a listener for main-pushed command-bar state updates and returns
    *  an unsubscribe function, mirroring onStateChange. */
@@ -663,5 +681,10 @@ export const IPC = {
   updateOpenRelease: "zeo:update:open-release",
   updateCopyCommand: "zeo:update:copy-command",
   updateState: "zeo:update:state",
+  favoritesOpen: "zeo:favorites:open",
+  favoritesAdd: "zeo:favorites:add",
+  favoritesRemove: "zeo:favorites:remove",
+  favoritesReorder: "zeo:favorites:reorder",
+  favoritesContextMenu: "zeo:favorites:context-menu",
   stateChange: "zeo:state-change",
 } as const;

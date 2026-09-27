@@ -27,7 +27,7 @@ interface TabRecord extends Tab {
  * A SINGLE internal array holds every tab — open and archived alike. `list()`
  * and `archived()` derive their views by filtering, so cross-group array
  * position is irrelevant; only the relative order WITHIN a group (pinned,
- * unpinned) matters. All accessors return defensive copies stripped of the
+ * today, favorite) matters. All accessors return defensive copies stripped of the
  * private sequence fields, so external callers can never mutate internal state
  * nor observe the internal bookkeeping. Time and id generation are injectable
  * to keep the store deterministic under test.
@@ -49,9 +49,9 @@ export class TabStore {
    * internal array in EXACTLY the given order and assigning the private sequence
    * fields so the store REPRODUCES the input under `list()`/`archived()`.
    *
-   * The caller passes open tabs in `list()` order (pinned-then-unpinned)
-   * followed by archived tabs in `archived()` order (most-recently-archived
-   * first). Because `list()` filters by the `pinned` flag while preserving array
+   * The caller passes open tabs in `list()` order (pinned, then today, then
+   * favorite) followed by archived tabs in `archived()` order (most-recently-
+   * archived first). Because `list()` filters by group while preserving array
    * order, the open prefix reproduces exactly. For the archived suffix,
    * `archived()` sorts by `archivedAt` desc then `archivalSeq` desc, so an
    * EARLIER archived-array element is given a LARGER `archivalSeq`; that keeps
@@ -79,6 +79,7 @@ export class TabStore {
       pinned: tab.pinned,
       lastActiveAt: tab.lastActiveAt,
       archivedAt: tab.archivedAt,
+      favoriteId: tab.favoriteId,
       activationSeq: ++seq,
       archivalSeq: 0,
     }));
@@ -110,6 +111,7 @@ export class TabStore {
       pinned: record.pinned,
       lastActiveAt: record.lastActiveAt,
       archivedAt: record.archivedAt,
+      favoriteId: record.favoriteId,
     };
   }
 
@@ -136,6 +138,19 @@ export class TabStore {
   /** Open (non-archived) records in their current array order. */
   private openTabs(): TabRecord[] {
     return this.tabs.filter((tab) => tab.archivedAt === null);
+  }
+
+  /**
+   * The three-way sidebar-section key a tab belongs to: `"pinned"`, `"today"`
+   * (unpinned, `favoriteId === null`) or `"favorite"` (unpinned,
+   * `favoriteId !== null`). Used by {@link reorder} to compute the group a
+   * dropped row moves within, and mirrors `sidebarSections`.
+   */
+  private groupKey(tab: TabRecord): "pinned" | "today" | "favorite" {
+    if (tab.pinned) {
+      return "pinned";
+    }
+    return tab.favoriteId !== null ? "favorite" : "today";
   }
 
   /**
@@ -177,7 +192,7 @@ export class TabStore {
    * derivation) is intentionally NOT done here — that belongs to the desktop
    * main process.
    */
-  create(input: { url: string; title?: string }): Tab {
+  create(input: { url: string; title?: string; favoriteId?: string | null }): Tab {
     const createdAt = this.now();
     const record: TabRecord = {
       id: this.idFactory(),
@@ -188,6 +203,7 @@ export class TabStore {
       pinned: false,
       lastActiveAt: createdAt,
       archivedAt: null,
+      favoriteId: input.favoriteId ?? null,
       activationSeq: ++this.seq,
       archivalSeq: 0,
     };
@@ -369,6 +385,9 @@ export class TabStore {
     if (record.archivedAt !== null) {
       throw new Error(`Cannot pin an archived tab: ${id}`);
     }
+    if (record.favoriteId !== null) {
+      throw new Error(`Cannot pin a favorite tab: ${id}`);
+    }
     if (record.pinned) {
       return;
     }
@@ -380,7 +399,7 @@ export class TabStore {
   }
 
   /**
-   * Unpins `id`, appending it to the end of the unpinned group. Throws on an
+   * Unpins `id`, appending it to the end of the today group. Throws on an
    * unknown id. Already-unpinned is a COMPLETE no-op (the record is not moved).
    */
   unpin(id: string): void {
@@ -392,15 +411,15 @@ export class TabStore {
       return;
     }
     record.pinned = false;
-    // Move to the end of the array (= the end of the unpinned group).
+    // Move to the end of the array (= the end of the today group).
     this.tabs.splice(this.tabs.indexOf(record), 1);
     this.tabs.push(record);
   }
 
   /**
-   * Moves an OPEN tab to `toIndex` WITHIN its own group (pinned or unpinned);
-   * the index is interpreted within that group and clamped to its bounds.
-   * Throws on an unknown or archived id. The other group and archived tabs keep
+   * Moves an OPEN tab to `toIndex` WITHIN its own group (pinned, today, or
+   * favorite); the index is interpreted within that group and clamped to its bounds.
+   * Throws on an unknown or archived id. The other groups and archived tabs keep
    * their positions.
    */
   reorder(id: string, toIndex: number): void {
@@ -413,11 +432,14 @@ export class TabStore {
     }
 
     // The ordered group (among OPEN tabs) the target belongs to, and the array
-    // indices those group members currently occupy.
+    // indices those group members currently occupy. Groups are three-way:
+    // pinned, today (unpinned, no favoriteId) and favorite (unpinned,
+    // favoriteId set) — matching the rendered sidebar sections.
+    const targetGroup = this.groupKey(target);
     const positions: number[] = [];
     const group: TabRecord[] = [];
     this.tabs.forEach((tab, index) => {
-      if (tab.archivedAt === null && tab.pinned === target.pinned) {
+      if (tab.archivedAt === null && this.groupKey(tab) === targetGroup) {
         positions.push(index);
         group.push(tab);
       }
@@ -438,9 +460,9 @@ export class TabStore {
   }
 
   /**
-   * Moves an OPEN tab to the FIRST position of its own group (pinned or
-   * unpinned). Delegates to {@link reorder}, which performs all validation
-   * (unknown/archived id, non-integer index) and leaves the other group and
+   * Moves an OPEN tab to the FIRST position of its own group (pinned, today,
+   * or favorite). Delegates to {@link reorder}, which performs all validation
+   * (unknown/archived id, non-integer index) and leaves the other groups and
    * archived tabs in place. An already-first or single-tab move is a no-op.
    */
   moveToTop(id: string): void {
@@ -448,8 +470,8 @@ export class TabStore {
   }
 
   /**
-   * Moves an OPEN tab to the LAST position of its own group (pinned or
-   * unpinned). {@link reorder} clamps an out-of-range index to the last slot of
+   * Moves an OPEN tab to the LAST position of its own group (pinned, today, or
+   * favorite). {@link reorder} clamps an out-of-range index to the last slot of
    * the tab's group and performs all validation (unknown/archived id,
    * non-integer index); `Number.MAX_SAFE_INTEGER` is a finite integer, so it
    * passes the integer guard and lands the tab last. (`Infinity` would throw —
@@ -472,6 +494,9 @@ export class TabStore {
     if (record.pinned) {
       throw new Error(`Cannot archive a pinned tab: ${id}`);
     }
+    if (record.favoriteId !== null) {
+      throw new Error(`Cannot archive a favorite tab: ${id}`);
+    }
     if (record.archivedAt !== null) {
       throw new Error(`Cannot archive an archived tab: ${id}`);
     }
@@ -484,10 +509,57 @@ export class TabStore {
   }
 
   /**
-   * Auto-archives every OPEN tab that has gone idle: not pinned, not the active
-   * tab, and whose age (`this.now() - lastActiveAt`) is STRICTLY GREATER THAN
-   * `maxIdleMs`. A tab whose age exactly equals `maxIdleMs` is kept (the PRD
-   * archives tabs "older than" the threshold, not at it). Each archived tab is
+   * Sets or clears `id`'s `favoriteId`. Throws on an unknown or archived id. A
+   * non-null value unpins the tab (`pinned = false`); either direction moves
+   * the record to the end of the array, so it lands last in its new group
+   * (favorite or today).
+   */
+  setFavorite(id: string, favoriteId: string | null): void {
+    const record = this.findRecord(id, "set favorite on");
+    if (record.archivedAt !== null) {
+      throw new Error(`Cannot set favorite on an archived tab: ${id}`);
+    }
+    record.favoriteId = favoriteId;
+    if (favoriteId !== null) {
+      record.pinned = false;
+    }
+    this.tabs.splice(this.tabs.indexOf(record), 1);
+    this.tabs.push(record);
+  }
+
+  /**
+   * Archives every OPEN today tab (unpinned, `favoriteId === null`), including
+   * the active one if it qualifies, all stamped with ONE `now()` value and a
+   * fresh `archivalSeq` per tab in {@link list} order. If the active tab was
+   * archived, {@link activateMru} re-points active among the remaining pinned
+   * and favorite tabs (or `null`). Returns the archived ids, `[]` when there
+   * were none.
+   */
+  archiveToday(): string[] {
+    const now = this.now();
+    const targets = this.list().filter(
+      (tab) => !tab.pinned && tab.favoriteId === null,
+    );
+    const archivedIds: string[] = [];
+    for (const target of targets) {
+      // Non-null asserted: `target.id` was just produced by `list()`, which
+      // reads from `this.tabs`.
+      const record = this.tabs.find((tab) => tab.id === target.id)!;
+      this.stampArchived(record, now);
+      archivedIds.push(record.id);
+    }
+    if (this.activeId !== null && archivedIds.includes(this.activeId)) {
+      this.activateMru();
+    }
+    return archivedIds;
+  }
+
+  /**
+   * Auto-archives every OPEN tab that has gone idle: not pinned, not a
+   * favorite, not the active tab, and whose age (`this.now() - lastActiveAt`)
+   * is STRICTLY GREATER THAN `maxIdleMs`. A tab whose age exactly equals
+   * `maxIdleMs` is kept (the PRD archives tabs "older than" the threshold, not
+   * at it). Each archived tab is
    * stamped exactly as `archive` stamps it: `archivedAt` from the clock plus a
    * fresh `archivalSeq`.
    *
@@ -502,6 +574,7 @@ export class TabStore {
       if (
         record.archivedAt !== null ||
         record.pinned ||
+        record.favoriteId !== null ||
         record.id === this.activeId ||
         now - record.lastActiveAt <= maxIdleMs
       ) {
@@ -515,7 +588,7 @@ export class TabStore {
 
   /**
    * Restores an archived tab: clears `archivedAt`, clears `pinned`, and moves
-   * the record to the end of the array (= the end of the unpinned group).
+   * the record to the end of the array (= the end of the today group).
    */
   restore(id: string): void {
     const record = this.findRecord(id, "restore");
@@ -536,13 +609,16 @@ export class TabStore {
 
   /**
    * Returns the OPEN (non-archived) tabs as new shallow copies: the pinned
-   * group first, then the unpinned group, each STABLE in its internal order.
+   * group first, then the today group (unpinned, `favoriteId === null`), then
+   * the favorite group (unpinned, `favoriteId !== null`), each STABLE in its
+   * internal order.
    */
   list(): Tab[] {
     const open = this.openTabs();
     const pinned = open.filter((tab) => tab.pinned);
-    const unpinned = open.filter((tab) => !tab.pinned);
-    return [...pinned, ...unpinned].map((tab) => this.toTab(tab));
+    const today = open.filter((tab) => !tab.pinned && tab.favoriteId === null);
+    const favorite = open.filter((tab) => !tab.pinned && tab.favoriteId !== null);
+    return [...pinned, ...today, ...favorite].map((tab) => this.toTab(tab));
   }
 
   /**

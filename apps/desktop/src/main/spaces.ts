@@ -2,7 +2,7 @@ import { ipcMain, Menu, session } from "electron";
 import type { MenuItemConstructorOptions } from "electron";
 import { IPC, buildSpaceContextMenu, normalizeTheme, themesEqual } from "@zeo/core";
 import type { Profile, Space, SpaceContextMenuResult, SpacesState } from "@zeo/core";
-import { updateDownload } from "./db.js";
+import { updateDownload } from "./db-downloads.js";
 import { terminalizeProfileDownloads } from "./download-ops.js";
 import { runtime } from "./state.js";
 import { broadcast } from "./broadcast.js";

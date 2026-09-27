@@ -24,3 +24,72 @@ body,
 #root {
   background: transparent;
 }
+
+/* Text for assistive tech and DOM readers only: the label of an icon-only
+   control (space names, "Archived (N)", the downloads summary). */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* Line icon (icons.tsx): the svg's own width/height attributes size it. */
+.icon {
+  display: block;
+  flex: 0 0 auto;
+}
+
+/* The shared 28px icon button (design book `.zw-icon-btn`): window row,
+   bottom bar, row close and delete, banner dismiss. Row-scoped buttons that
+   reveal on hover start hidden in their own stylesheet. */
+.icon-button {
+  appearance: none;
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: var(--icon-button);
+  height: var(--icon-button);
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--ink-secondary);
+  font: inherit;
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    background-color var(--motion-fast) var(--ease-standard),
+    color var(--motion-fast) var(--ease-standard),
+    opacity var(--motion-fast) var(--ease-standard),
+    transform var(--motion-fast) var(--ease-standard);
+}
+
+.icon-button:hover {
+  background: var(--surface-hover);
+  color: var(--ink-primary);
+}
+
+.icon-button:active {
+  transform: scale(0.92);
+}
+
+.icon-button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .icon-button {
+    transition: none;
+  }
+
+  .icon-button:active {
+    transform: none;
+  }
+}

@@ -31,6 +31,18 @@
   --card-inset: 8px;
   --window-row-height: 44px;
 
+  /* Sidebar sizes (PRD 10.4). The four heights mirror @zeo/core sidebar.ts
+     (URL_PILL_HEIGHT, TAB_ROW_HEIGHT, FAVORITE_TILE_HEIGHT and _GAP,
+     BOTTOM_BAR_HEIGHT); a unit test keeps them in sync. */
+  --row-height: 34px;
+  --url-pill-height: 34px;
+  --tile-height: 48px;
+  --tile-gap: 6px;
+  --tile-icon: 24px;
+  --icon-button: 28px;
+  --bottom-bar-height: 32px;
+  --label-height: 22px;
+
   /* Type. */
   --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
   --text-xs: 11px;

@@ -33,12 +33,12 @@ import type {
   ProfileRow,
   SpaceRow,
   TabRow,
+  FavoriteRow,
   SpaceStore,
   HistoryEntry,
   HistoryVisit,
   SearchEngineId,
   WindowLayout,
-  Download,
 } from "@zeo/core";
 
 /**
@@ -46,8 +46,8 @@ import type {
  * blocking_allowlist table added at schema version 3, the two history
  * tables (history_entries, history_visits) added at schema version 4, the
  * searchEngine column added at schema version 5, the site_zoom table added
- * at schema version 6, plus the downloads table added at schema version 7 —
- * ten tables in all. Schema version 8 adds the five window-layout columns to
+ * at schema version 6, plus the downloads table added at schema version 7.
+ * Schema version 8 adds the five window-layout columns to
  * `meta` (layoutMode, layoutLeftTabId, layoutRightTabId, layoutRatio,
  * layoutFocused) that persist the active space's split-view layout, schema
  * version 9 adds the quickBrowseExternal column to `meta`, schema version 10
@@ -55,6 +55,11 @@ import type {
  * adds the window_state table (persisted window bounds + maximized state),
  * and schema version 12 adds the updateCheckEnabled, updateDismissedVersion,
  * and updateLastCheckedAt columns to `meta` (the in-app update check).
+ * Schema version 13 adds two chrome columns to `window_state`, schema version 14
+ * adds the nullable `theme` column to `spaces`, and schema version 15 adds the
+ * `favorites` table plus the nullable `tabs.favoriteId` column (PRD 10.4) —
+ * twelve tables in all as of the current schema (counting sqlite's own
+ * `sqlite_sequence`, created for `history_visits`' AUTOINCREMENT column).
  * The PRIMARY KEYs (no duplicate ids), the foreign
  * keys, and `PRAGMA foreign_keys=ON` are the well-formedness contract the core
  * codec relies on: every on-disk state is guaranteed loadable. `spaces.activeTabId`
@@ -70,7 +75,7 @@ const SITE_ZOOM_DDL =
  * `state` is stored as its string; `completedAt` and `spaceId` are nullable; byte
  * counts and timestamps are integers. Download rows live OUTSIDE the
  * {@link writeState} full-state flush (like the allowlist, history, and site_zoom
- * tables) — they are managed only by the dedicated row helpers below.
+ * tables) — they are managed only by the dedicated row helpers in `db-downloads.ts`.
  */
 const DOWNLOADS_DDL =
   "CREATE TABLE downloads (id TEXT PRIMARY KEY, url TEXT NOT NULL, filename TEXT NOT NULL, path TEXT NOT NULL, totalBytes INTEGER NOT NULL, receivedBytes INTEGER NOT NULL, state TEXT NOT NULL, startedAt INTEGER NOT NULL, completedAt INTEGER, spaceId TEXT);";
@@ -110,6 +115,28 @@ const SPACE_THEME_MIGRATION =
   MIGRATION_HUE_ORDER.length + ") || ']')), 'intensity', 1);" +
   "UPDATE meta SET schemaVersion = 14 WHERE id = 0;";
 
+/**
+ * The favorites table (schema version 15, PRD 10.4): one global, ordered list
+ * of favorite tiles, `position` always the contiguous display-order index.
+ * `tabs.favoriteId` (added alongside it) references this table with
+ * `ON DELETE SET NULL`, so removing a favorite unlinks any tab row still
+ * pointing at it at the SQL level too.
+ */
+const FAVORITES_DDL =
+  "CREATE TABLE favorites (" +
+  "id TEXT PRIMARY KEY, url TEXT NOT NULL, title TEXT NOT NULL, " +
+  "faviconUrl TEXT, position INTEGER NOT NULL, createdAt INTEGER NOT NULL);";
+
+/**
+ * Schema version 15 (PRD 10.4): adds the `favorites` table and the nullable
+ * `tabs.favoriteId` column (`ON DELETE SET NULL`, so a deleted favorite
+ * unlinks its tabs rather than blocking the delete or cascading it).
+ */
+const FAVORITES_MIGRATION =
+  FAVORITES_DDL +
+  "ALTER TABLE tabs ADD COLUMN favoriteId TEXT REFERENCES favorites(id) ON DELETE SET NULL;" +
+  "UPDATE meta SET schemaVersion = 15 WHERE id = 0;";
+
 const DDL = `
 CREATE TABLE profiles (
   id TEXT PRIMARY KEY, name TEXT NOT NULL, createdAt INTEGER NOT NULL, position INTEGER NOT NULL
@@ -119,12 +146,14 @@ CREATE TABLE spaces (
   profileId TEXT NOT NULL REFERENCES profiles(id) ON DELETE RESTRICT,
   createdAt INTEGER NOT NULL, activeTabId TEXT, position INTEGER NOT NULL, theme TEXT
 );
+${FAVORITES_DDL}
 CREATE TABLE tabs (
   id TEXT PRIMARY KEY,
   spaceId TEXT NOT NULL REFERENCES spaces(id) ON DELETE CASCADE,
   url TEXT NOT NULL, title TEXT NOT NULL, faviconUrl TEXT,
   createdAt INTEGER NOT NULL, pinned INTEGER NOT NULL, lastActiveAt INTEGER NOT NULL,
-  archivedAt INTEGER, position INTEGER NOT NULL
+  archivedAt INTEGER, position INTEGER NOT NULL,
+  favoriteId TEXT REFERENCES favorites(id) ON DELETE SET NULL
 );
 CREATE TABLE meta (
   id INTEGER PRIMARY KEY CHECK (id = 0), schemaVersion INTEGER NOT NULL, activeSpaceId TEXT,
@@ -211,6 +240,7 @@ const MIGRATION_STEPS: Record<number, string> = {
     "ALTER TABLE meta ADD COLUMN updateLastCheckedAt INTEGER;" + "UPDATE meta SET schemaVersion = 12 WHERE id = 0;",
   13: WINDOW_STATE_CHROME_DDL + "UPDATE meta SET schemaVersion = 13 WHERE id = 0;",
   14: SPACE_THEME_MIGRATION,
+  15: FAVORITES_MIGRATION,
 };
 
 /** The module-level database handle, `null` until {@link loadStore} opens it. */
@@ -230,7 +260,8 @@ function dbPath(): string {
 /**
  * Reads the schema version currently on disk and applies {@link migrationAction}:
  * `"abort"` throws {@link UnsupportedSchemaVersionError}, `"create"` builds the
- * fresh schema (all ten tables) and seeds the single meta row, `"migrate"` runs the
+ * fresh schema (all twelve tables, see the schema header above) and seeds the
+ * single meta row, `"migrate"` runs the
  * ordered {@link MIGRATION_STEPS} from the on-disk version + 1 through
  * {@link SCHEMA_VERSION} inside a single transaction (so a partially-applied
  * upgrade never lands), and `"noop"` leaves an up-to-date database untouched.
@@ -873,135 +904,6 @@ export function deleteSiteZoom(host: string): void {
 }
 
 /**
- * The SQLite shape of a `downloads` row: `state` comes back as a plain string,
- * `completedAt`/`spaceId` as `number | null` / `string | null`. The DDL above is
- * the source of truth for these columns.
- */
-interface DownloadRow {
-  id: string;
-  url: string;
-  filename: string;
-  path: string;
-  totalBytes: number;
-  receivedBytes: number;
-  state: string;
-  startedAt: number;
-  completedAt: number | null;
-  spaceId: string | null;
-}
-
-/** Maps a SQLite `downloads` row to a {@link Download}: the stored `state` string
- *  is narrowed to the union and the nullable columns stay `null`. */
-function rowToDownload(row: DownloadRow): Download {
-  return {
-    id: row.id,
-    url: row.url,
-    filename: row.filename,
-    path: row.path,
-    totalBytes: row.totalBytes,
-    receivedBytes: row.receivedBytes,
-    state: row.state as Download["state"],
-    startedAt: row.startedAt,
-    completedAt: row.completedAt ?? null,
-    spaceId: row.spaceId ?? null,
-  };
-}
-
-/**
- * Inserts one download row, then prunes the table to the newest 100 rows by
- * `startedAt DESC, id DESC`, both in one transaction. The prune keeps the on-disk
- * table bounded and matches the in-memory 100-cap so disk and memory drop the same
- * oldest entry. Throws when the database is not open.
- */
-export function insertDownload(d: Download): void {
-  const database = requireDb();
-  const insert = database.prepare(
-    "INSERT INTO downloads(id,url,filename,path,totalBytes,receivedBytes,state,startedAt,completedAt,spaceId) " +
-      "VALUES (@id,@url,@filename,@path,@totalBytes,@receivedBytes,@state,@startedAt,@completedAt,@spaceId)",
-  );
-  const prune = database.prepare(
-    "DELETE FROM downloads WHERE id NOT IN (SELECT id FROM downloads ORDER BY startedAt DESC, id DESC LIMIT 100)",
-  );
-  const run = database.transaction((download: Download): void => {
-    insert.run(download);
-    prune.run();
-  });
-  run(d);
-}
-
-/**
- * Updates every mutable column of the download row with id `d.id`. An UPDATE that
- * matches no row (the id is absent — e.g. a throttled write for a record already
- * removed) affects zero rows and is a silent no-op. Throws when the database is
- * not open.
- */
-export function updateDownload(d: Download): void {
-  const database = requireDb();
-  database
-    .prepare(
-      "UPDATE downloads SET url=@url, filename=@filename, path=@path, totalBytes=@totalBytes, " +
-        "receivedBytes=@receivedBytes, state=@state, startedAt=@startedAt, completedAt=@completedAt, " +
-        "spaceId=@spaceId WHERE id=@id",
-    )
-    .run(d);
-}
-
-/**
- * Deletes the download row with id `id`; a no-op when the id is absent.
- * Synchronous (better-sqlite3). Throws when the database is not open.
- */
-export function deleteDownload(id: string): void {
-  const database = requireDb();
-  database.prepare("DELETE FROM downloads WHERE id = ?").run(id);
-}
-
-/**
- * Deletes every finished download row (`state` one of the three terminal states),
- * never touching an active (`progressing`/`paused`) row. Backs
- * `downloads.clearFinished`. Throws when the database is not open.
- */
-export function clearFinishedDownloadRows(): void {
-  const database = requireDb();
-  database
-    .prepare(
-      "DELETE FROM downloads WHERE state IN ('completed','cancelled','interrupted')",
-    )
-    .run();
-}
-
-/**
- * Returns the newest 100 downloads ordered by `startedAt DESC, id DESC` (the same
- * total order the reducer and prune use), mapped back to {@link Download}s. Feeds
- * the in-memory `DownloadsState` at startup. Throws when the database is not open.
- */
-export function listDownloads(): Download[] {
-  const database = requireDb();
-  // SQLite-row boundary: .all() is typed `unknown[]`; the columns are DownloadRow.
-  const rows = database
-    .prepare(
-      "SELECT id,url,filename,path,totalBytes,receivedBytes,state,startedAt,completedAt,spaceId " +
-        "FROM downloads ORDER BY startedAt DESC, id DESC LIMIT 100",
-    )
-    .all() as DownloadRow[];
-  return rows.map(rowToDownload);
-}
-
-/**
- * Rewrites every active (`progressing`/`paused`) download row to `interrupted`
- * with its `completedAt` set to `launchTime`. Run once at startup BEFORE
- * {@link listDownloads} so a download interrupted by a crash or quit is never
- * shown as still running. Throws when the database is not open.
- */
-export function markInterruptedDownloadsOnLaunch(launchTime: number): void {
-  const database = requireDb();
-  database
-    .prepare(
-      "UPDATE downloads SET state = 'interrupted', completedAt = @t WHERE state IN ('progressing','paused')",
-    )
-    .run({ t: launchTime });
-}
-
-/**
  * True when the database holds any persistable state — any space, or any tab
  * (open or archived). A brand-new database with only the seeded meta row returns
  * false, signalling the caller to seed an initial store.
@@ -1032,27 +934,32 @@ function readState(database: DatabaseType): PersistedState {
     .all() as SpaceRow[];
   const tabRows = database
     .prepare(
-      "SELECT id, spaceId, url, title, faviconUrl, createdAt, pinned, lastActiveAt, archivedAt, position FROM tabs ORDER BY spaceId, position",
+      "SELECT id, spaceId, url, title, faviconUrl, createdAt, pinned, lastActiveAt, archivedAt, position, favoriteId FROM tabs ORDER BY spaceId, position",
     )
     .all() as (Omit<TabRow, "pinned"> & { pinned: number })[];
   const tabs: TabRow[] = tabRows.map((row) => ({
     ...row,
     pinned: row.pinned === 1,
   }));
+  const favorites = database
+    .prepare("SELECT id, url, title, faviconUrl, position, createdAt FROM favorites ORDER BY position")
+    .all() as FavoriteRow[];
   const metaRow = database
     .prepare("SELECT schemaVersion, activeSpaceId FROM meta WHERE id=0")
     .get() as MetaRow;
 
-  return { meta: metaRow, profiles, spaces, tabs };
+  return { meta: metaRow, profiles, spaces, tabs, favorites };
 }
 
 /**
  * Persists a full {@link PersistedState} snapshot in a single transaction. The
- * step order — upsert profiles → spaces → tabs, then delete-absent tabs → spaces
- * → profiles, then update meta — avoids the profile-FK RESTRICT hazard when a
- * space is re-pointed to a new profile and its old profile is deleted in the same
- * snapshot: the space row is rewritten before the old profile is removed. An empty
- * id list on a delete-absent step correctly clears every row of that table.
+ * step order — upsert profiles → spaces → favorites → tabs, then delete-absent
+ * tabs → spaces → profiles → favorites, then update meta — avoids the profile-FK
+ * RESTRICT hazard when a space is re-pointed to a new profile and its old profile
+ * is deleted in the same snapshot (the space row is rewritten before the old
+ * profile is removed), and upserts favorites BEFORE tabs so a tab's `favoriteId`
+ * FK target already exists. An empty id list on a delete-absent step correctly
+ * clears every row of that table.
  */
 function writeState(database: DatabaseType, state: PersistedState): void {
   const upsertProfile = database.prepare(
@@ -1066,12 +973,19 @@ function writeState(database: DatabaseType, state: PersistedState): void {
       "createdAt=excluded.createdAt, activeTabId=excluded.activeTabId, position=excluded.position, " +
       "theme=excluded.theme",
   );
+  const upsertFavorite = database.prepare(
+    "INSERT INTO favorites(id,url,title,faviconUrl,position,createdAt) " +
+      "VALUES (@id,@url,@title,@faviconUrl,@position,@createdAt) " +
+      "ON CONFLICT(id) DO UPDATE SET url=excluded.url, title=excluded.title, " +
+      "faviconUrl=excluded.faviconUrl, position=excluded.position, createdAt=excluded.createdAt",
+  );
   const upsertTab = database.prepare(
-    "INSERT INTO tabs(id,spaceId,url,title,faviconUrl,createdAt,pinned,lastActiveAt,archivedAt,position) " +
-      "VALUES (@id,@spaceId,@url,@title,@faviconUrl,@createdAt,@pinned,@lastActiveAt,@archivedAt,@position) " +
+    "INSERT INTO tabs(id,spaceId,url,title,faviconUrl,createdAt,pinned,lastActiveAt,archivedAt,position,favoriteId) " +
+      "VALUES (@id,@spaceId,@url,@title,@faviconUrl,@createdAt,@pinned,@lastActiveAt,@archivedAt,@position,@favoriteId) " +
       "ON CONFLICT(id) DO UPDATE SET spaceId=excluded.spaceId, url=excluded.url, title=excluded.title, " +
       "faviconUrl=excluded.faviconUrl, createdAt=excluded.createdAt, pinned=excluded.pinned, " +
-      "lastActiveAt=excluded.lastActiveAt, archivedAt=excluded.archivedAt, position=excluded.position",
+      "lastActiveAt=excluded.lastActiveAt, archivedAt=excluded.archivedAt, position=excluded.position, " +
+      "favoriteId=excluded.favoriteId",
   );
   const deleteAbsentTabs = database.prepare(
     "DELETE FROM tabs WHERE id NOT IN (SELECT value FROM json_each(?))",
@@ -1081,6 +995,9 @@ function writeState(database: DatabaseType, state: PersistedState): void {
   );
   const deleteAbsentProfiles = database.prepare(
     "DELETE FROM profiles WHERE id NOT IN (SELECT value FROM json_each(?))",
+  );
+  const deleteAbsentFavorites = database.prepare(
+    "DELETE FROM favorites WHERE id NOT IN (SELECT value FROM json_each(?))",
   );
   const updateMeta = database.prepare(
     "UPDATE meta SET schemaVersion=?, activeSpaceId=? WHERE id=0",
@@ -1095,15 +1012,20 @@ function writeState(database: DatabaseType, state: PersistedState): void {
     for (const sp of s.spaces) {
       upsertSpace.run(sp);
     }
-    // (3) upsert tabs (boolean pinned → SQLite integer)
+    // (3) upsert favorites (tabs.favoriteId's FK target must exist first)
+    for (const f of s.favorites) {
+      upsertFavorite.run(f);
+    }
+    // (4) upsert tabs (boolean pinned → SQLite integer)
     for (const t of s.tabs) {
       upsertTab.run({ ...t, pinned: t.pinned ? 1 : 0 });
     }
-    // (4) delete-absent tabs, (5) spaces, (6) profiles
+    // (5) delete-absent tabs, (6) spaces, (7) profiles, (8) favorites
     deleteAbsentTabs.run(JSON.stringify(s.tabs.map((t) => t.id)));
     deleteAbsentSpaces.run(JSON.stringify(s.spaces.map((sp) => sp.id)));
     deleteAbsentProfiles.run(JSON.stringify(s.profiles.map((p) => p.id)));
-    // (7) update meta
+    deleteAbsentFavorites.run(JSON.stringify(s.favorites.map((f) => f.id)));
+    // (9) update meta
     updateMeta.run(s.meta.schemaVersion, s.meta.activeSpaceId);
   });
 

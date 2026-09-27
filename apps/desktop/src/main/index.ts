@@ -1,10 +1,6 @@
 import { app, BrowserWindow } from "electron";
-import {
-  loadStore,
-  flush,
-  markInterruptedDownloadsOnLaunch,
-  listDownloads,
-} from "./db.js";
+import { loadStore, flush } from "./db.js";
+import { markInterruptedDownloadsOnLaunch, listDownloads } from "./db-downloads.js";
 import { runtime, SWEEP_INTERVAL_MS } from "./state.js";
 // Side-effect imports: each module registers its ipcMain.handle channels and its
 // runtime hooks at load. They MUST all run before app.whenReady so every channel
@@ -14,6 +10,7 @@ import "./zoom.js";
 import "./settings.js";
 import "./find.js";
 import "./spaces.js";
+import "./favorites.js";
 import "./command-bar.js";
 import "./commands.js";
 import "./chrome.js";

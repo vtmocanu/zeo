@@ -4,10 +4,13 @@
 @import "./base.css";
 @import "./window.css";
 @import "./sidebar.css";
+@import "./url-pill.css";
+@import "./favorites.css";
 @import "./space-switcher.css";
 @import "./tab-item.css";
 @import "./update-banner.css";
 @import "./archived.css";
+@import "./bottom-bar.css";
 @import "./command-bar.css";
 @import "./settings.css";
 @import "./find-bar.css";

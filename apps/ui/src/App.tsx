@@ -4,31 +4,36 @@ import {
   useLayoutEffect,
   useRef,
   useState,
-  type CSSProperties,
-  type MouseEventHandler,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
   type RefObject,
 } from "react";
-import type { PaneSide, Space, SpaceTheme, Tab, TabsState } from "@zeo/core";
+import type { PaneSide, SpaceTheme, Tab, TabsState } from "@zeo/core";
 import {
   DEFAULT_CHROME_STATE,
   DEFAULT_SEARCH_ENGINE_ID,
   SINGLE_LAYOUT,
-  SPACE_ACTIVATE_DELAY_MS,
   activeSpaceTheme,
+  belowPinnedClip,
   cardLeft,
+  clearableTabIds,
   defaultSpaceName,
   formatRelativeArchived,
   formatZoomPercent,
   hostMatchesAllowlist,
   paneOf,
+  sidebarSections,
   siteKeyForUrl,
   sidebarVisible,
-  spaceDotColor,
+  toReorderIndex,
 } from "@zeo/core";
+import { ARCHIVED_VIEW_ID, BottomBar, SpaceNameEditor, type SpaceEdit } from "./BottomBar.js";
 import { findSpaceItem } from "./dom.js";
 import { Favicon } from "./Favicon.js";
+import { DRAG_THRESHOLD, suppressNextClick } from "./drag.js";
+import { FavoritesGrid } from "./FavoritesGrid.js";
+import { Icon } from "./icons.js";
+import { UrlPill } from "./UrlPill.js";
 import {
   SidebarResizeHandle,
   WindowBackdrop,
@@ -37,10 +42,6 @@ import {
 } from "./WindowChrome.js";
 import { ThemePicker } from "./ThemePicker.js";
 import { useThemeTokens } from "./theme.js";
-
-// Pointer travel (px) required before a press turns into a drag. Below this a
-// press stays a plain click, so click-to-activate / click-to-close keep working.
-const DRAG_THRESHOLD = 5;
 
 type DragSection = "pinned" | "unpinned";
 
@@ -58,19 +59,6 @@ interface DragSession {
 interface DropTarget {
   section: DragSection;
   insertBefore: number;
-}
-
-/**
- * Pure translation from a drop slot to the `TabStore.reorder` index.
- *
- * `TabStore.reorder(id, toIndex)` removes the target from its group first, then
- * splice-inserts at `clamp(toIndex, 0, group.length - 1)` where `group.length`
- * still counts the target. So a slot computed against the pre-removal array
- * (`insertBefore`) must be shifted down by one when it sits after the row's
- * current position. Kept as a standalone function so it is trivially testable.
- */
-export function toReorderIndex(fromIndex: number, insertBefore: number): number {
-  return insertBefore > fromIndex ? insertBefore - 1 : insertBefore;
 }
 
 /**
@@ -189,15 +177,7 @@ function useTabDrag(pinned: Tab[], unpinned: Tab[]) {
 
     // A real drag just ended; swallow the click the browser fires on release so
     // it does not activate/close the row the pointer happens to be over.
-    const suppressClick = (clickEvent: MouseEvent) => {
-      clickEvent.stopPropagation();
-      clickEvent.preventDefault();
-      document.removeEventListener("click", suppressClick, true);
-    };
-    document.addEventListener("click", suppressClick, true);
-    window.setTimeout(() => {
-      document.removeEventListener("click", suppressClick, true);
-    }, 0);
+    suppressNextClick();
 
     if (!target) {
       return;
@@ -328,7 +308,6 @@ function TabRow({
   const paned = paneSide !== null;
   const className = [
     "tab-item",
-    pinned ? "tab-item--pinned" : "",
     isActive ? "tab-item--active" : "",
     dragging ? "tab-item--dragging" : "",
     paned ? "tab-item--paned" : "",
@@ -372,33 +351,6 @@ function TabRow({
       >
         {tab.title}
       </button>
-      {allowlisted ? (
-        <span
-          className="tab-item__shield tab-item__shield--allowlisted"
-          role="img"
-          data-testid="tab-shield"
-          data-allowlisted="true"
-          title={`Blocking disabled on ${host ?? ""}`}
-          aria-label={`Blocking disabled on ${host ?? ""}`}
-        >
-          <span aria-hidden="true">🛡</span>
-        </span>
-      ) : blockedCount > 0 ? (
-        <span
-          className={
-            "tab-item__shield" +
-            (blockingEnabled ? "" : " tab-item__shield--disabled")
-          }
-          role="img"
-          data-testid="tab-shield"
-          data-blocked-count={blockedCount}
-          title={`${blockedCount} request${blockedCount === 1 ? "" : "s"} blocked`}
-          aria-label={`${blockedCount} request${blockedCount === 1 ? "" : "s"} blocked`}
-        >
-          <span aria-hidden="true">🛡</span>
-          <span className="tab-item__shield-count">{blockedCount}</span>
-        </span>
-      ) : null}
       {zoomFactor !== 1.0 ? (
         <button
           type="button"
@@ -414,6 +366,33 @@ function TabRow({
           {formatZoomPercent(zoomFactor)}
         </button>
       ) : null}
+      {allowlisted ? (
+        <span
+          className="tab-item__shield tab-item__shield--allowlisted"
+          role="img"
+          data-testid="tab-shield"
+          data-allowlisted="true"
+          title={`Blocking disabled on ${host ?? ""}`}
+          aria-label={`Blocking disabled on ${host ?? ""}`}
+        >
+          <Icon name="shield-off" size={12} />
+        </span>
+      ) : blockedCount > 0 ? (
+        <span
+          className={
+            "tab-item__shield" +
+            (blockingEnabled ? "" : " tab-item__shield--disabled")
+          }
+          role="img"
+          data-testid="tab-shield"
+          data-blocked-count={blockedCount}
+          title={`${blockedCount} request${blockedCount === 1 ? "" : "s"} blocked`}
+          aria-label={`${blockedCount} request${blockedCount === 1 ? "" : "s"} blocked`}
+        >
+          <Icon name="shield" size={12} />
+          <span className="tab-item__shield-count">{blockedCount}</span>
+        </span>
+      ) : null}
       {!pinned && (
         <button
           type="button"
@@ -424,7 +403,7 @@ function TabRow({
             void window.zeo?.tabs.close(tab.id).catch(() => {});
           }}
         >
-          ×
+          <Icon name="close" size={12} />
         </button>
       )}
     </li>
@@ -465,112 +444,53 @@ function ArchivedRow({ tab, now }: { tab: Tab; now: number }) {
           void window.zeo?.tabs.remove(tab.id).catch(() => {});
         }}
       >
-        ×
+        <Icon name="close" size={12} />
       </button>
     </li>
   );
 }
 
-type SpaceEdit =
-  | { mode: "create" }
-  | { mode: "rename"; spaceId: string }
-  | { mode: "new-profile"; spaceId: string };
-
-function SpaceNameInput({
-  value,
-  onChange,
-  onCommit,
-  onCancel,
-}: {
-  value: string;
-  onChange: (next: string) => void;
-  onCommit: () => void;
-  onCancel: () => void;
-}) {
-  return (
-    <input
-      type="text"
-      className="space-name-input"
-      data-testid="space-name-input"
-      autoFocus
-      value={value}
-      onChange={(event) => onChange(event.target.value)}
-      onKeyDown={(event) => {
-        if (event.key === "Enter") {
-          event.preventDefault();
-          onCommit();
-        } else if (event.key === "Escape") {
-          event.preventDefault();
-          onCancel();
-        }
-      }}
-      onBlur={() => onCancel()}
-    />
-  );
-}
-
 /**
- * A single space row in the switcher. A plain click activates the space, but the
- * activation is deferred by {@link SPACE_ACTIVATE_DELAY_MS} so a double-click
- * (which opens the rename input) never also switches spaces: the second click
- * and `onDoubleClick` both clear the pending timer first (PRD 9.4 §6). The timer
- * is per-row and cleared on unmount.
+ * Clips the rows below the sticky pinned section where they scroll under it
+ * (PRD 10.4 §7.4). The pinned section has no fill over the vibrancy and tint,
+ * so instead of painting a ground it would have to fake, the region below it
+ * is cut away: `--below-pinned-clip` on `.sidebar__below-pinned` is
+ * `belowPinnedClip(scrollTop, pinnedHeight, offsetTop)` px, read by its
+ * `clip-path`. Recomputed on scroll and whenever the scroller, the pinned
+ * section or the region itself resizes; `0px` without a pinned section.
  */
-function SpaceItem({
-  space,
-  isActive,
-  onActivate,
-  onRename,
-  onContextMenu,
-}: {
-  space: Space;
-  isActive: boolean;
-  onActivate: () => void;
-  onRename: () => void;
-  onContextMenu: MouseEventHandler<HTMLButtonElement>;
-}) {
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const clear = () => {
-    if (timer.current !== null) {
-      clearTimeout(timer.current);
-      timer.current = null;
+function useBelowPinnedClip(hasPinned: boolean): RefObject<HTMLDivElement | null> {
+  const ref = useRef<HTMLDivElement | null>(null);
+  useLayoutEffect(() => {
+    const below = ref.current;
+    const scroller = below?.parentElement ?? null;
+    if (below === null || scroller === null) {
+      return;
     }
-  };
-  useEffect(() => clear, []);
-  return (
-    <button
-      type="button"
-      className={`space-item${isActive ? " space-item--active" : ""}`}
-      data-testid="space-item"
-      data-space-id={space.id}
-      aria-current={isActive ? "true" : undefined}
-      onClick={(event) => {
-        if (event.detail > 1) {
-          clear();
-          return;
-        }
-        clear();
-        timer.current = setTimeout(() => {
-          timer.current = null;
-          onActivate();
-        }, SPACE_ACTIVATE_DELAY_MS);
-      }}
-      onDoubleClick={() => {
-        clear();
-        onRename();
-      }}
-      onContextMenu={onContextMenu}
-    >
-      <span
-        className="space-item__dot"
-        data-testid="space-dot"
-        data-hue={space.theme === null ? "none" : space.theme.stops.join("+")}
-        aria-hidden="true"
-        style={{ "--space-dot": spaceDotColor(space.theme) ?? undefined } as CSSProperties}
-      />
-      <span className="space-item__name">{space.name}</span>
-    </button>
-  );
+    const pinned = hasPinned
+      ? scroller.querySelector<HTMLElement>(":scope > .sidebar__section--pinned")
+      : null;
+    const update = () => {
+      const clip =
+        pinned === null
+          ? 0
+          : belowPinnedClip(scroller.scrollTop, pinned.offsetHeight, below.offsetTop);
+      below.style.setProperty("--below-pinned-clip", `${clip}px`);
+    };
+    update();
+    scroller.addEventListener("scroll", update, { passive: true });
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(update);
+    observer?.observe(scroller);
+    observer?.observe(below);
+    if (pinned !== null) {
+      observer?.observe(pinned);
+    }
+    return () => {
+      scroller.removeEventListener("scroll", update);
+      observer?.disconnect();
+    };
+  }, [hasPinned]);
+  return ref;
 }
 
 /** Whether focus is currently somewhere inside the (still-mounted) theme picker. */
@@ -632,6 +552,7 @@ export function App() {
     profiles: [],
     tabs: [],
     activeTabId: null,
+    favorites: [],
     archived: [],
     unloadedTabIds: [],
     settingsOpen: false,
@@ -830,13 +751,18 @@ export function App() {
     })();
   }, [draft, cancelEdit]);
 
-  // `state.tabs` is already ordered pinned-first then unpinned; filtering
-  // preserves that order within each section.
-  const pinned = state.tabs.filter((t) => t.pinned);
-  const unpinned = state.tabs.filter((t) => !t.pinned);
+  // `state.tabs` is ordered pinned, today, favorite; `sidebarSections` keeps
+  // that order within each group. Favorite tabs are drawn as tiles, never rows.
+  const { pinned, today, favoriteTabs } = sidebarSections(state.tabs);
+  const clearable = clearableTabIds(state.tabs);
+  const activeTab = state.tabs.find((t) => t.id === state.activeTabId) ?? null;
+  const openFavoriteIds = new Set(
+    favoriteTabs.flatMap((t) => (t.favoriteId === null ? [] : [t.favoriteId])),
+  );
+  const activeSpace = state.spaces.find((s) => s.id === state.activeSpaceId);
 
   const { pinnedListRef, unpinnedListRef, onRowPointerDown, dropTarget, draggingId } =
-    useTabDrag(pinned, unpinned);
+    useTabDrag(pinned, today);
   const isDragging = draggingId !== null;
 
   const dropIndicator = (key: string): ReactNode => (
@@ -855,8 +781,6 @@ export function App() {
   ): ReactNode => {
     const isTarget = dropTarget?.section === section;
     const insertBefore = isTarget ? dropTarget.insertBefore : -1;
-    const listClassName =
-      section === "pinned" ? "sidebar__list sidebar__list--pinned" : "sidebar__list";
 
     const children: ReactNode[] = [];
     if (rows.length === 0) {
@@ -912,38 +836,14 @@ export function App() {
     }
 
     return (
-      <ul ref={listRef} className={listClassName} data-section={section}>
+      <ul ref={listRef} className="sidebar__list" data-section={section}>
         {children}
       </ul>
     );
   };
 
   const showPinned = pinned.length > 0 || isDragging;
-  const showUnpinned = unpinned.length > 0 || isDragging;
-
-  // Sidebar footer downloads indicator — reads the broadcast `downloads` slice
-  // only (no forked state). "Active" is progressing-or-paused; aggregate progress
-  // is sum(receivedBytes) / sum(totalBytes) across active downloads, shown as a
-  // percentage. When every active download has an unknown total (totalBytes 0)
-  // the sum is 0 and the indicator goes indeterminate; the percentage is clamped
-  // to 100 since an unknown-total item can still contribute received bytes.
-  const downloadItems = state.downloads.items;
-  const activeDownloads = downloadItems.filter(
-    (d) => d.state === "progressing" || d.state === "paused",
-  );
-  const downloadsReceived = activeDownloads.reduce(
-    (sum, d) => sum + d.receivedBytes,
-    0,
-  );
-  const downloadsTotal = activeDownloads.reduce(
-    (sum, d) => sum + d.totalBytes,
-    0,
-  );
-  const downloadsIndeterminate = downloadsTotal === 0;
-  const downloadsPercent =
-    downloadsTotal > 0
-      ? Math.min(100, Math.round((downloadsReceived / downloadsTotal) * 100))
-      : 0;
+  const belowPinnedRef = useBelowPinnedClip(showPinned);
 
   const sidebarClassName = `sidebar${isDragging ? " sidebar--dragging" : ""}${
     sidebarVisible(state.chrome) ? "" : " sidebar--hidden"
@@ -952,102 +852,76 @@ export function App() {
   const sidebar = (
     <aside className={sidebarClassName} data-testid="sidebar" style={{ width: sidebarWidth }}>
       <WindowRow />
-      <header className="sidebar__header">
-        <h1 className="sidebar__title">Tabs</h1>
-        <button
-          type="button"
-          className="sidebar__new-tab"
-          data-testid="new-tab-button"
-          onClick={() => void window.zeo?.commandBar.open("new-tab").catch(() => {})}
-        >
-          + New tab
-        </button>
-      </header>
+      <UrlPill url={activeTab?.url ?? null} />
+      <FavoritesGrid
+        favorites={state.favorites}
+        activeFavoriteId={activeTab?.favoriteId ?? null}
+        openFavoriteIds={openFavoriteIds}
+        sidebarWidth={sidebarWidth}
+      />
+      <h1 className="sidebar__title">{activeSpace?.name ?? ""}</h1>
 
-      <nav className="space-switcher" data-testid="space-switcher">
-        {state.spaces.map((space) => {
-          const isActive = space.id === state.activeSpaceId;
-          if (edit?.mode === "rename" && edit.spaceId === space.id) {
-            return (
-              <SpaceNameInput
-                key={space.id}
-                value={draft}
-                onChange={setDraft}
-                onCommit={commitEdit}
-                onCancel={cancelEdit}
-              />
-            );
-          }
-          return (
-            <SpaceItem
-              key={space.id}
-              space={space}
-              isActive={isActive}
-              onActivate={() => window.zeo?.spaces.activate(space.id).catch(() => {})}
-              onRename={() => openEdit({ mode: "rename", spaceId: space.id }, space.name)}
-              onContextMenu={(event) => {
-                event.preventDefault();
-                void window.zeo?.spaces
-                  .showContextMenu(space.id, event.clientX, event.clientY)
-                  .then((result) => {
-                    (
-                      globalThis as { __zeoLastSpaceContextMenu?: unknown }
-                    ).__zeoLastSpaceContextMenu = result;
-                  })
-                  .catch(() => {});
-              }}
-            />
-          );
-        })}
-        {edit?.mode === "create" || edit?.mode === "new-profile" ? (
-          <SpaceNameInput
-            key="space-edit-trailing"
-            value={draft}
-            onChange={setDraft}
-            onCommit={commitEdit}
-            onCancel={cancelEdit}
-          />
-        ) : (
-          <button
-            type="button"
-            className="space-new"
-            data-testid="new-space-button"
-            aria-label="New space"
-            onClick={() => openEdit({ mode: "create" }, defaultSpaceName(state.spaces))}
+      <div className="sidebar__sections">
+        {showPinned && (
+          <section
+            className="sidebar__section sidebar__section--pinned"
+            data-testid="pinned-section"
+            aria-label="Pinned tabs"
           >
-            +
-          </button>
+            {renderList(pinned, "pinned", pinnedListRef)}
+          </section>
         )}
-      </nav>
-
-      {state.tabs.length === 0 ? (
-        <p className="sidebar__empty">No open tabs</p>
-      ) : (
-        <div className="sidebar__sections">
-          {showPinned && (
-            <section
-              className="sidebar__section sidebar__section--pinned"
-              data-testid="pinned-section"
+        <div className="sidebar__below-pinned" ref={belowPinnedRef}>
+          <div className="sidebar__divider">
+            <button
+              type="button"
+              className="sidebar__clear"
+              data-testid="clear-today-button"
+              aria-label="Clear today's tabs"
+              title="Archive today's tabs"
+              disabled={clearable.length === 0}
+              onClick={() => void window.zeo?.commands.run("tabs.clearToday").catch(() => {})}
             >
-              {renderList(pinned, "pinned", pinnedListRef)}
-            </section>
-          )}
-          {showUnpinned && (
-            <section
-              className="sidebar__section"
-              data-testid="unpinned-section"
+              <Icon name="chevron-down" size={12} />
+              Clear
+            </button>
+          </div>
+          <section
+            className="sidebar__section"
+            data-testid="unpinned-section"
+            aria-label="Today's tabs"
+          >
+            <button
+              type="button"
+              className="sidebar__new-tab"
+              data-testid="new-tab-button"
+              onClick={() => void window.zeo?.commandBar.open("new-tab").catch(() => {})}
             >
-              {renderList(unpinned, "unpinned", unpinnedListRef)}
-            </section>
-          )}
+              <Icon name="plus" size={14} />
+              <span className="sidebar__new-tab-label">New Tab</span>
+            </button>
+            {renderList(today, "unpinned", unpinnedListRef)}
+            {state.tabs.length === 0 && <p className="sidebar__empty">No open tabs</p>}
+          </section>
         </div>
-      )}
+      </div>
 
       {state.update.available !== null && (
-        <div className="update-banner" data-testid="update-banner">
-          <span className="update-banner__text">
-            Update available: zeo {state.update.available.version}
-          </span>
+        <div className="update-banner" data-testid="update-banner" role="status">
+          <div className="update-banner__head">
+            <span className="update-banner__text">
+              Update available: zeo {state.update.available.version}
+            </span>
+            <button
+              type="button"
+              className="icon-button update-banner__dismiss"
+              aria-label="Dismiss update"
+              title="Dismiss"
+              onClick={() => void window.zeo?.update.dismiss().catch(() => {})}
+            >
+              <Icon name="close" size={12} />
+            </button>
+          </div>
           <button
             type="button"
             className="update-banner__action"
@@ -1061,61 +935,50 @@ export function App() {
           >
             {state.update.origin === "homebrew" ? "How to upgrade" : "Open release"}
           </button>
-          <button
-            type="button"
-            className="update-banner__dismiss"
-            aria-label="Dismiss update"
-            onClick={() => void window.zeo?.update.dismiss().catch(() => {})}
-          >
-            ×
-          </button>
         </div>
       )}
 
-      <footer className="sidebar__footer">
-        {downloadItems.length > 0 && (
-          <button
-            type="button"
-            className={`sidebar__footer-button downloads-indicator${
-              activeDownloads.length > 0 ? " downloads-indicator--active" : ""
-            }`}
-            data-testid="downloads-indicator"
-            onClick={() =>
-              void window.zeo?.commands.run("downloads.open").catch(() => {})
-            }
-          >
-            {activeDownloads.length > 0
-              ? downloadsIndeterminate
-                ? `Downloading ${activeDownloads.length}…`
-                : `Downloading ${activeDownloads.length} · ${downloadsPercent}%`
-              : `Downloads (${downloadItems.length})`}
-          </button>
-        )}
-        <button
-          type="button"
-          className="sidebar__footer-button"
-          data-testid="archived-toggle"
-          aria-expanded={showArchived}
-          onClick={() => setShowArchived((open) => !open)}
+      {edit !== null && (
+        <SpaceNameEditor
+          edit={edit}
+          value={draft}
+          onChange={setDraft}
+          onCommit={commitEdit}
+          onCancel={cancelEdit}
+        />
+      )}
+      {showArchived && (
+        <div
+          id={ARCHIVED_VIEW_ID}
+          className="archived-view"
+          data-testid="archived-view"
+          role="region"
+          aria-label="Archived tabs"
         >
-          Archived ({state.archived.length})
-        </button>
-        {showArchived && (
-          <div className="archived-view" data-testid="archived-view">
-            {state.archived.length === 0 ? (
-              <p className="archived-empty" data-testid="archived-empty">
-                No archived tabs
-              </p>
-            ) : (
-              <ul className="archived-list">
-                {state.archived.map((tab) => (
-                  <ArchivedRow key={tab.id} tab={tab} now={now} />
-                ))}
-              </ul>
-            )}
-          </div>
-        )}
-      </footer>
+          {state.archived.length === 0 ? (
+            <p className="archived-empty" data-testid="archived-empty">
+              No archived tabs
+            </p>
+          ) : (
+            <ul className="archived-list">
+              {state.archived.map((tab) => (
+                <ArchivedRow key={tab.id} tab={tab} now={now} />
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+
+      <BottomBar
+        spaces={state.spaces}
+        activeSpaceId={state.activeSpaceId}
+        downloads={state.downloads.items}
+        archivedCount={state.archived.length}
+        archivedOpen={showArchived}
+        onToggleArchived={() => setShowArchived((open) => !open)}
+        onRenameSpace={(space) => openEdit({ mode: "rename", spaceId: space.id }, space.name)}
+        onNewSpace={() => openEdit({ mode: "create" }, defaultSpaceName(state.spaces))}
+      />
       {themeEditSpace !== undefined && (
         <ThemePicker
           key={themeEditSpace.id}

@@ -9,6 +9,35 @@ milestone, a minor bump only for very large breakthroughs.
 
 ## [Unreleased]
 
+## [0.0.32] - 2026-09-27
+
+### Added
+
+- Favorites: one global, ordered list of up to 12 sites shown as a tile grid
+  at the top of the sidebar. "Add to Favorites" / "Remove from Favorites" in
+  the tab context menu and command bar; a tile opens or activates that
+  favorite's tab in the current space; tiles can be dragged to reorder;
+  right-click offers Open, Copy URL, Close Tab, Remove from Favorites.
+  Closing a favorite's tab keeps the favorite; favorite tabs can't be
+  pinned, archived, idle-swept or cleared.
+- URL pill: shows the active tab's domain; clicking it (or ⌘L) opens the
+  command bar to navigate.
+- Clear: a button above today's tabs (and the "Clear Today's Tabs" command)
+  archives every unpinned, non-favorite tab in the current space.
+
+### Changed
+
+- Sidebar layout top to bottom: window row, URL pill, favorites, space
+  name, pinned tabs, divider with Clear, today's tabs with a New Tab row,
+  update banner, and a bottom bar with downloads, archived, the space
+  switcher and new space. Rows are taller with a raised active row; icons
+  replace text glyphs.
+- The space switcher is now one colored dot per space in the bottom bar;
+  renaming edits the name above the bottom bar.
+- Database schema version 15: a new `favorites` table and a
+  `tabs.favoriteId` column. Existing databases migrate in place with no
+  favorites.
+
 ## [0.0.31] - 2026-09-27
 
 ### Added

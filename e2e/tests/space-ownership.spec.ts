@@ -376,8 +376,10 @@ test.describe("PRD 9.4 space ownership", () => {
 
     await inactiveRow.dblclick();
 
-    // The rename input replaces the row.
+    // The rename input opens above the bottom bar (PRD 10.4 §7.7); the dot stays
+    // in place, so the inactive row is still visible while the input is.
     await expect(sidebar.getByTestId("space-name-input")).toBeVisible();
+    await expect(inactiveRow).toBeVisible();
 
     // Wait out the activation delay plus a margin: the guard cancelled the deferred
     // activate, so the active space is STILL Personal (the double-clicked row never
@@ -490,6 +492,8 @@ test.describe("PRD 9.4 space ownership", () => {
     // The rename input opened and the active space is unchanged.
     const renameInput = sidebar.getByTestId("space-name-input");
     await expect(renameInput).toBeVisible();
+    // PRD 10.4 §7.7 — the dot is not replaced by the input while editing.
+    await expect(inactiveRow).toBeVisible();
     expect((await readSpaces(sidebar)).activeSpaceId).toBe(personalId);
 
     // Escape cancels the edit: the input closes and the row is restored.

@@ -435,13 +435,46 @@ test.describe("PRD 10.3 space themes", () => {
       await first.app.close();
     }
 
-    // Downgrade the on-disk database to schema N-1: drop the theme column and
-    // roll back the recorded schemaVersion, exactly as PRD 10.3 §9 describes.
+    // Downgrade the on-disk database to the schema just before the theme step
+    // (PRD 10.3 §9): roll back every later step, drop the theme column and
+    // record that version. PRD 10.4's step 15 (favorites) follows theme (14),
+    // so it is undone first: `tabs` is rebuilt without `favoriteId` (SQLite
+    // cannot DROP a column used in a foreign key) from its own live DDL, and
+    // the `favorites` table is dropped. A later schema step must be rolled
+    // back here too, which the version guard below forces.
+    const THEME_SCHEMA_VERSION = 14;
+    expect(
+      SCHEMA_VERSION,
+      "roll back every schema step after the theme step before migrating",
+    ).toBe(THEME_SCHEMA_VERSION + 1);
     const dbPath = join(userDataDir, "zeo.db");
     const db = new DatabaseSync(dbPath);
     try {
-      db.exec("ALTER TABLE spaces DROP COLUMN theme;");
-      db.prepare("UPDATE meta SET schemaVersion = ? WHERE id = 0;").run(SCHEMA_VERSION - 1);
+      const tabsSql = (
+        db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'tabs'").get() as {
+          sql: string;
+        }
+      ).sql;
+      const preFavoritesSql = tabsSql
+        .replace(/,\s*favoriteId TEXT REFERENCES favorites\(id\) ON DELETE SET NULL/, "")
+        .replace(/^CREATE TABLE "?tabs"?/, "CREATE TABLE tabs_pre_favorites");
+      expect(preFavoritesSql).not.toContain("favoriteId");
+      const columns = (db.prepare("PRAGMA table_info(tabs)").all() as { name: string }[])
+        .map((c) => c.name)
+        .filter((name) => name !== "favoriteId")
+        .join(", ");
+      db.exec("PRAGMA foreign_keys = OFF;");
+      db.exec(
+        "BEGIN;" +
+          `${preFavoritesSql};` +
+          `INSERT INTO tabs_pre_favorites (${columns}) SELECT ${columns} FROM tabs;` +
+          "DROP TABLE tabs;" +
+          "ALTER TABLE tabs_pre_favorites RENAME TO tabs;" +
+          "DROP TABLE favorites;" +
+          "ALTER TABLE spaces DROP COLUMN theme;" +
+          "COMMIT;",
+      );
+      db.prepare("UPDATE meta SET schemaVersion = ? WHERE id = 0;").run(THEME_SCHEMA_VERSION - 1);
     } finally {
       db.close();
     }
