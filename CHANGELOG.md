@@ -19,8 +19,8 @@ milestone, a minor bump only for very large breakthroughs.
   re-rank lands on the row you clicked instead of being dropped, and a loading
   tab can no longer take focus from the bar and close it. The bar now closes
   only when the window loses focus or you dismiss it, in split view too: a
-  tab closing itself or another page-driven layout change no longer closes
-  it.
+  background layout update, such as an idle tab being unloaded, no longer
+  closes it.
 
 ## [0.0.34] - 2026-09-27
 

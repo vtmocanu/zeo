@@ -11,10 +11,10 @@
 // instead of being rejected as stale.
 //
 // The ACTIVE tab's view is visible under the overlay, so its load is the one
-// that could steal native focus; a third test pins the contract for that case
+// that could steal native focus; the ACTIVE-tab test pins the contract for that case
 // (bar open, overlay focused, same row, typing lands in the input). CDP key
-// events reach the overlay page regardless of OS focus, and under xvfb a page
-// view never takes native focus, so that test does NOT guard the steal logic
+// events reach the overlay page regardless of OS focus, and under xvfb a page's
+// load does not take native focus, so that test does NOT guard the steal logic
 // itself: command-bar-focus.test.ts does.
 //
 // These tests deliberately overlap a slow load with bar interaction (no
@@ -382,7 +382,7 @@ test.describe("command bar vs background load (#179)", () => {
     // load is the one that could steal focus and blur-close the bar on a
     // desktop. This pins the CONTRACT only (bar open, overlay focused, same row,
     // typing lands in the input); it does not guard the steal logic: under xvfb
-    // a page view never takes native focus, and Playwright's keyboard goes over
+    // a page's load does not take native focus, and Playwright's keyboard goes over
     // CDP straight to the overlay page regardless of OS focus. The unit tests in
     // command-bar-focus.test.ts guard the steal logic.
     const tabs = await setUpTabs();
