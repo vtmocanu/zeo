@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
+  cardLeft,
   clampSidebarWidth,
   contentRect,
   restoreChrome,
+  sidebarVisible,
   toggleSidebar,
   withSidebarRevealed,
+  withSidebarWidth,
   DEFAULT_CHROME_STATE,
   SIDEBAR_MAX_WIDTH,
   SIDEBAR_MIN_WIDTH,
@@ -76,6 +79,16 @@ describe("withSidebarRevealed", () => {
     const chrome: ChromeState = { sidebarWidth: 240, sidebarCollapsed: true, sidebarRevealed: true };
     expect(withSidebarRevealed(chrome, true)).toBe(chrome);
   });
+
+  it("returns a new object with sidebarRevealed set when collapsed and the flag differs", () => {
+    const chrome: ChromeState = { sidebarWidth: 240, sidebarCollapsed: true, sidebarRevealed: false };
+    const revealed = withSidebarRevealed(chrome, true);
+    expect(revealed).not.toBe(chrome);
+    expect(revealed.sidebarRevealed).toBe(true);
+    const hidden = withSidebarRevealed(revealed, false);
+    expect(hidden).not.toBe(revealed);
+    expect(hidden.sidebarRevealed).toBe(false);
+  });
 });
 
 describe("toggleSidebar", () => {
@@ -86,6 +99,55 @@ describe("toggleSidebar", () => {
     const twice = toggleSidebar(once);
     expect(twice.sidebarCollapsed).toBe(DEFAULT_CHROME_STATE.sidebarCollapsed);
     expect(twice.sidebarRevealed).toBe(false);
+  });
+
+  it("clears sidebarRevealed when toggling a collapsed-and-revealed sidebar", () => {
+    const chrome: ChromeState = { sidebarWidth: 240, sidebarCollapsed: true, sidebarRevealed: true };
+    const toggled = toggleSidebar(chrome);
+    expect(toggled.sidebarCollapsed).toBe(false);
+    expect(toggled.sidebarRevealed).toBe(false);
+  });
+});
+
+describe("withSidebarWidth", () => {
+  it("clamps the width above the maximum", () => {
+    expect(withSidebarWidth(DEFAULT_CHROME_STATE, 999).sidebarWidth).toBe(360);
+  });
+
+  it("clamps the width below the minimum", () => {
+    expect(withSidebarWidth(DEFAULT_CHROME_STATE, 10).sidebarWidth).toBe(200);
+  });
+});
+
+describe("sidebarVisible", () => {
+  it("is true when not collapsed", () => {
+    expect(sidebarVisible(DEFAULT_CHROME_STATE)).toBe(true);
+  });
+
+  it("is false when collapsed and not revealed", () => {
+    const chrome: ChromeState = { sidebarWidth: 240, sidebarCollapsed: true, sidebarRevealed: false };
+    expect(sidebarVisible(chrome)).toBe(false);
+  });
+
+  it("is true when collapsed but revealed", () => {
+    const chrome: ChromeState = { sidebarWidth: 240, sidebarCollapsed: true, sidebarRevealed: true };
+    expect(sidebarVisible(chrome)).toBe(true);
+  });
+});
+
+describe("cardLeft", () => {
+  it("is the sidebar width when the sidebar is visible", () => {
+    expect(cardLeft(DEFAULT_CHROME_STATE)).toBe(DEFAULT_CHROME_STATE.sidebarWidth);
+  });
+
+  it("is CARD_INSET when the sidebar is collapsed and not revealed", () => {
+    const chrome: ChromeState = { sidebarWidth: 240, sidebarCollapsed: true, sidebarRevealed: false };
+    expect(cardLeft(chrome)).toBe(8);
+  });
+
+  it("is the sidebar width when collapsed but revealed", () => {
+    const chrome: ChromeState = { sidebarWidth: 300, sidebarCollapsed: true, sidebarRevealed: true };
+    expect(cardLeft(chrome)).toBe(300);
   });
 });
 

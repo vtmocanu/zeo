@@ -32,10 +32,10 @@ describe("commandBarBounds", () => {
 
   it("tracks a narrow page region", () => {
     // contentRect(340, 900, default) → x 240, width max(0, 340-240-8) = 92.
-    const r = contentRect(340, 900, DEFAULT_CHROME_STATE);
+    // bar width = max(0, min(640, 92-48)) = 44; x = 240 + round((92-44)/2) = 264.
     const bounds = commandBarBounds(340, 900, DEFAULT_CHROME_STATE, 0);
-    expect(bounds.width).toBe(Math.max(0, Math.min(640, r.width - 48)));
-    expect(bounds.x).toBe(r.x + Math.round((r.width - bounds.width) / 2));
+    expect(bounds.width).toBe(44);
+    expect(bounds.x).toBe(264);
     expect(bounds.height).toBe(COMMAND_BAR_HEIGHT);
   });
 
@@ -57,15 +57,25 @@ describe("commandBarBounds", () => {
   it("clamps the height so the bottom edge never passes a short window", () => {
     // r = contentRect(1280, 300, default) → y 8, height 284.
     // bar y = 8 + round(284 * 0.12) = 8 + 34 = 42; room = 8+284-42 = 250.
-    const r = contentRect(1280, 300, DEFAULT_CHROME_STATE);
     const bounds = commandBarBounds(1280, 300, DEFAULT_CHROME_STATE, 20);
-    const y = r.y + Math.round(r.height * 0.12);
-    expect(bounds.height).toBe(r.y + r.height - y);
-    expect(y + bounds.height).toBe(r.y + r.height);
+    expect(bounds.height).toBe(250);
+    expect(42 + bounds.height).toBe(292);
   });
 
   it("returns an all-zero rect when the window cannot seat the input row", () => {
     expect(commandBarBounds(1280, 60, DEFAULT_CHROME_STATE, 0)).toEqual({ x: 0, y: 0, width: 0, height: 0 });
+  });
+
+  it("starts the bar at the card inset when the sidebar is collapsed", () => {
+    // contentRect(1280, 800, COLLAPSED) → x 8, y 8, width 1264, height 784.
+    // bar width = min(640, 1264-48) = 640; x = 8 + round((1264-640)/2) = 320.
+    // y = 8 + round(784*0.12) = 102.
+    expect(commandBarBounds(1280, 800, COLLAPSED, 0)).toEqual({
+      x: 320,
+      y: 102,
+      width: 640,
+      height: 56,
+    });
   });
 });
 
@@ -87,17 +97,28 @@ describe("findBarBounds", () => {
 
   it("clamps the width in a narrow page region, inset both sides", () => {
     // contentRect(500, 800, default) → x 240, width max(0, 500-240-8)=252.
-    const r = contentRect(500, 800, DEFAULT_CHROME_STATE);
+    // bar width = min(360, 252-24) = 228; x = 240+252-228-12 = 252.
     const bounds = findBarBounds(500, 800, DEFAULT_CHROME_STATE);
-    expect(bounds.width).toBe(r.width - 2 * FIND_BAR_INSET);
-    expect(bounds.x).toBe(r.x + FIND_BAR_INSET);
-    expect(bounds.x + bounds.width).toBe(r.x + r.width - FIND_BAR_INSET);
-    expect(bounds.y).toBe(r.y + 12);
+    expect(bounds.width).toBe(228);
+    expect(bounds.x).toBe(252);
+    expect(bounds.x + bounds.width).toBe(480);
+    expect(bounds.y).toBe(20);
     expect(bounds.height).toBe(FIND_BAR_HEIGHT);
   });
 
   it("collapses to an all-zero rect when the page region is too narrow", () => {
     expect(findBarBounds(260, 800, DEFAULT_CHROME_STATE)).toEqual({ x: 0, y: 0, width: 0, height: 0 });
+  });
+
+  it("starts the bar at the card inset when the sidebar is collapsed", () => {
+    // contentRect(1280, 800, COLLAPSED) → x 8, width 1264.
+    // bar width = min(360, 1264-24) = 360; x = 8+1264-360-12 = 900.
+    expect(findBarBounds(1280, 800, COLLAPSED)).toEqual({
+      x: 900,
+      y: 20,
+      width: 360,
+      height: 44,
+    });
   });
 
   it("yields no negative dimensions when the content is too small", () => {

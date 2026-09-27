@@ -814,8 +814,13 @@ describe("migrate", () => {
     expect(meta.defaultSessionMigratedAt).not.toBeNull();
     // The window_state chrome columns (schema v13) exist even on a fresh
     // install, but there is deliberately no seed row (mirroring window_state
-    // itself), so readChromePrefs() reads null until a first save.
+    // itself), so a query against row 0 finds nothing until a first save
+    // (readChromePrefs, exercised against the module-level handle in the
+    // "readChromePrefs / writeChromePrefs" suite below, reads null the same way).
     expect(hasChromeColumns(db)).toBe(true);
+    expect(
+      db.prepare("SELECT sidebarWidth, sidebarCollapsed FROM window_state WHERE id=0").get(),
+    ).toBeUndefined();
     db.close();
   });
 

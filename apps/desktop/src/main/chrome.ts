@@ -35,8 +35,10 @@ let chromeSaveErrorLogged = false;
  * split, `runtime.layout`): the active tab view in single mode, the two pane
  * views plus the divider in split, the settings view when open, and the
  * command-bar/find overlay when open (re-running the hidden-to-visible focus
- * rule window.ts's resize handler used to own). Sets bounds ONLY — it never
- * changes visibility or focus (beyond that one documented overlay exception).
+ * rule window.ts's resize handler used to own). Sets bounds only, EXCEPT for
+ * the overlay: {@link layoutOverlay} may show or hide it (a too-small window
+ * collapses its bounds to zero and hides it), and a hidden-to-visible
+ * transition steals focus onto it, per the two documented exceptions above.
  * Always finishes with {@link applyWindowButtons}. A no-op with no window.
  */
 export function relayoutWindow(): void {

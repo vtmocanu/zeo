@@ -19,7 +19,7 @@ export const FIND_BAR_HEIGHT = 44;
 /** Horizontal inset the find bar keeps from each edge of the page region. */
 export const FIND_BAR_INSET = 12;
 
-/** Fixed distance from the top of the content area to the find bar. */
+/** Fixed distance from the top of the PAGE region (the card) to the find bar. */
 export const FIND_BAR_TOP = 12;
 
 /**

@@ -81,7 +81,8 @@ const DOWNLOADS_DDL =
  * row: its absence means "never saved", so a first run opens with platform
  * defaults. Like the other non-store tables it lives OUTSIDE the
  * {@link writeState} full-state flush, managed only by `readWindowState` and
- * `writeWindowState` (moved to `db-window.ts`, PRD 10.2).
+ * `writeWindowState`, and (for the chrome columns added at schema version 13)
+ * `readChromePrefs` and `writeChromePrefs` (all moved to `db-window.ts`, PRD 10.2).
  */
 const WINDOW_STATE_DDL =
   "CREATE TABLE window_state (id INTEGER PRIMARY KEY CHECK (id = 0), x INTEGER, y INTEGER, width INTEGER NOT NULL, height INTEGER NOT NULL, maximized INTEGER NOT NULL DEFAULT 0);";

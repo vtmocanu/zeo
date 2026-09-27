@@ -13,9 +13,10 @@ import { requireDb } from "./db.js";
  * mapping SQLite's integer `maximized` to a boolean. Returns `null` when no row
  * has been saved yet (its absence means the bounds were never persisted — a first
  * run), so the caller opens with platform defaults; `x`/`y` stay `null` as `null`.
- * Managed ONLY here and by {@link writeWindowState}; like the other window/meta
- * helpers it is kept out of the full-state flush. Throws when the database is
- * not open.
+ * Managed here and by {@link writeWindowState}, and (for the chrome columns of
+ * the same row) by {@link readChromePrefs} and {@link writeChromePrefs}; like the
+ * other window/meta helpers it is kept out of the full-state flush. Throws when
+ * the database is not open.
  */
 export function readWindowState(): WindowState | null {
   const database = requireDb();
@@ -45,11 +46,12 @@ export function readWindowState(): WindowState | null {
 
 /**
  * Persists the window {@link WindowState} to the `window_state` row 0, upserting
- * the single row (`ON CONFLICT(id)` overwrites every column) and mapping the
- * boolean `maximized` to SQLite's integer; `x`/`y` pass through as `number | null`.
- * Synchronous (better-sqlite3). Throws when the database is not open, so a caller's
- * ordered window-state-write contract sees the failure before it changes anything
- * else.
+ * the single row (`ON CONFLICT(id)` overwrites only the bounds/maximized columns —
+ * x, y, width, height, maximized — leaving `sidebarWidth`/`sidebarCollapsed`
+ * untouched) and mapping the boolean `maximized` to SQLite's integer; `x`/`y`
+ * pass through as `number | null`. Synchronous (better-sqlite3). Throws when the
+ * database is not open, so a caller's ordered window-state-write contract sees
+ * the failure before it changes anything else.
  */
 export function writeWindowState(state: WindowState): void {
   const database = requireDb();
