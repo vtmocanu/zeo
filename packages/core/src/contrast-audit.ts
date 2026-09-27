@@ -7,7 +7,14 @@
  * imports.
  */
 
-import { contrastRatio, themeReport, themeTokens, type Appearance, type Rgb, type SpaceTheme } from "./theme.js";
+import {
+  contrastRatio,
+  themeReport,
+  themeTokens,
+  type Appearance,
+  type Rgb,
+  type SpaceTheme,
+} from "./theme.js";
 
 export type ContrastCheckId =
   | "ink-primary/window"
@@ -48,9 +55,17 @@ export function parseCssColor(value: string): { rgb: Rgb; alpha: number } | null
   }
   const rgbMatch = /^rgb\((\d+) (\d+) (\d+) \/ ([\d.]+)\)$/.exec(value);
   if (rgbMatch) {
+    const channels = [Number(rgbMatch[1]), Number(rgbMatch[2]), Number(rgbMatch[3])];
+    if (!channels.every((c) => Number.isInteger(c) && c >= 0 && c <= 255)) {
+      return null;
+    }
+    const alpha = Number(rgbMatch[4]);
+    if (!Number.isFinite(alpha) || alpha < 0 || alpha > 1) {
+      return null;
+    }
     return {
-      rgb: [Number(rgbMatch[1]), Number(rgbMatch[2]), Number(rgbMatch[3])],
-      alpha: Number(rgbMatch[4]),
+      rgb: channels as unknown as Rgb,
+      alpha,
     };
   }
   return null;
@@ -79,6 +94,11 @@ function requireOpaque(value: string): Rgb {
   const parsed = parseCssColor(value);
   if (!parsed) {
     throw new Error(`contrast-audit: unexpected token format "${value}"`);
+  }
+  if (parsed.alpha !== 1) {
+    throw new Error(
+      `contrast-audit: expected an opaque color but "${value}" has alpha ${parsed.alpha}`,
+    );
   }
   return parsed.rgb;
 }
