@@ -128,9 +128,12 @@ describe("groupSuggestions", () => {
     const h2: Suggestion = { ...historyRow, title: "h2" };
     const input: Suggestion[] = [h1, tab1, h2, tab2, tab3];
     const rows = groupSuggestions(input);
-    expect(rows.filter((r) => r.kind === "tab")).toEqual([tab1, tab2, tab3]);
-    expect(rows.filter((r) => r.kind === "history")).toEqual([h1, h2]);
     expect(rows).toHaveLength(input.length);
+    expect(rows[0]).toBe(tab1);
+    expect(rows[1]).toBe(tab2);
+    expect(rows[2]).toBe(tab3);
+    expect(rows[3]).toBe(h1);
+    expect(rows[4]).toBe(h2);
     expect(input).toEqual([h1, tab1, h2, tab2, tab3]);
   });
 

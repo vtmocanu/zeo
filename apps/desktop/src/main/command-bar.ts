@@ -3,6 +3,7 @@ import {
   IPC,
   COMMANDS,
   isCommandEnabled,
+  groupSuggestions,
   suggest,
   nextSelectedIndex,
   resolveInput,
@@ -104,11 +105,15 @@ export function historyCandidates(): HistoryEntry[] {
  */
 export function recomputeSuggestions(): void {
   const previous = runtime.commandBar.suggestions;
-  runtime.commandBar.suggestions = suggest(runtime.commandBar.query, buildCatalog(), {
-    mode: runtime.commandBar.mode,
-    activeTabId: runtime.store.activeTabId,
-    searchEngine: runtime.settings.searchEngine,
-  });
+  // Grouped into display order (Go to, Tabs, Spaces, …), so selectedIndex and
+  // accept(index) keep meaning "the n-th visible row".
+  runtime.commandBar.suggestions = groupSuggestions(
+    suggest(runtime.commandBar.query, buildCatalog(), {
+      mode: runtime.commandBar.mode,
+      activeTabId: runtime.store.activeTabId,
+      searchEngine: runtime.settings.searchEngine,
+    }),
+  );
   runtime.commandBar.selectedIndex = runtime.commandBar.suggestions.length > 0 ? 0 : -1;
   // A CHANGED list gets a fresh revision so a click bound to a prior list is
   // recognized as stale by acceptCommandBar. An identical list keeps its

@@ -19,7 +19,7 @@ export const FIND_BAR_TOP = 12;
 /** Fixed width of the command bar overlay's panel, before clamping to the window. */
 export const COMMAND_BAR_WIDTH = 680;
 
-/** Horizontal margin the command bar panel keeps from each edge of the window. */
+/** Margin the command bar panel keeps from the window's side and bottom edges. */
 export const COMMAND_BAR_MARGIN = 24;
 
 /** Fraction of the window's content height at which the command bar panel's top sits. */
@@ -39,8 +39,6 @@ export const COMMAND_BAR_LIST_PADDING_TOP = 4;
 
 /** Padding below the last row in the command bar list. */
 export const COMMAND_BAR_LIST_PADDING_BOTTOM = 8;
-
-const ZERO_RECT: Rect = { x: 0, y: 0, width: 0, height: 0 };
 
 /**
  * Computes the command bar panel's on-screen rectangle within the window's
@@ -70,13 +68,13 @@ export function commandBarPanelRect(
 ): Rect {
   const width = Math.max(0, Math.min(COMMAND_BAR_WIDTH, contentW - 2 * COMMAND_BAR_MARGIN));
   if (width === 0) {
-    return ZERO_RECT;
+    return { x: 0, y: 0, width: 0, height: 0 };
   }
   const x = Math.round((contentW - width) / 2);
   const y = Math.round(contentH * COMMAND_BAR_TOP_RATIO);
   const room = contentH - y - COMMAND_BAR_MARGIN;
   if (room < COMMAND_BAR_INPUT_HEIGHT) {
-    return ZERO_RECT;
+    return { x: 0, y: 0, width: 0, height: 0 };
   }
   const rowCount = Math.max(0, rows);
   const groupCount = Math.max(0, groups);
