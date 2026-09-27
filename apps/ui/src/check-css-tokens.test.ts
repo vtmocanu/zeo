@@ -267,6 +267,19 @@ describe("check-css-tokens.mjs", () => {
     expect(stderr).toContain('literal motion ".5s"');
   });
 
+  test("exits 1 on a negative delay and reports it whole", () => {
+    const dir = makeTempDir();
+    writeFileSync(
+      join(dir, "bad-negative.css"),
+      ".a { animation-delay: -200ms; }\n.b { transition-delay: -.5s; }\n",
+    );
+
+    const { status, stderr } = run(dir);
+    expect(status).toBe(1);
+    expect(stderr).toMatch(/bad-negative\.css:1: literal motion "-200ms"/);
+    expect(stderr).toMatch(/bad-negative\.css:2: literal motion "-\.5s"/);
+  });
+
   test("does not flag a duration-shaped custom property name", () => {
     const dir = makeTempDir();
     writeFileSync(join(dir, "ok-var-name.css"), ".a { transition: var(--dur-2s); }\n");

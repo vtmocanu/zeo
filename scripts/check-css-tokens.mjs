@@ -104,10 +104,11 @@ const MOTION_PROPERTIES = new Set([
 // A bare time literal, e.g. `0.1s`, `.5s` or `200ms` (matched
 // case-insensitively, so `200MS` counts too), matched as a whole token so
 // `0.1s` is not reported as just `1s` and `var(--dur-2s)` is not reported as
-// `2s`: a lookbehind bars a preceding word character, dot or hyphen (so a
-// custom-property or identifier tail never matches) and the trailing `\b`
-// bars a following word character.
-const TIME_LITERAL = /(?<![\w.-])\d*\.?\d+m?s\b/gi;
+// `2s`: the lookbehinds bar a preceding word character or dot, and a hyphen
+// that follows a word character (so a custom-property or identifier tail never
+// matches, while a negative delay such as `-200ms` is reported whole), and the
+// trailing `\b` bars a following word character.
+const TIME_LITERAL = /(?<![\w.])(?<!\w-)-?\d*\.?\d+m?s\b/gi;
 const CUBIC_BEZIER = /cubic-bezier\(/gi;
 // The bare easing keywords, longest alternative first so `ease-in-out` wins
 // over `ease-in` at the same position. Word-bounded on hyphens too, so
@@ -248,21 +249,12 @@ function declarationValues(source) {
   return values;
 }
 
-// The column (0-based) of `index` within its own source line, given the
-// per-character `lines` array a `declarationValues` entry carries: the
-// offset back to where the run of that same line number began.
-function columnOf(lines, index) {
-  let start = index;
-  while (start > 0 && lines[start - 1] === lines[index]) start -= 1;
-  return index - start;
-}
-
 function findings(file) {
   const source = stripComments(readFileSync(file, "utf8"));
   const found = [];
   source.split("\n").forEach((line, index) => {
-    for (const m of line.matchAll(HEX)) found.push({ line: index + 1, column: m.index, match: m[0] });
-    for (const m of line.matchAll(FUNC)) found.push({ line: index + 1, column: m.index, match: m[0] });
+    for (const m of line.matchAll(HEX)) found.push({ line: index + 1, match: m[0] });
+    for (const m of line.matchAll(FUNC)) found.push({ line: index + 1, match: m[0] });
   });
   // Named colors only count in declaration values, so selectors such as
   // `.tab-item` or `:hover` and property names never trip the check.
@@ -273,11 +265,11 @@ function findings(file) {
       .replace(/\burl\([^)]*\)/gi, (s) => " ".repeat(s.length));
     for (const m of scanned.matchAll(IDENT)) {
       if (NAMED_COLORS.has(m[0].toLowerCase())) {
-        found.push({ line: value.lines[m.index], column: columnOf(value.lines, m.index), match: m[0] });
+        found.push({ line: value.lines[m.index], match: m[0] });
       }
     }
   }
-  return found.sort((a, b) => a.line - b.line || a.column - b.column);
+  return found.sort((a, b) => a.line - b.line);
 }
 
 /** Literal motion (durations, easings) in `transition`/`animation` family declarations. */
@@ -288,16 +280,16 @@ function motionFindings(file) {
     if (!MOTION_PROPERTIES.has(value.property)) continue;
     const scanned = value.text.replace(STRING, (s) => " ".repeat(s.length));
     for (const m of scanned.matchAll(TIME_LITERAL)) {
-      found.push({ line: value.lines[m.index], column: columnOf(value.lines, m.index), match: m[0] });
+      found.push({ line: value.lines[m.index], match: m[0] });
     }
     for (const m of scanned.matchAll(CUBIC_BEZIER)) {
-      found.push({ line: value.lines[m.index], column: columnOf(value.lines, m.index), match: m[0] });
+      found.push({ line: value.lines[m.index], match: m[0] });
     }
     for (const m of scanned.matchAll(MOTION_KEYWORD)) {
-      found.push({ line: value.lines[m.index], column: columnOf(value.lines, m.index), match: m[0] });
+      found.push({ line: value.lines[m.index], match: m[0] });
     }
   }
-  return found.sort((a, b) => a.line - b.line || a.column - b.column);
+  return found.sort((a, b) => a.line - b.line);
 }
 
 let isDirectory = false;
