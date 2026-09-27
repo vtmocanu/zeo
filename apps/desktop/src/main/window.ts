@@ -244,6 +244,9 @@ export function createWindow(seed: boolean): void {
       revision: ++runtime.commandBarRevision,
       surface: "bar",
     };
+    // No session left to remap a stray click against once the window (and its
+    // bar) is gone.
+    runtime.commandBarPrevious = [];
     // Drop the settings view with the window it was parented to; a later
     // createWindow + settings.open recreates it lazily.
     if (runtime.settingsView !== null && !runtime.settingsView.webContents.isDestroyed()) {

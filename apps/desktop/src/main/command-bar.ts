@@ -30,6 +30,7 @@ import { activateTab, doSplitWith } from "./layout.js";
 import { teardownQuickBrowse } from "./quick-browse.js";
 import { openDownloadById } from "./downloads.js";
 import { logHistoryError } from "./history.js";
+import { resetCommandBarFocusSteal } from "./command-bar-focus.js";
 
 /**
  * Snapshots the store into the plain, store-free {@link SuggestCatalog} that
@@ -185,6 +186,9 @@ export function openCommandBar(mode: CommandBarMode): void {
   };
   // A fresh session has no prior list a click could have been rendered against.
   runtime.commandBarPrevious = [];
+  // A steal recorded just before this open (e.g. from the PREVIOUS session's
+  // teardown) must never leak into this session's first blur decision.
+  resetCommandBarFocusSteal();
   // Rank the initial suggestions before showing the overlay so the first pushed
   // state already carries them — a `Cmd+T` with empty text opens on the
   // recent-tabs list.
@@ -219,6 +223,9 @@ export function closeCommandBar(): void {
   };
   // No session to remap a stray click against once the bar is closed.
   runtime.commandBarPrevious = [];
+  // A steal recorded during this session must never outlive its close and be
+  // read by some unrelated later blur.
+  resetCommandBarFocusSteal();
   runtime.overlay?.setVisible(false);
   pushCommandBar();
   const activeTabId = runtime.store.activeTabId;
@@ -393,33 +400,41 @@ export function performSuggestion(s: Suggestion): void {
 
 /**
  * Accepts a suggestion and closes the bar. The target row is the explicit
- * `index` (a clicked row) when given, else the current `selectedIndex`, resolved
- * against the CURRENT `suggestions`. An explicit `index` outside
- * `0 .. suggestions.length - 1` throws — the invoke rejects and the bar is left
- * untouched (not closed, not mutated). With no index and an empty list
- * (`selectedIndex === -1`) it submits the raw query like the Enter action
- * ({@link submitCommandBar} closes the open bar) — except in `commands` mode,
- * which has no text action: it is a no-op there, leaving the bar open (submit
- * rejects in commands mode). The text kinds (`navigate`/`search`) also route
- * through {@link submitCommandBar} (which closes the bar itself, so no extra
- * close); a `command` kind runs {@link executeCommand} and then closes, except
- * `tab.new`, `bar.open-location`, and `bar.open-commands`, whose handlers
- * re-open or switch the bar and so are left open; every other kind runs
+ * `index` (a clicked row) when given, else the current `selectedIndex`. With no
+ * `revision` (the keyboard path, which always acts on `selectedIndex` against the
+ * current list), an explicit `index` outside `0 .. suggestions.length - 1`
+ * throws — the invoke rejects and the bar is left untouched (not closed, not
+ * mutated). With no index and an empty list (`selectedIndex === -1`) it submits
+ * the raw query like the Enter action ({@link submitCommandBar} closes the open
+ * bar) — except in `commands` mode, which has no text action: it is a no-op
+ * there, leaving the bar open (submit rejects in commands mode). The text kinds
+ * (`navigate`/`search`) also route through {@link submitCommandBar} (which
+ * closes the bar itself, so no extra close); a `command` kind runs
+ * {@link executeCommand} and then closes, except `tab.new`,
+ * `bar.open-location`, and `bar.open-commands`, whose handlers re-open or
+ * switch the bar and so are left open; every other kind runs
  * {@link performSuggestion} and then closes.
  *
  * `revision` is the {@link CommandBarState.revision} the renderer rendered the
- * clicked row against. When an explicit `index` is paired with a `revision`,
- * it is resolved by {@link resolveAcceptIndex} against the current list and, when
+ * clicked row against. When an explicit `index` is paired with a `revision`, it
+ * is resolved by {@link resolveAcceptIndex} against the current list and, when
  * `revision` instead matches one of the lists background re-ranks replaced
- * since the last user-driven change ({@link runtime.commandBarPrevious}), remapped by suggestion identity
- * to where that row now sits — so a click that raced a re-rank still lands on the
- * row the user saw, rather than being rejected outright. A `null` resolution
- * (any older revision, or an index out of range for the list it was rendered
- * against) throws (so the invoke rejects) with the bar left untouched — the
- * message names whichever guard actually failed: stale when `revision` is
- * neither the current nor a saved background revision, out of range otherwise.
- * The keyboard path passes no `revision` (it acts on `selectedIndex` against the
- * current list), so this whole resolution is skipped.
+ * since the last user-driven change ({@link runtime.commandBarPrevious}),
+ * remapped by suggestion identity to where that row now sits — so a click that
+ * raced a re-rank still lands on the row the user saw, rather than being
+ * rejected outright, EVEN THOUGH that row may no longer sit at the same index
+ * (or any index) in the current `suggestions`. A `null` resolution throws (so
+ * the invoke rejects) with the bar left untouched, with one of three messages
+ * naming whichever guard actually failed:
+ *   - `accept revision stale: ...` — `revision` is neither the current
+ *     revision nor one of the saved background revisions, so the click cannot
+ *     be resolved against anything;
+ *   - `accept index out of range: ...` — `index` was out of range for the list
+ *     it was rendered against (the current list when `revision` matches it, or
+ *     the saved list at that `revision` otherwise);
+ *   - `accept row gone: ...` — `index` was valid for the list it was rendered
+ *     against (a saved background revision), but that row's suggestion has
+ *     since left the current list entirely (e.g. the tab it named was closed).
  */
 export function acceptCommandBar(index?: number, revision?: number): void {
   let idx: number;
@@ -431,13 +446,17 @@ export function acceptCommandBar(index?: number, revision?: number): void {
       runtime.commandBarPrevious,
     );
     if (resolved === null) {
-      if (
-        revision !== runtime.commandBar.revision &&
-        !runtime.commandBarPrevious.some((p) => p.revision === revision)
-      ) {
+      if (revision === runtime.commandBar.revision) {
+        throw new Error(`accept index out of range: ${index}`);
+      }
+      const rendered = runtime.commandBarPrevious.find((p) => p.revision === revision);
+      if (rendered === undefined) {
         throw new Error(`accept revision stale: ${revision} !== ${runtime.commandBar.revision}`);
       }
-      throw new Error(`accept index out of range: ${index}`);
+      if (index < 0 || index >= rendered.suggestions.length) {
+        throw new Error(`accept index out of range: ${index}`);
+      }
+      throw new Error(`accept row gone: ${index}`);
     }
     idx = resolved;
   } else {

@@ -16,6 +16,7 @@ import type { CommandId, QuickBrowse } from "@zeo/core";
 import { runtime, moduleDir } from "./state.js";
 import { broadcast } from "./broadcast.js";
 import { createTab } from "./tabs.js";
+import { focusTabViewDeliberately } from "./command-bar-focus.js";
 
 /**
  * Registers zeo as the OS default handler for http(s) and refreshes the cached
@@ -340,11 +341,16 @@ export function teardownQuickBrowse(): void {
   runtime.quickBrowseLoadPending = false;
   broadcast();
 
-  // Return focus to the main window (its active tab view when present, else the window).
+  // Return focus to the main window (its active tab view when present, else the
+  // window). A promote-mode command bar may be open at this point (teardown
+  // follows accepting a promote-target row); go through focusTabViewDeliberately
+  // so that close is synchronous and deliberate rather than a stray blur-driven
+  // steal (see its doc comment).
   if (runtime.win !== null && !runtime.win.isDestroyed()) {
     const activeTabId = runtime.store.activeTabId;
-    if (activeTabId !== null && runtime.views.has(activeTabId)) {
-      runtime.views.get(activeTabId)?.webContents.focus();
+    const activeView = activeTabId !== null ? runtime.views.get(activeTabId) : undefined;
+    if (activeView !== undefined) {
+      focusTabViewDeliberately(activeView.webContents);
     } else {
       runtime.win!.webContents.focus();
     }

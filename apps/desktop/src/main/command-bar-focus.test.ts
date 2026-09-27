@@ -5,6 +5,7 @@ import {
   focusTabViewDeliberately,
   onOverlayBlur,
   onTabViewFocus,
+  resetCommandBarFocusSteal,
 } from "./command-bar-focus.js";
 
 /** A minimal fake `WebContents` covering only what this module reads. */
@@ -138,5 +139,28 @@ describe("command-bar-focus", () => {
 
     expect(closeCommandBar).not.toHaveBeenCalled();
     expect(wc.focus).toHaveBeenCalledTimes(1);
+  });
+
+  test("a steal followed much later (after timers flush) by a plain blur closes the bar", () => {
+    onTabViewFocus();
+    // Flush the steal's own deferred clear fully before the blur even happens —
+    // e.g. a late tab `focus` event whose matching blur never arrived, or one
+    // left over from a prior open/close cycle.
+    vi.runAllTimers();
+
+    onOverlayBlur();
+    vi.runAllTimers();
+
+    expect(closeCommandBar).toHaveBeenCalledTimes(1);
+  });
+
+  test("resetCommandBarFocusSteal clears a pending steal so a later blur closes", () => {
+    onTabViewFocus();
+    resetCommandBarFocusSteal();
+
+    onOverlayBlur();
+    vi.runAllTimers();
+
+    expect(closeCommandBar).toHaveBeenCalledTimes(1);
   });
 });

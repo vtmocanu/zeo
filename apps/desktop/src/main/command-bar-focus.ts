@@ -15,8 +15,41 @@ function closeCommandBar(): void {
  * deferred check. The steal fires the overlay's `blur` before the tab view's own
  * `focus` handler runs the refocus, so the flag is how the deferred blur handler
  * learns the blur was a steal rather than a real dismiss.
+ *
+ * Bounded so it can never outlive the focus handoff it was recorded for:
+ * {@link onTabViewFocus} also schedules a two-level deferred clear
+ * (`setTimeout(..., 0)` that itself schedules a second `setTimeout(..., 0)`)
+ * back to `false`. Two levels, not one, because {@link onOverlayBlur}'s OWN
+ * check is only a single deferred `setTimeout`, and Electron's focus/blur
+ * ordering is not guaranteed — a steal's `focus` event can fire either before
+ * or after the losing view's `blur` event, so the reset timer may end up queued
+ * either before or after the blur's check timer. A single-level reset could
+ * therefore run and clear the flag before a same-batch blur check gets to read
+ * it; deferring the actual clear to a second level guarantees it always runs
+ * AFTER any single-level timer scheduled in the same synchronous batch,
+ * regardless of registration order, while a blur arriving only after both
+ * levels have already run (flushed timers, or simply much later) correctly
+ * sees `false` and closes normally. Without this bound, a stale `true` from an
+ * earlier steal (e.g. one whose own blur never arrived, or arrived and closed
+ * the bar already) could wrongly keep a later, unrelated close-worthy blur
+ * open.
  */
 let focusStolen = false;
+let focusStolenResetTimer: ReturnType<typeof setTimeout> | null = null;
+
+/**
+ * Clears {@link focusStolen} and cancels its pending deferred reset timer(s),
+ * if any. Called from {@link openCommandBar}/{@link closeCommandBar} (via
+ * command-bar.ts) so a steal recorded just before the bar closes (or a fresh
+ * bar opens) can never leak into a later, unrelated blur decision.
+ */
+export function resetCommandBarFocusSteal(): void {
+  focusStolen = false;
+  if (focusStolenResetTimer !== null) {
+    clearTimeout(focusStolenResetTimer);
+    focusStolenResetTimer = null;
+  }
+}
 
 /**
  * Whether the single overlay `WebContentsView` currently owns focus AS the
@@ -51,6 +84,18 @@ export function onTabViewFocus(): void {
     return;
   }
   focusStolen = true;
+  if (focusStolenResetTimer !== null) {
+    clearTimeout(focusStolenResetTimer);
+  }
+  // Two-level deferred clear — see focusStolen's doc comment for why a single
+  // level is not enough to outlast a same-batch blur check regardless of
+  // registration order.
+  focusStolenResetTimer = setTimeout(() => {
+    focusStolenResetTimer = setTimeout(() => {
+      focusStolen = false;
+      focusStolenResetTimer = null;
+    }, 0);
+  }, 0);
   runtime.overlay!.webContents.focus();
 }
 
