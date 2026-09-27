@@ -7,16 +7,34 @@ import { join } from "node:path";
 import { createServer } from "node:http";
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import type { CommandBarMode, CommandBarState, FindState, Tab, ZeoApi } from "@zeo/core";
+import type {
+  CommandBarMode,
+  CommandBarState,
+  FindState,
+  Rect,
+  Tab,
+  TabsState,
+  ZeoApi,
+} from "@zeo/core";
+// PRD 10.6 — the find pill geometry main applies; the assertions compare the
+// live overlay bounds against these helpers, never a copied formula.
+import {
+  FIND_BAR_HEIGHT,
+  FIND_BAR_SHADOW_MARGIN,
+  contentRect,
+  findAnchorRect,
+  findBarBounds,
+  splitPaneBounds,
+} from "@zeo/core";
 // PRD 9.1 — shared view-URL poll helper (VIEW_POLL_TIMEOUT_MS-bounded).
-import { waitForViewUrl } from "./helpers/view";
+import { VIEW_POLL_TIMEOUT_MS, waitForViewUrl, waitForViewsIdle } from "./helpers/view";
 
 // Absolute path to the built Electron main entry, resolved from this test file
 // (e2e is ESM, so no __dirname). Layout mirrors blocking.spec.ts / app.spec.ts:
 // e2e/tests -> repo root is two levels up, then the desktop app's build output.
 const mainPath = fileURLToPath(new URL("../../apps/desktop/out/main/index.js", import.meta.url));
 
-type ZeoBridge = Pick<ZeoApi, "tabs" | "commandBar" | "find">;
+type ZeoBridge = Pick<ZeoApi, "tabs" | "commandBar" | "find" | "commands" | "chrome" | "splitView">;
 
 // The fixture page: its VISIBLE body contains the word `needle` EXACTLY three
 // times and nowhere else — not in the <title>, an attribute, or a hidden node —
@@ -417,5 +435,377 @@ test.describe.serial("PRD 6.3 find in page (offline)", () => {
     await expect(overlay.getByTestId("find-input")).toBeFocused();
     expect((await commandBarState(sidebar)).open).toBe(false);
     expect((await findState(sidebar)).open).toBe(true);
+  });
+});
+
+// --- PRD 10.6 find pill ----------------------------------------------------------
+
+/** Launch against a fresh temp userData dir (mirrors the 6.3 suite's beforeAll). */
+async function launch(dir: string): Promise<{ app: ElectronApplication; sidebar: Page }> {
+  const app = await electron.launch({
+    args: [
+      mainPath,
+      "--user-data-dir=" + dir,
+      ...(process.env.ZEO_E2E_NO_SANDBOX === "1" ? ["--no-sandbox"] : []),
+    ],
+    env: { ...process.env, ELECTRON_RENDERER_URL: "", ZEO_E2E: "1" },
+  });
+  const sidebar = await sidebarWindow(app);
+  return { app, sidebar };
+}
+
+function tabsState(sidebar: Page): Promise<TabsState> {
+  return sidebar.evaluate(() => {
+    const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+    return zeo.tabs.list();
+  });
+}
+
+function runCommand(sidebar: Page, id: string): Promise<void> {
+  return sidebar.evaluate((cmd) => {
+    const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+    return zeo.commands.run(cmd as Parameters<ZeoBridge["commands"]["run"]>[0]);
+  }, id);
+}
+
+function contentSize(app: ElectronApplication): Promise<{ width: number; height: number }> {
+  return app.evaluate(({ BrowserWindow }) => {
+    const [width, height] = BrowserWindow.getAllWindows()[0].getContentSize();
+    return { width, height };
+  });
+}
+
+function setContentSize(app: ElectronApplication, width: number, height: number): Promise<void> {
+  return app.evaluate(
+    ({ BrowserWindow }, size) => {
+      BrowserWindow.getAllWindows()[0].setContentSize(size.width, size.height);
+    },
+    { width, height },
+  );
+}
+
+/** The overlay child view's native bounds (located by its `view=command-bar` url). */
+function overlayBounds(app: ElectronApplication): Promise<Rect | null> {
+  return app.evaluate(({ BrowserWindow }) => {
+    const win = BrowserWindow.getAllWindows()[0];
+    for (const child of win.contentView.children) {
+      const wc = (child as { webContents?: { getURL(): string } }).webContents;
+      if (wc != null && wc.getURL().includes("view=command-bar")) {
+        const b = child.getBounds();
+        return { x: b.x, y: b.y, width: b.width, height: b.height };
+      }
+    }
+    return null;
+  });
+}
+
+/**
+ * The overlay rect main should apply for the LIVE state: the pill's
+ * `findBarBounds` around the card that owns `state.find.tabId`.
+ */
+async function expectedFindBounds(app: ElectronApplication, sidebar: Page): Promise<Rect> {
+  const [{ width, height }, state] = await Promise.all([contentSize(app), tabsState(sidebar)]);
+  return findBarBounds(
+    findAnchorRect(width, height, state.chrome, state.layout, state.find.tabId),
+    contentRect(width, height, state.chrome),
+  );
+}
+
+/** Poll until the overlay's native bounds equal {@link expectedFindBounds}; return them. */
+async function expectFindBoundsMatch(
+  app: ElectronApplication,
+  sidebar: Page,
+  message: string,
+): Promise<Rect> {
+  await expect
+    .poll(
+      async () => {
+        const [bounds, want] = await Promise.all([
+          overlayBounds(app),
+          expectedFindBounds(app, sidebar),
+        ]);
+        return want.width > 0 && JSON.stringify(bounds) === JSON.stringify(want)
+          ? "ok"
+          : { bounds, want };
+      },
+      { message },
+    )
+    .toBe("ok");
+  return (await overlayBounds(app))!;
+}
+
+/** The overlay page's find pill rect, its viewport, and its page background. */
+function pillLook(overlay: Page): Promise<{
+  pill: Rect;
+  innerWidth: number;
+  innerHeight: number;
+  html: string;
+  body: string;
+}> {
+  return overlay.getByTestId("find-bar").evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    return {
+      pill: { x: r.x, y: r.y, width: r.width, height: r.height },
+      innerWidth: window.innerWidth,
+      innerHeight: window.innerHeight,
+      html: getComputedStyle(document.documentElement).backgroundColor,
+      body: getComputedStyle(document.body).backgroundColor,
+    };
+  });
+}
+
+/** A window whose url includes `sub` (the divider view), polled like tabWindow. */
+async function windowByUrl(app: ElectronApplication, sub: string): Promise<Page> {
+  const deadline = Date.now() + VIEW_POLL_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    for (const w of app.windows()) {
+      try {
+        if (w.url().includes(sub)) {
+          return w;
+        }
+      } catch {
+        // Navigating view; retry next pass.
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  throw new Error(`No window whose url includes "${sub}" was found`);
+}
+
+/**
+ * Drag the split divider by `dx` px and return the new ratio. The same
+ * renderer-acknowledged gesture as split.spec.ts's `dragDivider`: settle moves
+ * repeat until the divider's `__zeoDivider` probe reports a ratio past the start
+ * in the drag direction, then main's layout is polled to follow.
+ */
+async function dragDivider(divider: Page, sidebar: Page, dx: number): Promise<number> {
+  const ratioOf = async (): Promise<number> => {
+    const layout = (await tabsState(sidebar)).layout;
+    if (layout.mode !== "split") {
+      throw new Error(`expected a split layout, got ${layout.mode}`);
+    }
+    return layout.ratio;
+  };
+  const before = await ratioOf();
+  const handle = divider.getByTestId("divider-handle");
+  await handle.waitFor({ state: "visible" });
+  const box = await handle.boundingBox();
+  if (box === null) {
+    throw new Error("divider handle had no bounding box");
+  }
+  const startX = box.x + box.width / 2;
+  const startY = box.y + box.height / 2;
+  const dir = dx >= 0 ? 1 : -1;
+  const seen = (): Promise<number | null> =>
+    divider.evaluate(
+      () => (globalThis as { __zeoDivider?: { ratio: number } }).__zeoDivider?.ratio ?? null,
+    );
+  for (let gesture = 0; gesture < 5; gesture += 1) {
+    await divider.evaluate(() => {
+      delete (globalThis as { __zeoDivider?: unknown }).__zeoDivider;
+    });
+    await divider.mouse.move(startX, startY);
+    await divider.mouse.down();
+    await divider.mouse.move(startX + dir * 4, startY, { steps: 3 });
+    await divider.mouse.move(startX + dx, startY, { steps: 12 });
+    let acknowledged = false;
+    for (let attempt = 0; attempt < 20 && !acknowledged; attempt += 1) {
+      await divider.mouse.move(startX + dx, startY);
+      const ratio = await seen();
+      acknowledged = ratio !== null && (dir > 0 ? ratio > before : ratio < before);
+    }
+    await divider.mouse.up();
+    if (acknowledged) {
+      await expect
+        .poll(async () => {
+          const r = await ratioOf();
+          return dir > 0 ? r > before : r < before;
+        })
+        .toBe(true);
+      return ratioOf();
+    }
+  }
+  throw new Error(`divider drag was never acknowledged (start ratio ${before}, dx ${dx})`);
+}
+
+test.describe("PRD 10.6 find pill", () => {
+  let app: ElectronApplication;
+  let sidebar: Page;
+  let server: FixtureServer | undefined;
+  let dir: string | undefined;
+  let launched = false;
+
+  test.beforeEach(async () => {
+    launched = false;
+    server = await startFixtureServer();
+    dir = mkdtempSync(join(tmpdir(), "zeo-find-pill-"));
+    ({ app, sidebar } = await launch(dir));
+    launched = true;
+  });
+
+  test.afterEach(async () => {
+    if (launched) {
+      await app.close();
+    }
+    await server?.close();
+    if (dir !== undefined) {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("the overlay is findBarBounds(findAnchorRect(...)), the pill is inset on a transparent page, and it follows the sidebar", async () => {
+    const overlay = await overlayWindow(app);
+    const tab = await createTab(sidebar, `${server!.base}/page.html?probe=pill`);
+    await activateTab(sidebar, tab.id);
+    await waitForViewUrl(app, "probe=pill");
+    await waitForViewsIdle(app);
+
+    await openFind(sidebar);
+    await expect.poll(async () => (await findState(sidebar)).open).toBe(true);
+    expect((await findState(sidebar)).tabId).toBe(tab.id);
+    const wide = await expectFindBoundsMatch(app, sidebar, "find bounds at the default chrome");
+
+    // In the overlay page the pill is the view minus the shadow margin, 38 tall,
+    // and the page itself paints nothing.
+    await expect(overlay.getByTestId("find-bar")).toBeVisible();
+    await expect
+      .poll(async () => {
+        const look = await pillLook(overlay);
+        return look.innerWidth === wide.width && look.innerHeight === wide.height
+          ? look
+          : { stale: look, wide };
+      })
+      .toEqual({
+        pill: {
+          x: FIND_BAR_SHADOW_MARGIN,
+          y: FIND_BAR_SHADOW_MARGIN,
+          width: wide.width - 2 * FIND_BAR_SHADOW_MARGIN,
+          height: FIND_BAR_HEIGHT,
+        },
+        innerWidth: wide.width,
+        innerHeight: wide.height,
+        html: "rgba(0, 0, 0, 0)",
+        body: "rgba(0, 0, 0, 0)",
+      });
+    // The literal PRD shape: {16, 16, innerWidth − 32, 38}.
+    const look = await pillLook(overlay);
+    expect(look.pill).toEqual({ x: 16, y: 16, width: look.innerWidth - 32, height: 38 });
+
+    // A narrow window with the widest sidebar: the card is narrower than the
+    // 360 px pill plus its insets, so the pill shrinks to fit (the bounds now
+    // depend on the chrome, which the collapse below then changes).
+    await setContentSize(app, 640, 400);
+    await sidebar.evaluate(() =>
+      (globalThis as unknown as { zeo: ZeoBridge }).zeo.chrome.setSidebarWidth(360),
+    );
+    const narrow = await expectFindBoundsMatch(app, sidebar, "find bounds after resize + width");
+    expect((await tabsState(sidebar)).chrome.sidebarWidth).toBe(360);
+    expect(narrow).not.toEqual(wide);
+
+    await runCommand(sidebar, "view.toggleSidebar");
+    expect((await tabsState(sidebar)).chrome.sidebarCollapsed).toBe(true);
+    const collapsed = await expectFindBoundsMatch(app, sidebar, "find bounds after collapse");
+    // The collapse widened the card, so the pill grew back: the relayout ran.
+    expect(collapsed.width).toBeGreaterThan(narrow.width);
+    expect((await findState(sidebar)).open).toBe(true);
+  });
+
+  test("in split, find anchors to the focused pane's card and follows a divider drag", async () => {
+    // 900 wide: each pane is narrower than the pill plus insets, so a pane
+    // anchor and the whole-content anchor give different bounds.
+    await setContentSize(app, 900, 600);
+    await expect.poll(() => contentSize(app)).toEqual({ width: 900, height: 600 });
+    const left = await createTab(sidebar, "data:text/html,ZEOPILL_LEFT needle");
+    const right = await createTab(sidebar, "data:text/html,ZEOPILL_RIGHT needle");
+    await activateTab(sidebar, left.id);
+    await sidebar.evaluate(
+      (id) => (globalThis as unknown as { zeo: ZeoBridge }).zeo.splitView.splitWith(id),
+      right.id,
+    );
+    await waitForViewUrl(app, "view=divider");
+    await runCommand(sidebar, "view.focusOtherPane");
+    let state = await tabsState(sidebar);
+    if (state.layout.mode !== "split") {
+      throw new Error(`expected a split layout, got ${state.layout.mode}`);
+    }
+    expect(state.layout.focused).toBe("right");
+    expect(state.layout.right).toBe(right.id);
+    await waitForViewsIdle(app);
+
+    await openFind(sidebar);
+    await expect.poll(async () => (await findState(sidebar)).open).toBe(true);
+    expect((await findState(sidebar)).tabId).toBe(right.id);
+    const before = await expectFindBoundsMatch(app, sidebar, "find bounds on the right pane");
+    const { width: W, height: H } = await contentSize(app);
+    const panes = splitPaneBounds(W, H, state.chrome, state.layout.ratio);
+    expect(before).toEqual(findBarBounds(panes.right, contentRect(W, H, state.chrome)));
+    expect(before).not.toEqual(
+      findBarBounds(contentRect(W, H, state.chrome), contentRect(W, H, state.chrome)),
+    );
+
+    // Drag the divider right: the right pane narrows and the pill follows it.
+    const divider = await windowByUrl(app, "view=divider");
+    const ratio = await dragDivider(divider, sidebar, 100);
+    expect(ratio).toBeGreaterThan(state.layout.ratio);
+    const after = await expectFindBoundsMatch(app, sidebar, "find bounds after the divider drag");
+    state = await tabsState(sidebar);
+    if (state.layout.mode !== "split") {
+      throw new Error(`expected a split layout, got ${state.layout.mode}`);
+    }
+    expect(after).toEqual(
+      findBarBounds(
+        splitPaneBounds(W, H, state.chrome, state.layout.ratio).right,
+        contentRect(W, H, state.chrome),
+      ),
+    );
+    expect(after).not.toEqual(before);
+    expect((await findState(sidebar)).open).toBe(true);
+    expect((await findState(sidebar)).tabId).toBe(right.id);
+
+    // Close find, focus the left pane, reopen: the pill sits on the left card.
+    // (Whether a focus change closes find by itself is the next test's subject.)
+    await closeFind(sidebar);
+    await expect.poll(async () => (await findState(sidebar)).open).toBe(false);
+    await runCommand(sidebar, "view.focusOtherPane");
+    await waitForViewsIdle(app);
+    await openFind(sidebar);
+    await expect.poll(async () => (await findState(sidebar)).open).toBe(true);
+    expect((await findState(sidebar)).tabId).toBe(left.id);
+    const onLeft = await expectFindBoundsMatch(app, sidebar, "find bounds on the left pane");
+    expect(onLeft).toEqual(
+      findBarBounds(
+        splitPaneBounds(W, H, state.chrome, state.layout.ratio).left,
+        contentRect(W, H, state.chrome),
+      ),
+    );
+    expect(onLeft.x).toBeLessThan(after.x);
+  });
+  // PRD 10.6 §4: a pane-focus change closes find (applyLayout's split branch
+  // closes a session bound to a tab that is no longer active), so the pill never
+  // outlives the card it belongs to. Pin it.
+  test("focusing the other split pane closes an open find session", async () => {
+    const left = await createTab(sidebar, "data:text/html,ZEOPILL_FOCUS_LEFT");
+    const right = await createTab(sidebar, "data:text/html,ZEOPILL_FOCUS_RIGHT");
+    await activateTab(sidebar, left.id);
+    await sidebar.evaluate(
+      (id) => (globalThis as unknown as { zeo: ZeoBridge }).zeo.splitView.splitWith(id),
+      right.id,
+    );
+    await waitForViewUrl(app, "view=divider");
+    await waitForViewsIdle(app);
+    const layout = (await tabsState(sidebar)).layout;
+    expect(layout.mode === "split" ? layout.focused : layout.mode).toBe("left");
+
+    await openFind(sidebar);
+    await expect.poll(async () => (await findState(sidebar)).open).toBe(true);
+    expect((await findState(sidebar)).tabId).toBe(left.id);
+
+    await runCommand(sidebar, "view.focusOtherPane");
+    expect((await tabsState(sidebar)).activeTabId).toBe(right.id);
+    await expect
+      .poll(async () => (await findState(sidebar)).open, {
+        message: "expected a pane-focus change to close the find session bound to the other pane",
+      })
+      .toBe(false);
   });
 });

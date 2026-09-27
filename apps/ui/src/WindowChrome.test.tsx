@@ -15,32 +15,67 @@ import { Icon } from "./icons.js";
 import {
   SidebarResizeHandle,
   SidebarRevealController,
+  WindowCards,
   WindowRow,
-  windowCards,
   type SidebarRevealState,
 } from "./WindowChrome.js";
 
 const COLLAPSED: ChromeState = { ...DEFAULT_CHROME_STATE, sidebarCollapsed: true };
 
-describe("windowCards", () => {
-  test("single layout: one card at contentRect", () => {
-    expect(windowCards(1280, 800, DEFAULT_CHROME_STATE, SINGLE_LAYOUT)).toEqual([
-      { pane: null, rect: { x: 240, y: 8, width: 1032, height: 784 } },
-    ]);
-    expect(windowCards(1280, 800, COLLAPSED, SINGLE_LAYOUT)).toEqual([
-      { pane: null, rect: contentRect(1280, 800, COLLAPSED) },
-    ]);
+/** The `.window-card` divs of the markup: [whole tag, class, data-pane]. */
+function cardTags(html: string): { tag: string; className: string; pane: string | null }[] {
+  return [...html.matchAll(/<div class="(window-card[^"]*)"[^>]*>/g)].map((m) => ({
+    tag: m[0],
+    className: m[1]!,
+    pane: /data-pane="(\w+)"/.exec(m[0])?.[1] ?? null,
+  }));
+}
+
+describe("WindowCards", () => {
+  test("single layout: one unfocused card at contentRect, no data-pane", () => {
+    const html = renderToStaticMarkup(
+      <WindowCards width={1280} height={800} chrome={DEFAULT_CHROME_STATE} layout={SINGLE_LAYOUT} />,
+    );
+    const cards = cardTags(html);
+    expect(cards).toHaveLength(1);
+    expect(cards[0]!.className).toBe("window-card");
+    expect(cards[0]!.pane).toBeNull();
+    expect(cards[0]!.tag).toContain("left:240px;top:8px;width:1032px;height:784px");
+    const collapsed = renderToStaticMarkup(
+      <WindowCards width={1280} height={800} chrome={COLLAPSED} layout={SINGLE_LAYOUT} />,
+    );
+    expect(cardTags(collapsed)[0]!.tag).toContain(`left:${contentRect(1280, 800, COLLAPSED).x}px`);
   });
 
-  test("split layout: left and right cards at splitPaneBounds, the gap left bare", () => {
-    const layout = { mode: "split", left: "a", right: "b", ratio: 0.5, focused: "left" } as const;
+  test("split layout: left and right cards at splitPaneBounds, only the focused one ringed", () => {
+    const layout = { mode: "split", left: "a", right: "b", ratio: 0.5, focused: "right" } as const;
     const bounds = splitPaneBounds(1280, 800, DEFAULT_CHROME_STATE, 0.5);
-    const cards = windowCards(1280, 800, DEFAULT_CHROME_STATE, layout);
-    expect(cards).toEqual([
-      { pane: "left", rect: bounds.left },
-      { pane: "right", rect: bounds.right },
+    const cards = cardTags(
+      renderToStaticMarkup(
+        <WindowCards width={1280} height={800} chrome={DEFAULT_CHROME_STATE} layout={layout} />,
+      ),
+    );
+    expect(cards.map((card) => [card.className, card.pane])).toEqual([
+      ["window-card", "left"],
+      ["window-card window-card--focused", "right"],
     ]);
-    expect(cards[1]!.rect.x - (cards[0]!.rect.x + cards[0]!.rect.width)).toBe(8);
+    expect(cards[0]!.tag).toContain(`left:${bounds.left.x}px`);
+    expect(cards[1]!.tag).toContain(`left:${bounds.right.x}px;top:${bounds.right.y}px`);
+
+    const leftFocused = cardTags(
+      renderToStaticMarkup(
+        <WindowCards
+          width={1280}
+          height={800}
+          chrome={DEFAULT_CHROME_STATE}
+          layout={{ ...layout, focused: "left" }}
+        />,
+      ),
+    );
+    expect(leftFocused.map((card) => card.className)).toEqual([
+      "window-card window-card--focused",
+      "window-card",
+    ]);
   });
 });
 

@@ -8,6 +8,11 @@ import { join } from "node:path";
 // timeout (VIEW_POLL_TIMEOUT_MS), so every view wait is tuned in one place and a
 // cold runner does not flake on the default 5 s (issue #66).
 import { waitForViewUrl, VIEW_POLL_TIMEOUT_MS } from "./helpers/view";
+// PRD 10.6 — the card geometry the sidebar draws (the same formula main uses for
+// the pane views) and the token probe the focus-ring check compares against.
+import { DIVIDER_WIDTH, windowCardRects } from "@zeo/core";
+import type { ChromeState, Rect, WindowLayout } from "@zeo/core";
+import { tokenBackground } from "./helpers/token";
 
 // Absolute path to the built Electron main entry, resolved from this test file
 // (e2e is ESM, so no __dirname). Layout mirrors persistence.spec.ts: e2e/tests ->
@@ -697,6 +702,138 @@ test.describe("PRD 7.1 split view", () => {
 
       // The invalid call changed nothing.
       expect(await splitState(sidebar)).toEqual(before);
+    } finally {
+      await app.close();
+      rmSync(userDataDir, { recursive: true, force: true });
+    }
+  });
+});
+
+// --- PRD 10.6 split cards, focus ring and divider ------------------------------
+
+/** One drawn `.window-card`: its pane, focus class, box and computed shadow. */
+interface DrawnCard {
+  pane: string | null;
+  focused: boolean;
+  rect: Rect;
+  shadow: string;
+}
+
+/** Every `.window-card` in the sidebar, in document order. */
+function drawnCards(sidebar: Page): Promise<DrawnCard[]> {
+  return sidebar.locator(".window-card").evaluateAll((els) =>
+    els.map((el) => {
+      const r = el.getBoundingClientRect();
+      return {
+        pane: el.getAttribute("data-pane"),
+        focused: el.classList.contains("window-card--focused"),
+        rect: { x: r.x, y: r.y, width: r.width, height: r.height },
+        shadow: getComputedStyle(el).boxShadow,
+      };
+    }),
+  );
+}
+
+/**
+ * The cards the sidebar should draw for the live state: `windowCardRects` over
+ * the sidebar's own viewport (the same size main lays the pane views out in),
+ * the chrome and the layout from `tabs.list()`.
+ */
+async function expectedCards(
+  sidebar: Page,
+): Promise<{ pane: string; focused: boolean; rect: Rect }[]> {
+  const { width, height, chrome, layout } = await sidebar.evaluate(async () => {
+    const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+    const state = (await zeo.tabs.list()) as unknown as {
+      chrome: ChromeState;
+      layout: WindowLayout;
+    };
+    return {
+      width: window.innerWidth,
+      height: window.innerHeight,
+      chrome: state.chrome,
+      layout: state.layout,
+    };
+  });
+  return windowCardRects(width, height, chrome, layout).map((c) => ({
+    pane: c.pane,
+    focused: c.focused,
+    rect: c.rect,
+  }));
+}
+
+test.describe("PRD 10.6 split cards and divider", () => {
+  test("the focused pane's card wears the accent-soft ring, which moves with pane focus", async () => {
+    const userDataDir = mkdtempSync(join(tmpdir(), "zeo-split-"));
+    const { app, sidebar } = await launch(userDataDir);
+    try {
+      const [, right] = await seedTabs(sidebar, ["ZEOSPLIT_A", "ZEOSPLIT_B"]);
+      await splitWith(sidebar, right);
+      await waitForViewUrl(app, "view=divider");
+      const accentSoft = await tokenBackground(sidebar, "--accent-soft");
+
+      const checkCards = async (focused: PaneSide): Promise<void> => {
+        expect(asSplit(await splitState(sidebar)).focused).toBe(focused);
+        // Two cards at windowCardRects, in the same order, with the class on the
+        // formula's focused pane only.
+        await expect
+          .poll(async () => {
+            const want = await expectedCards(sidebar);
+            const got = (await drawnCards(sidebar)).map((c) => ({
+              pane: c.pane,
+              focused: c.focused,
+              rect: c.rect,
+            }));
+            return JSON.stringify(got) === JSON.stringify(want) ? "ok" : { got, want };
+          })
+          .toBe("ok");
+        const cards = await drawnCards(sidebar);
+        expect(cards.map((c) => c.pane)).toEqual(["left", "right"]);
+        const ringed = cards.filter((c) => c.focused);
+        expect(ringed).toHaveLength(1);
+        expect(ringed[0].pane).toBe(focused);
+        // The ring: a 2 px spread in --accent-soft, on the focused card only.
+        expect(ringed[0].shadow).toContain("0px 0px 0px 2px");
+        expect(ringed[0].shadow).toContain(`${accentSoft} 0px 0px 0px 2px`);
+        const plain = cards.find((c) => !c.focused)!;
+        expect(plain.shadow).not.toContain("0px 0px 0px 2px");
+      };
+
+      await checkCards("left");
+      await runCommand(sidebar, "view.focusOtherPane");
+      await checkCards("right");
+      await runCommand(sidebar, "view.focusOtherPane");
+      await checkCards("left");
+    } finally {
+      await app.close();
+      rmSync(userDataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("the divider page is transparent and its handle fills the 8 px gap around a grip", async () => {
+    const userDataDir = mkdtempSync(join(tmpdir(), "zeo-split-"));
+    const { app, sidebar } = await launch(userDataDir);
+    try {
+      const [, right] = await seedTabs(sidebar, ["ZEOSPLIT_A", "ZEOSPLIT_B"]);
+      await splitWith(sidebar, right);
+      const divider = await windowByUrl(app, "view=divider");
+      const handle = divider.getByTestId("divider-handle");
+      await handle.waitFor({ state: "visible" });
+
+      const look = await divider.evaluate(() => ({
+        html: getComputedStyle(document.documentElement).backgroundColor,
+        body: getComputedStyle(document.body).backgroundColor,
+      }));
+      expect(look).toEqual({ html: "rgba(0, 0, 0, 0)", body: "rgba(0, 0, 0, 0)" });
+      await expect(handle).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+      await expect(handle).toHaveCSS("cursor", "col-resize");
+
+      await expect.poll(async () => (await handle.boundingBox())?.width).toBe(DIVIDER_WIDTH);
+      const grip = await divider.locator(".divider-handle__grip").boundingBox();
+      expect(grip === null ? null : { width: grip.width, height: grip.height }).toEqual({
+        width: 4,
+        height: 32,
+      });
     } finally {
       await app.close();
       rmSync(userDataDir, { recursive: true, force: true });

@@ -15,6 +15,7 @@ import {
   TRAFFIC_LIGHT_POSITION,
   WINDOW_ROW_HEIGHT,
   contentRect,
+  settingsBounds,
   splitPaneBounds,
 } from "@zeo/core";
 import type { ChromeState, Rect, WindowLayout, ZeoApi } from "@zeo/core";
@@ -465,22 +466,29 @@ test.describe("PRD 10.2 frameless chrome", () => {
     await expect.poll(() => nativeBounds(app, "view=divider")).toEqual(wider.divider);
   });
 
-  test("settings: the settings view covers contentRect, and follows a chrome change", async () => {
+  test("settings: the settings view covers the whole window, before and after a chrome change", async () => {
     await runCommand(sidebar, "settings.open");
     await waitForViewUrl(app, "view=settings");
-    const settingsMatchesCard = async (): Promise<unknown> => {
-      const [bounds, want] = await Promise.all([
+    // PRD 10.6: the settings view is full-window (settingsBounds(W, H)); its
+    // renderer paints the scrim and centers the sheet, so the chrome no longer
+    // shapes the view.
+    const settingsCoversWindow = async (): Promise<unknown> => {
+      const [bounds, size] = await Promise.all([
         nativeBounds(app, "view=settings"),
-        expectedCard(app, sidebar),
+        contentSize(app),
       ]);
+      const want = settingsBounds(size.width, size.height);
       return JSON.stringify(bounds) === JSON.stringify(want) ? "ok" : { bounds, want };
     };
-    await expect.poll(settingsMatchesCard).toBe("ok");
+    await expect.poll(settingsCoversWindow).toBe("ok");
+    const { width: W, height: H } = await contentSize(app);
+    expect(await nativeBounds(app, "view=settings")).toEqual({ x: 0, y: 0, width: W, height: H });
 
-    // relayoutWindow re-bounds open settings on a collapse.
+    // A collapse re-runs relayoutWindow; the view stays full-window (x 0, not
+    // the collapsed card's CARD_INSET).
     await runCommand(sidebar, "view.toggleSidebar");
     expect((await chromeState(sidebar)).sidebarCollapsed).toBe(true);
-    await expect.poll(async () => (await nativeBounds(app, "view=settings"))?.x).toBe(CARD_INSET);
-    await expect.poll(settingsMatchesCard).toBe("ok");
+    await expect.poll(settingsCoversWindow).toBe("ok");
+    expect(await nativeBounds(app, "view=settings")).toEqual({ x: 0, y: 0, width: W, height: H });
   });
 });

@@ -1,88 +1,108 @@
-/* Quick-browse window ----------------------------------------------------- */
+/* Quick-browse bar (PRD 10.6 §5) ----------------------------------------------
 
-/* The chrome bar of the quick-browse window (selected by `?view=quick-browse`).
-   This renderer fills the whole window, and main lays the transient page view
-   over it from y = QUICK_BROWSE_CHROME_HEIGHT down, so the bar is a single
-   horizontal row pinned to the top at exactly that height (set as
-   --quick-browse-chrome-height by QuickBrowse.tsx). Reuses the popover surface
-   tokens. */
+   The chrome of the quick-browse window (?view=quick-browse). The window is
+   vibrant and transparent; this renderer fills it, and main lays the page view
+   over it from y = QUICK_BROWSE_CHROME_HEIGHT down. The bar is pinned to the
+   top at exactly that height (--quick-browse-chrome-height, set inline by
+   QuickBrowse.tsx from the core constant) and drags the window. The OS draws
+   the window's shadow and corners, so no shadow is painted here. */
 .quick-browse {
-  height: var(--quick-browse-chrome-height);
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 0 12px;
+  gap: var(--space-4);
+  height: var(--quick-browse-chrome-height);
+  padding: 0 8px 0 14px;
+  overflow: hidden;
   background: var(--surface-popover);
   color: var(--ink-popover);
   border-bottom: 1px solid var(--popover-hairline);
-  overflow: hidden;
+  -webkit-app-region: drag;
+  user-select: none;
 }
 
-/* The url/title line; truncates so a long external url never pushes the actions
-   off-screen. */
+/* Title above URL; both truncate so a long external URL never pushes the
+   actions off the bar. The URL stays text only (untrusted content). */
 .quick-browse__meta {
   flex: 1 1 auto;
   min-width: 0;
   display: flex;
-  align-items: baseline;
-  gap: 8px;
-  overflow: hidden;
+  flex-direction: column;
+  justify-content: center;
 }
 
-.quick-browse__title {
-  flex: 0 1 auto;
-  min-width: 0;
+.quick-browse__title,
+.quick-browse__url {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 13px;
+}
+
+.quick-browse__title {
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
+  line-height: 17px;
   color: var(--ink-popover);
 }
 
 .quick-browse__url {
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 12px;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-regular);
+  line-height: 16px;
   color: var(--ink-popover-secondary);
 }
 
-.quick-browse__actions {
+.quick-browse__button,
+.quick-browse__icon-button {
+  appearance: none;
   flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  gap: 8px;
+  height: 28px;
+  border: none;
+  border-radius: var(--radius-control);
+  font: inherit;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
 }
 
 .quick-browse__button {
-  flex: 0 0 auto;
-  padding: 6px 10px;
-  color: var(--ink-popover);
+  padding: 0 10px;
   background: var(--control-raised);
-  border: 1px solid var(--popover-hairline-strong);
-  border-radius: 6px;
-  cursor: pointer;
-  font-size: 12px;
+  box-shadow: 0 0 0 1px var(--popover-hairline);
+  color: var(--ink-popover);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
 }
 
-.quick-browse__button:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--control-raised), var(--ink-popover) 8%);
+.quick-browse__button:hover {
+  background: color-mix(in srgb, var(--control-raised), var(--ink-popover) 6%);
 }
 
-.quick-browse__button:focus-visible {
-  outline: none;
-  border-color: var(--focus-ring);
+.quick-browse__button--primary {
+  background: var(--accent);
+  box-shadow: none;
+  color: var(--ink-on-accent);
 }
 
-.quick-browse__button--ghost {
+.quick-browse__button--primary:hover {
+  background: color-mix(in srgb, var(--accent), var(--ink-popover) 12%);
+}
+
+.quick-browse__icon-button {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  padding: 0;
   background: transparent;
-  border-color: var(--popover-hairline);
   color: var(--ink-popover-secondary);
 }
 
-.quick-browse__button--ghost:hover:not(:disabled) {
+.quick-browse__icon-button:hover {
   background: var(--popover-hover);
   color: var(--ink-popover);
+}
+
+.quick-browse__button:focus-visible,
+.quick-browse__icon-button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
 }

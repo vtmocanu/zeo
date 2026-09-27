@@ -9,9 +9,17 @@ import { join } from "node:path";
 import { createServer } from "node:http";
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
-// The one @zeo/core value import: the y at which main lays the page view over the
-// chrome, so the chrome-bar geometry check can never drift from the real layout.
-import { QUICK_BROWSE_CHROME_HEIGHT } from "@zeo/core";
+// The @zeo/core geometry main lays the page view out with, so the chrome-bar
+// geometry checks can never drift from the real layout.
+import {
+  QUICK_BROWSE_CHROME_HEIGHT,
+  QUICK_BROWSE_HEIGHT,
+  QUICK_BROWSE_WIDTH,
+  quickBrowsePageBounds,
+} from "@zeo/core";
+import type { Rect } from "@zeo/core";
+// PRD 10.6 — resolve a token through a probe element to compare computed colors.
+import { tokenBackground } from "./helpers/token";
 
 // Absolute path to the built Electron main entry, resolved from this test file
 // (e2e is ESM, so no __dirname). Layout mirrors blocking.spec.ts / settings.spec.ts /
@@ -1010,6 +1018,95 @@ test.describe("PRD 7.2 quick-browse window (offline)", () => {
         })
         .toBe(0);
       await expect.poll(() => quickBrowseState(sidebar)).toBeNull();
+    } finally {
+      await app.close();
+      await server.close();
+      rmSync(userDataDir, { recursive: true, force: true });
+    }
+  });
+});
+
+/**
+ * The quick-browse window's content size and its page view's native bounds,
+ * read in main: the window is the BrowserWindow whose own webContents loads
+ * `view=quick-browse`, and the page view is its only child view. `null` when no
+ * quick-browse window is open.
+ */
+function quickBrowseGeometry(
+  app: ElectronApplication,
+): Promise<{ width: number; height: number; page: Rect | null } | null> {
+  return app.evaluate(({ BrowserWindow }) => {
+    const win = BrowserWindow.getAllWindows().find((w) =>
+      w.webContents.getURL().includes("view=quick-browse"),
+    );
+    if (win === undefined) {
+      return null;
+    }
+    const [width, height] = win.getContentSize();
+    const child = win.contentView.children[0];
+    const b = child?.getBounds();
+    return {
+      width,
+      height,
+      page: b === undefined ? null : { x: b.x, y: b.y, width: b.width, height: b.height },
+    };
+  });
+}
+
+test.describe("PRD 10.6 quick-browse chrome", () => {
+  test("the bar is 48 px with Open in Tab (accent), Move to Space… and Dismiss, over a page view at y 48", async () => {
+    const userDataDir = mkdtempSync(join(tmpdir(), "zeo-qb-"));
+    const server = await startFixtureServer();
+    const { app } = await launch(userDataDir);
+    try {
+      await emitOpenUrl(app, `${server.base}/qb-chrome.html?probe=qb-chrome`);
+      const chrome = await waitForQuickBrowseChrome(app);
+      await waitForViewUrl(app, "probe=qb-chrome");
+
+      // Main lays the page view out with quickBrowsePageBounds for the 480×640
+      // window: below the 48 px bar, to the bottom.
+      const want = quickBrowsePageBounds(QUICK_BROWSE_WIDTH, QUICK_BROWSE_HEIGHT);
+      expect(want.y).toBe(48);
+      await expect
+        .poll(async () => (await quickBrowseGeometry(app))?.page ?? null, {
+          message: "expected the quick-browse page view at quickBrowsePageBounds(480, 640)",
+        })
+        .toEqual(want);
+      const geometry = await quickBrowseGeometry(app);
+      expect({ width: geometry?.width, height: geometry?.height }).toEqual({
+        width: QUICK_BROWSE_WIDTH,
+        height: QUICK_BROWSE_HEIGHT,
+      });
+
+      // The copy and names.
+      const promote = chrome.getByTestId("quick-browse-promote");
+      await expect(promote).toHaveText("Open in Tab");
+      await expect(chrome.getByTestId("quick-browse-promote-space")).toHaveText("Move to Space…");
+      await expect(chrome.getByTestId("quick-browse-dismiss")).toHaveAccessibleName("Dismiss");
+
+      // Open in Tab is the accent button; Move to Space… is not.
+      const accent = await tokenBackground(chrome, "--accent");
+      await expect(promote).toHaveCSS("background-color", accent);
+      await expect(chrome.getByTestId("quick-browse-promote-space")).not.toHaveCSS(
+        "background-color",
+        accent,
+      );
+
+      // Every control lies inside the bar, above the page view.
+      for (const testId of [
+        "quick-browse-promote",
+        "quick-browse-promote-space",
+        "quick-browse-dismiss",
+      ]) {
+        const box = await chrome.getByTestId(testId).boundingBox();
+        expect(box, `${testId} has a bounding box`).not.toBeNull();
+        expect(box!.height, `${testId} height`).toBeGreaterThan(0);
+        expect(box!.y, `${testId} top`).toBeGreaterThanOrEqual(0);
+        expect(box!.y + box!.height, `${testId} bottom`).toBeLessThanOrEqual(want.y);
+      }
+      // The bar drags the window; its buttons do not.
+      await expect(chrome.getByTestId("quick-browse")).toHaveCSS("-webkit-app-region", "drag");
+      await expect(promote).toHaveCSS("-webkit-app-region", "no-drag");
     } finally {
       await app.close();
       await server.close();

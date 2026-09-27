@@ -1,6 +1,6 @@
 import { ipcMain, WebContentsView } from "electron";
 import { join } from "node:path";
-import { IPC, CARD_INSET, CARD_RADIUS, cardLeft, settingsBounds, searchEngine } from "@zeo/core";
+import { IPC, settingsBounds, searchEngine } from "@zeo/core";
 import type { Settings, SearchEngineId, SettingsSectionId } from "@zeo/core";
 import { focusTabViewDeliberately } from "./command-bar-focus.js";
 import { writeSearchEngine, writeQuickBrowseExternal } from "./db.js";
@@ -8,16 +8,17 @@ import { runtime, moduleDir } from "./state.js";
 import { broadcast } from "./broadcast.js";
 
 /**
- * Bounds of the settings view: the whole content area right of the sidebar,
- * computed by the shared {@link settingsBounds} geometry. Collapses to a
- * zero-size rect when there is no window.
+ * Bounds of the settings view: the whole window content area (sidebar
+ * included — the view is transparent and its renderer paints the scrim and
+ * centers the sheet), computed by the shared {@link settingsBounds} geometry.
+ * An all-zero rect when there is no window.
  */
 export function settingsBoundsRect(): Electron.Rectangle {
   if (runtime.win === null) {
-    return { x: cardLeft(runtime.chrome), y: CARD_INSET, width: 0, height: 0 };
+    return { x: 0, y: 0, width: 0, height: 0 };
   }
   const [w, h] = runtime.win.getContentSize();
-  return settingsBounds(w, h, runtime.chrome);
+  return settingsBounds(w, h);
 }
 
 /**
@@ -25,8 +26,9 @@ export function settingsBoundsRect(): Electron.Rectangle {
  * use (default session, same preload as the sidebar, loaded with `?view=settings`
  * — mirroring the command-bar overlay). While open it sits above every tab view
  * and below the command-bar overlay, so after adding it the overlay is re-raised.
- * A no-op focus when already open. Broadcasts so `settingsOpen` propagates (and
- * `settings.close` becomes enabled).
+ * Closes an open find session first (mirroring `openCommandBar`), so a find pill
+ * never floats over the settings scrim. A no-op focus when already open.
+ * Broadcasts so `settingsOpen` propagates (and `settings.close` becomes enabled).
  */
 export function openSettings(): void {
   if (runtime.win === null) {
@@ -36,6 +38,7 @@ export function openSettings(): void {
     runtime.settingsView.webContents.focus();
     return;
   }
+  runtime.closeFindSession?.(false);
   if (runtime.settingsView === null) {
     runtime.settingsView = new WebContentsView({
       webPreferences: {
@@ -45,7 +48,7 @@ export function openSettings(): void {
         nodeIntegration: false,
       },
     });
-    runtime.settingsView.setBorderRadius(CARD_RADIUS);
+    runtime.settingsView.setBackgroundColor("#00000000");
     const rendererUrl = process.env.ELECTRON_RENDERER_URL;
     if (rendererUrl !== undefined && rendererUrl !== "") {
       runtime.settingsView.webContents.loadURL(rendererUrl + "?view=settings").catch(() => {
@@ -66,6 +69,8 @@ export function openSettings(): void {
   if (runtime.overlay !== null) {
     runtime.win!.contentView.addChildView(runtime.overlay);
   }
+  // A new settings session: the renderer keys per-session UI state on this.
+  runtime.settingsSession++;
   runtime.settingsOpen = true;
   runtime.settingsView!.webContents.focus();
   broadcast();

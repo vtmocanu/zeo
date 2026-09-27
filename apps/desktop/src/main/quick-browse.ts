@@ -186,6 +186,9 @@ export function openQuickBrowseWindow(url: string): void {
     y: Math.round(primary.workArea.y + (primary.workArea.height - QUICK_BROWSE_HEIGHT) / 2),
     frame: false,
     show: false,
+    vibrancy: "popover",
+    visualEffectState: "active",
+    backgroundColor: "#00000000",
     webPreferences: {
       preload: join(moduleDir, "../preload/index.cjs"),
       contextIsolation: true,

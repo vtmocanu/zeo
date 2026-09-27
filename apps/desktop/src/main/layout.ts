@@ -23,6 +23,7 @@ import { writeWindowLayout, readWindowLayout } from "./db.js";
 import { runtime, moduleDir, LAYOUT_SAVE_DEBOUNCE_MS } from "./state.js";
 import { broadcast } from "./broadcast.js";
 import { createViewFor, destroyView, ensureActiveView, raiseOverlays } from "./views.js";
+import { layoutOverlay } from "./overlay.js";
 
 /**
  * The usable page width a split `ratio` applies to: the content width minus the
@@ -79,8 +80,12 @@ export function ensureDividerView(): void {
  * missing, bounds the two panes and the divider via {@link splitPaneBounds}, shows
  * them, hides every other tracked view, re-raises the z-order, and focuses the
  * focused pane's view. Every op is guarded so a pane view destroyed mid-reconcile
- * is skipped, not fatal. Called everywhere the layout or the active view can
- * change.
+ * is skipped, not fatal. On every exit path, re-lays an open find overlay via
+ * {@link layoutOverlay} so its card-anchored pill follows a split/ratio/pane
+ * change. In split mode it first closes (broadcasting and returning focus) an
+ * open find session bound to a tab that is no longer active, via
+ * {@link closeFindOffActiveTab}. Called everywhere the layout or the active view
+ * can change.
  */
 export function applyLayout(): void {
   if (runtime.win === null) {
@@ -92,8 +97,12 @@ export function applyLayout(): void {
       runtime.dividerView.setVisible(false);
     }
     ensureActiveView();
+    if (runtime.find.open) {
+      layoutOverlay();
+    }
     return;
   }
+  closeFindOffActiveTab();
   // Split: materialize each pane's view if it has none yet (mirroring
   // ensureActiveView's lazy create), then lay both panes + the divider out.
   const paneIds: readonly [string, string] = [layout.left, layout.right];
@@ -135,6 +144,9 @@ export function applyLayout(): void {
     if (focusedView !== undefined && !focusedView.webContents.isDestroyed()) {
       focusTabViewDeliberately(focusedView.webContents);
     }
+  }
+  if (runtime.find.open) {
+    layoutOverlay();
   }
 }
 
@@ -426,6 +438,19 @@ export function doFocusOther(): void {
   persistLayout();
   applyLayout();
   broadcast();
+}
+
+/**
+ * A find session never follows a tab change. In single mode `setActive`
+ * (views.ts) enforces that; the split branch of {@link applyLayout} never
+ * reaches `setActive`, so every split-mode tab change (pane focus, a sidebar
+ * click on a pane tab, `tabs.activate` of the other pane) closes an open
+ * session bound to a tab that is no longer active here.
+ */
+function closeFindOffActiveTab(): void {
+  if (runtime.find.open && runtime.find.tabId !== runtime.store.activeTabId) {
+    runtime.closeFindSession?.();
+  }
 }
 
 /**

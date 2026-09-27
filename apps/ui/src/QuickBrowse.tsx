@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { CSSProperties } from "react";
 import { QUICK_BROWSE_CHROME_HEIGHT, activeSpaceTheme } from "@zeo/core";
 import type { TabsState } from "@zeo/core";
+import { Icon } from "./icons.js";
 import { useThemeTokens } from "./theme.js";
 
 /**
@@ -19,7 +20,11 @@ import { useThemeTokens } from "./theme.js";
  *
  * The window-local keys (Escape / Enter / Cmd+Enter / Cmd+Shift+Enter) are owned
  * by the main process — this chrome only renders the entry and the three action
- * buttons and subscribes to state.
+ * buttons and subscribes to state. Each button's `title` names its key.
+ *
+ * The bar is exactly `QUICK_BROWSE_CHROME_HEIGHT` tall and pinned to the top of
+ * the window (the page view starts below it); it drags the window, its buttons
+ * do not.
  *
  * SECURITY: `quickBrowse.url` and `quickBrowse.title` are UNTRUSTED external
  * content. They are rendered as plain text children (React auto-escapes) and are
@@ -96,32 +101,34 @@ export function QuickBrowse() {
           {quickBrowse?.url ?? ""}
         </span>
       </div>
-      <div className="quick-browse__actions">
-        <button
-          type="button"
-          className="quick-browse__button"
-          data-testid="quick-browse-promote"
-          onClick={onPromote}
-        >
-          Promote
-        </button>
-        <button
-          type="button"
-          className="quick-browse__button"
-          data-testid="quick-browse-promote-space"
-          onClick={onPromoteToSpace}
-        >
-          Promote to space…
-        </button>
-        <button
-          type="button"
-          className="quick-browse__button quick-browse__button--ghost"
-          data-testid="quick-browse-dismiss"
-          onClick={onDismiss}
-        >
-          Dismiss
-        </button>
-      </div>
+      <button
+        type="button"
+        className="quick-browse__button quick-browse__button--primary"
+        data-testid="quick-browse-promote"
+        title="Return"
+        onClick={onPromote}
+      >
+        Open in Tab
+      </button>
+      <button
+        type="button"
+        className="quick-browse__button"
+        data-testid="quick-browse-promote-space"
+        title="⌘Return"
+        onClick={onPromoteToSpace}
+      >
+        Move to Space…
+      </button>
+      <button
+        type="button"
+        className="quick-browse__icon-button"
+        data-testid="quick-browse-dismiss"
+        aria-label="Dismiss"
+        title="Esc"
+        onClick={onDismiss}
+      >
+        <Icon name="close" size={14} />
+      </button>
     </div>
   );
 }

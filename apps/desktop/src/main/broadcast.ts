@@ -28,6 +28,7 @@ export function fullSnapshot(): TabsState {
     settings: runtime.settings,
     settingsSection: runtime.settingsSection,
     settingsSectionNonce: runtime.settingsSectionNonce,
+    settingsSession: runtime.settingsSession,
     downloads: runtime.downloads,
     find: runtime.find,
     // Cached module vars: fullSnapshot runs on every broadcast, so it must never

@@ -563,6 +563,7 @@ export function App() {
     },
     settingsSection: "general",
     settingsSectionNonce: 0,
+    settingsSession: 0,
     blocking: {
       enabled: true,
       listVersion: "none",

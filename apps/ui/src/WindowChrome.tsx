@@ -7,15 +7,14 @@ import {
   type PointerEvent as ReactPointerEvent,
   type ReactElement,
 } from "react";
-import type { ChromeState, CommandId, PaneSide, Rect, WindowLayout } from "@zeo/core";
+import type { ChromeState, CommandId, Rect, WindowLayout } from "@zeo/core";
 import {
   SIDEBAR_HIDE_DELAY_MS,
   SIDEBAR_MAX_WIDTH,
   SIDEBAR_MIN_WIDTH,
   SIDEBAR_REVEAL_EDGE,
   clampSidebarWidth,
-  contentRect,
-  splitPaneBounds,
+  windowCardRects,
 } from "@zeo/core";
 import { Icon, type IconName } from "./icons.js";
 
@@ -48,54 +47,46 @@ export function useWindowSize(): { width: number; height: number } {
   return size;
 }
 
-/** One card to draw: its geometry and, in split view, the pane it backs. */
-export interface WindowCard {
-  pane: PaneSide | null;
-  rect: Rect;
+function rectStyle(rect: Rect): CSSProperties {
+  return { left: rect.x, top: rect.y, width: rect.width, height: rect.height };
 }
 
 /**
- * The cards beneath the native views: one at {@link contentRect} in single
- * mode, or the left and right panes of {@link splitPaneBounds} in split mode
- * (the divider's 8px gap between them stays window ground).
+ * The card(s) beneath the native views, from `windowCardRects`: one at
+ * contentRect in single mode; in split the left and right panes (the
+ * divider's 8px gap between them stays window ground), the focused one carrying
+ * `.window-card--focused`, a soft accent ring drawn into that gap.
  */
-export function windowCards(
-  width: number,
-  height: number,
-  chrome: ChromeState,
-  layout: WindowLayout,
-): WindowCard[] {
-  if (layout.mode === "split") {
-    const { left, right } = splitPaneBounds(width, height, chrome, layout.ratio);
-    return [
-      { pane: "left", rect: left },
-      { pane: "right", rect: right },
-    ];
-  }
-  return [{ pane: null, rect: contentRect(width, height, chrome) }];
-}
-
-function rectStyle(rect: Rect): CSSProperties {
-  return { left: rect.x, top: rect.y, width: rect.width, height: rect.height };
+export function WindowCards(props: {
+  width: number;
+  height: number;
+  chrome: ChromeState;
+  layout: WindowLayout;
+}): ReactElement {
+  const cards = windowCardRects(props.width, props.height, props.chrome, props.layout);
+  return (
+    <>
+      {cards.map((card) => (
+        <div
+          key={card.pane}
+          className={card.focused ? "window-card window-card--focused" : "window-card"}
+          data-testid="window-card"
+          data-pane={card.pane === "single" ? undefined : card.pane}
+          aria-hidden="true"
+          style={rectStyle(card.rect)}
+        />
+      ))}
+    </>
+  );
 }
 
 /** Window ground, card(s) and top drag strip, rendered before the sidebar. */
 export function WindowBackdrop(props: { chrome: ChromeState; layout: WindowLayout }): ReactElement {
   const { width, height } = useWindowSize();
-  const cards = windowCards(width, height, props.chrome, props.layout);
   return (
     <>
       <div className="window-tint" data-testid="window-tint" aria-hidden="true" />
-      {cards.map((card) => (
-        <div
-          key={card.pane ?? "single"}
-          className="window-card"
-          data-testid="window-card"
-          data-pane={card.pane ?? undefined}
-          aria-hidden="true"
-          style={rectStyle(card.rect)}
-        />
-      ))}
+      <WindowCards width={width} height={height} chrome={props.chrome} layout={props.layout} />
       <div className="window-drag-strip" data-testid="window-drag-strip" aria-hidden="true" />
     </>
   );

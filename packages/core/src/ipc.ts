@@ -94,6 +94,13 @@ export interface TabsState extends StoreSnapshot {
   settings: Settings;
   settingsSection: SettingsSectionId;
   settingsSectionNonce: number;
+  /**
+   * A monotonically increasing counter main bumps on every closed→open
+   * transition of the settings view, so the settings renderer (which stays
+   * mounted across a close) can start fresh per-session UI state even when a
+   * quick close→reopen coalesces into a single `settingsOpen: true` render.
+   */
+  settingsSession: number;
   find: FindState;
   update: UpdateState;
   /** The current quick-browse entry, or `null` when no quick-browse window is open. */
