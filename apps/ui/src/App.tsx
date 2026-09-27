@@ -1065,7 +1065,7 @@ export function App() {
           key={themeEditSpace.id}
           space={themeEditSpace}
           sidebarWidth={sidebarWidth}
-          onChange={(theme) => window.zeo?.spaces.setTheme(themeEditSpace.id, theme).catch(() => {})}
+          onChange={(theme) => window.zeo?.spaces.setTheme(themeEditSpace.id, theme)}
           onClose={closeThemeEdit}
         />
       )}

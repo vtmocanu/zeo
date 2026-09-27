@@ -219,77 +219,51 @@ describe("draft sync", () => {
   const t = (intensity: number): SpaceTheme => ({ stops: ["teal"], intensity });
 
   test("starts from the space theme with nothing in flight", () => {
-    expect(initialDraftSync(t(1))).toEqual({ draft: t(1), inFlight: 0 });
+    expect(initialDraftSync(t(1))).toEqual({ draft: t(1), inFlight: 0, failed: false });
   });
 
-  test("B1: drag .40 -> .45 -> .40 -> .35 with a stale .40 broadcast arriving mid-drag", () => {
+  test("a drag passing back through its start ignores stale broadcasts and echoes", () => {
     let sync = initialDraftSync(t(0.4));
     sync = syncSent(sync, t(0.45));
     sync = syncSent(sync, t(0.4));
     sync = syncSent(sync, t(0.35));
-    expect(sync).toEqual({ draft: t(0.35), inFlight: 3 });
-    // A stale broadcast of an earlier value arrives while sends are still
-    // outstanding: ignored outright, draft doesn't move.
-    sync = syncBroadcast(sync, t(0.4));
-    expect(sync).toEqual({ draft: t(0.35), inFlight: 3 });
-    // The real echoes arrive too, in order; still ignored while in flight.
-    sync = syncBroadcast(sync, t(0.45));
-    sync = syncBroadcast(sync, t(0.4));
-    sync = syncBroadcast(sync, t(0.35));
-    expect(sync).toEqual({ draft: t(0.35), inFlight: 3 });
-    // Each send's promise settles in order; only the last settle (counter
-    // hits zero) resyncs, to main's actual stored value.
-    sync = syncSettled(sync, t(0.45));
-    expect(sync).toEqual({ draft: t(0.35), inFlight: 2 });
-    sync = syncSettled(sync, t(0.4));
-    expect(sync).toEqual({ draft: t(0.35), inFlight: 1 });
-    sync = syncSettled(sync, t(0.35));
-    expect(sync).toEqual({ draft: t(0.35), inFlight: 0 });
+    expect(sync).toEqual({ draft: t(0.35), inFlight: 3, failed: false });
+    // A stale pre-send broadcast, then the echoes: none moves the draft.
+    for (const incoming of [t(0.4), t(0.45), t(0.4), t(0.35)]) {
+      sync = syncBroadcast(sync, incoming);
+      expect(sync.draft).toEqual(t(0.35));
+    }
+    // Each success settles; the prop passed in is deliberately stale (App has
+    // not re-rendered the echo yet) and must not be read.
+    sync = syncSettled(sync, true, t(0.4));
+    sync = syncSettled(sync, true, t(0.4));
+    expect(sync).toEqual({ draft: t(0.35), inFlight: 1, failed: false });
+    sync = syncSettled(sync, true, t(0.4));
+    expect(sync).toEqual({ draft: t(0.35), inFlight: 0, failed: false });
   });
 
-  test("a rejected send settles by resyncing to the latest prop value", () => {
+  test("a successful settle never resyncs to a not-yet-rendered prop", () => {
     let sync = initialDraftSync(t(0.4));
     sync = syncSent(sync, t(0.45));
-    // The invoke rejects; App swallows it, but main never applied the
-    // change, so the prop is still the old stored value.
-    sync = syncSettled(sync, t(0.4));
-    expect(sync).toEqual({ draft: t(0.4), inFlight: 0 });
+    sync = syncSettled(sync, true, t(0.4));
+    expect(sync).toEqual({ draft: t(0.45), inFlight: 0, failed: false });
   });
 
-  test("an external change that happens mid-flight is adopted once the send settles", () => {
+  test("a rejected send resyncs to the prop once nothing is in flight", () => {
     let sync = initialDraftSync(t(0.4));
     sync = syncSent(sync, t(0.45));
-    // Some other change to the space's stored theme lands while our send is
-    // still outstanding, ignored by syncBroadcast because inFlight > 0.
-    sync = syncBroadcast(sync, t(0.9));
-    expect(sync).toEqual({ draft: t(0.45), inFlight: 1 });
-    // Once the send settles, the draft resyncs to whatever the latest prop
-    // value actually is now.
-    sync = syncSettled(sync, t(0.9));
-    expect(sync).toEqual({ draft: t(0.9), inFlight: 0 });
-  });
-
-  test("a duplicate send (clicking the same swatch twice before the echo) never sticks", () => {
-    // Since syncSent is a no-op when next already equals the draft, the
-    // second click while the first send is still in flight never bumps the
-    // counter, so there's nothing to get stuck waiting for.
-    let sync = initialDraftSync(t(0.4));
-    sync = syncSent(sync, t(0.6));
-    sync = syncSent(sync, t(0.6));
-    expect(sync).toEqual({ draft: t(0.6), inFlight: 1 });
-    sync = syncSettled(sync, t(0.6));
-    expect(sync).toEqual({ draft: t(0.6), inFlight: 0 });
-  });
-
-  test("sending the same value as the current draft is a no-op", () => {
-    const sync = initialDraftSync(t(0.4));
-    expect(syncSent(sync, t(0.4))).toBe(sync);
+    sync = syncSent(sync, t(0.5));
+    sync = syncSettled(sync, false, t(0.4));
+    // Another send is still outstanding: only the counter moves.
+    expect(sync).toEqual({ draft: t(0.5), inFlight: 1, failed: true });
+    sync = syncSettled(sync, true, t(0.4));
+    expect(sync).toEqual({ draft: t(0.4), inFlight: 0, failed: false });
   });
 
   test("a broadcast while idle replaces the draft (outside change)", () => {
     const sync = initialDraftSync(t(0.4));
-    expect(syncBroadcast(sync, t(0.9))).toEqual({ draft: t(0.9), inFlight: 0 });
-    expect(syncBroadcast(sync, null)).toEqual({ draft: null, inFlight: 0 });
+    expect(syncBroadcast(sync, t(0.9))).toEqual({ draft: t(0.9), inFlight: 0, failed: false });
+    expect(syncBroadcast(sync, null)).toEqual({ draft: null, inFlight: 0, failed: false });
   });
 
   test("an unchanged broadcast while idle keeps the same object", () => {

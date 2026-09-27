@@ -32,8 +32,8 @@ export interface ThemePickerProps {
   sidebarWidth: number;
   /**
    * May return a promise (as the real IPC call does); the picker awaits it to
-   * know when a send has settled. A plain `void` return is also accepted and
-   * is treated as settling immediately.
+   * know when a send has settled, and swallows a rejection itself. A plain
+   * `void` return is treated as an immediate success.
    */
   onChange(theme: SpaceTheme): void | Promise<unknown>;
   onClose(): void;
@@ -42,77 +42,65 @@ export interface ThemePickerProps {
 /**
  * The picker's local draft, tracked by in-flight acknowledgement rather than
  * by matching broadcast values. Live apply means a slider drag sends many
- * values in a row; matching each broadcast against the values we sent is
- * fragile (a stale broadcast can be mistaken for the echo of a later send,
- * or a duplicate/rejected send that main never echoes can leave state
- * stuck). Instead we just count sends that haven't settled yet:
+ * values in a row, and matching each broadcast against the values sent is
+ * fragile: a stale broadcast can pass for the echo of a later send, and main
+ * never echoes a send equal to what it stores. Instead:
  *
- * - `draftSent` bumps `inFlight` and adopts `next` as the draft immediately
- *   (so the UI feels live).
- * - While `inFlight > 0`, incoming broadcasts are ignored outright: we don't
- *   know yet whether they're stale, our own echo, or real.
- * - `draftSettled` fires when a send's promise resolves or rejects. While
- *   sends are still outstanding it only decrements the counter. Once it
- *   reaches zero, the draft is resynced to `latestProp` — the most recently
- *   seen `space.theme` — which by then equals main's actual stored value:
- *   after a run of successful sequential sends this is the last value sent
- *   (Electron delivers main's broadcast before the invoke reply, and main
- *   handles invokes in order), and it also heals a rejected send or picks up
- *   an external change that happened mid-flight, since either way it's
- *   exactly what main is holding.
- * - `draftBroadcast`, when idle (`inFlight === 0`), simply replaces the
- *   draft with any differing incoming value: the PRD rule for an outside
- *   change.
+ * - `syncSent` adopts `next` as the draft at once and counts it in flight.
+ * - While `inFlight > 0`, broadcasts are ignored: stale, echo and real can't
+ *   be told apart yet.
+ * - `syncSettled` runs when a send's promise settles. A success leaves the
+ *   draft alone: main holds what was sent, and its broadcast (which main
+ *   sends before the reply) may not have re-rendered the prop yet, so the
+ *   prop must not be read here. A failure is remembered; once nothing is in
+ *   flight the draft resyncs to the newest prop, since main kept its value.
+ * - `syncBroadcast`, when idle, replaces the draft with any differing value:
+ *   the PRD rule for an outside change. An outside change made while sends
+ *   were in flight arrives this way once they drain and the prop re-renders.
  */
 export interface DraftSync {
   draft: SpaceTheme | null;
   inFlight: number;
+  /** Some send since the counter last drained was rejected. */
+  failed: boolean;
 }
 
 export function initialDraftSync(theme: SpaceTheme | null): DraftSync {
-  return { draft: theme, inFlight: 0 };
+  return { draft: theme, inFlight: 0, failed: false };
 }
 
-/**
- * The picker sent `next`: it becomes the draft and a send is now in flight.
- * A `next` equal to the current draft (e.g. clicking the already-pressed
- * swatch) is a no-op and isn't worth a round trip, so nothing changes.
- */
+/** The picker sent `next`: it becomes the draft and one more send is in flight. */
 export function syncSent(sync: DraftSync, next: SpaceTheme): DraftSync {
-  if (themesEqual(sync.draft, next)) {
-    return sync;
-  }
-  return { draft: next, inFlight: sync.inFlight + 1 };
+  return { draft: next, inFlight: sync.inFlight + 1, failed: sync.failed };
 }
 
 /**
- * A send's promise settled (resolved or rejected — both mean main is done
- * with it). While other sends remain outstanding, only the counter moves.
- * Once none remain, the draft resyncs to `latestProp`, the newest
- * `space.theme` value seen, which is what main is actually holding by now.
+ * A send settled (`ok` false when rejected). Only the counter moves while
+ * other sends are outstanding. When it drains, a run with a failure resyncs
+ * to `latestProp`; an all-successful run keeps the draft.
  */
-export function syncSettled(sync: DraftSync, latestProp: SpaceTheme | null): DraftSync {
+export function syncSettled(
+  sync: DraftSync,
+  ok: boolean,
+  latestProp: SpaceTheme | null,
+): DraftSync {
   const inFlight = Math.max(0, sync.inFlight - 1);
+  const failed = sync.failed || !ok;
   if (inFlight > 0) {
-    return { draft: sync.draft, inFlight };
+    return { draft: sync.draft, inFlight, failed };
   }
-  return { draft: latestProp, inFlight: 0 };
+  return { draft: failed ? latestProp : sync.draft, inFlight: 0, failed: false };
 }
 
 /**
- * A broadcast carried `incoming` for the edited space. While a send is in
- * flight it's ignored (we can't yet tell stale from real; `syncSettled`
- * resolves it once the counter drains). When idle, a value that differs from
- * the draft is an outside change and replaces it.
+ * A broadcast carried `incoming` for the edited space. Ignored while a send
+ * is in flight; when idle, a value that differs from the draft replaces it.
  */
 export function syncBroadcast(sync: DraftSync, incoming: SpaceTheme | null): DraftSync {
-  if (sync.inFlight > 0) {
+  if (sync.inFlight > 0 || themesEqual(sync.draft, incoming)) {
     return sync;
   }
-  if (themesEqual(sync.draft, incoming)) {
-    return sync;
-  }
-  return { draft: incoming, inFlight: 0 };
+  return { draft: incoming, inFlight: 0, failed: false };
 }
 
 /** Background for a contrast chip: the window ground, or both grounds as a gradient. */
@@ -190,8 +178,8 @@ function ContrastChip({ theme, appearance }: { theme: SpaceTheme | null; appeara
 /**
  * Space theme picker (PRD 10.3 §6): a popover rendered inside the sidebar,
  * anchored above the bottom bar. Every control applies live through
- * `onChange`; the draft follows outside changes to the space's theme but
- * ignores echoes of its own sends. Escape, a press outside and the window
+ * `onChange`; the draft follows outside changes to the space's theme once
+ * none of its own sends is in flight. Escape, a press outside and the window
  * losing focus close it; the remaining close conditions depend on app state
  * and live with the caller.
  */
@@ -208,9 +196,8 @@ export function ThemePicker({
   const swatchRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const onCloseRef = useRef(onClose);
   const intensityId = useId();
-  // The latest space.theme seen, for syncSettled to resync to once every
-  // in-flight send has settled. Updated on every render (not in an effect)
-  // so it's current before a same-tick settle reads it.
+  // The latest rendered space.theme, for syncSettled to resync to after a
+  // rejected send (main kept its value, so this prop is current enough).
   const latestThemeRef = useRef(space.theme);
   latestThemeRef.current = space.theme;
 
@@ -256,20 +243,23 @@ export function ThemePicker({
   const focusableHueIndex = selectedHue === null ? 0 : Math.max(0, SPACE_HUES.indexOf(selectedHue));
 
   const send = (next: SpaceTheme): void => {
-    // A no-op send (e.g. clicking the already-pressed swatch) isn't worth
-    // an in-flight round trip.
+    // A no-op send (e.g. clicking the already-pressed swatch) isn't worth a
+    // round trip; main would not echo it anyway.
     if (themesEqual(draft, next)) {
       return;
     }
     setSync((current) => syncSent(current, next));
-    const settle = (): void => {
-      setSync((current) => syncSettled(current, latestThemeRef.current));
+    const settle = (ok: boolean): void => {
+      setSync((current) => syncSettled(current, ok, latestThemeRef.current));
     };
     const result = onChange(next);
     if (result instanceof Promise) {
-      result.then(settle, settle);
+      result.then(
+        () => settle(true),
+        () => settle(false),
+      );
     } else {
-      settle();
+      settle(true);
     }
   };
 
