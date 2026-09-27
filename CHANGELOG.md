@@ -9,6 +9,29 @@ milestone, a minor bump only for very large breakthroughs.
 
 ## [Unreleased]
 
+## [0.0.31] - 2026-09-27
+
+### Added
+
+- Space themes: every space has a color theme, either one hue or a two-stop
+  gradient, plus an intensity. Switching spaces instantly re-tints the
+  sidebar, settings, the command bar and quick browse.
+- Theme picker: "Edit Theme…" in a space's context menu, or the "Edit Space
+  Theme…" command, opens a picker inside the sidebar. It offers solid or
+  gradient, ten swatches, an intensity slider in steps of 5%, and a contrast
+  readout for light and dark. Changes apply live and survive a relaunch.
+- Each space in the switcher shows a dot in its theme color, neutral when the
+  space is untinted.
+
+### Changed
+
+- Database schema version 14: `spaces` gains a `theme` column. Existing
+  databases migrate in place, and their spaces receive iris, rose, teal,
+  amber, violet, mint, coral, sky, orchid and lime by position, repeating. A
+  new space takes the next hue in that order.
+- Text on the accent color now keeps at least 4.5:1 contrast for every
+  theme. `themeReport()` reports it as `inkOnAccentContrast`.
+
 ## [0.0.30] - 2026-09-27
 
 ### Added

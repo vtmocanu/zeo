@@ -4,17 +4,20 @@ import {
   useLayoutEffect,
   useRef,
   useState,
+  type CSSProperties,
   type MouseEventHandler,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
   type RefObject,
 } from "react";
-import type { PaneSide, Space, Tab, TabsState } from "@zeo/core";
+import type { PaneSide, Space, SpaceTheme, Tab, TabsState } from "@zeo/core";
 import {
   DEFAULT_CHROME_STATE,
   DEFAULT_SEARCH_ENGINE_ID,
   SINGLE_LAYOUT,
   SPACE_ACTIVATE_DELAY_MS,
+  activeSpaceTheme,
+  cardLeft,
   defaultSpaceName,
   formatRelativeArchived,
   formatZoomPercent,
@@ -22,7 +25,9 @@ import {
   paneOf,
   siteKeyForUrl,
   sidebarVisible,
+  spaceDotColor,
 } from "@zeo/core";
+import { findSpaceItem } from "./dom.js";
 import { Favicon } from "./Favicon.js";
 import {
   SidebarResizeHandle,
@@ -30,6 +35,7 @@ import {
   WindowRow,
   useSidebarReveal,
 } from "./WindowChrome.js";
+import { ThemePicker } from "./ThemePicker.js";
 import { useThemeTokens } from "./theme.js";
 
 // Pointer travel (px) required before a press turns into a drag. Below this a
@@ -555,9 +561,63 @@ function SpaceItem({
       }}
       onContextMenu={onContextMenu}
     >
-      {space.name}
+      <span
+        className="space-item__dot"
+        data-testid="space-dot"
+        data-hue={space.theme === null ? "none" : space.theme.stops.join("+")}
+        aria-hidden="true"
+        style={{ "--space-dot": spaceDotColor(space.theme) ?? undefined } as CSSProperties}
+      />
+      <span className="space-item__name">{space.name}</span>
     </button>
   );
+}
+
+/** Whether focus is currently somewhere inside the (still-mounted) theme picker. */
+function pickerContainsActiveElement(): boolean {
+  const picker = document.querySelector('[data-testid="theme-picker"]');
+  const active = document.activeElement;
+  return picker !== null && active instanceof Node && picker.contains(active);
+}
+
+/**
+ * Restores focus after the theme picker closes for a reason other than
+ * Escape or an outside pointerdown (both of which already leave focus where
+ * they want it — Escape on the space's own `space-item`, an outside press
+ * wherever the user clicked). The remaining programmatic close reasons —
+ * sidebar collapse, active-space change, the edited space being removed —
+ * give `<ThemePicker>` no chance to move focus itself before it unmounts.
+ * `hadFocus` tells whether focus was inside the picker right before this
+ * particular close; it is a no-op when it wasn't (or when the close was one
+ * of the two self-handling reasons above, which never reach this call).
+ *
+ * For the active-space-change caller the picker is still mounted when this
+ * runs (its own unmount is scheduled by that same call site, right after),
+ * so `hadFocus` there is a direct DOM check (`pickerContainsActiveElement`).
+ * For the sidebar-collapse / edited-space-removal caller the picker has
+ * already unmounted in this same commit by the time the effect runs, so
+ * `hadFocus` there comes from `ThemePicker`'s own `useLayoutEffect` cleanup
+ * (see `reportUnmountFocus` below), captured while its DOM was still present
+ * — a plain DOM check at that point would always see `<body>`.
+ *
+ * Documented limitation: on a FULL sidebar collapse (`sidebarCollapsed &&
+ * !sidebarRevealed`) the whole `<aside data-testid="sidebar">` becomes
+ * `visibility: hidden` (`.sidebar--hidden`, styles/sidebar.css) in the same
+ * commit that unmounts the picker, so no space-item inside it is focusable
+ * per the HTML focusability rules — `item?.focus()` below is then a verified
+ * no-op and focus falls back to `<body>`. That is the correct outcome of the
+ * sidebar itself going invisible, not something this function can prevent.
+ */
+function restoreFocusFromThemePicker(
+  hadFocus: boolean,
+  preferredSpaceId: string | null,
+  activeSpaceId: string,
+): void {
+  if (!hadFocus) {
+    return;
+  }
+  const item = (preferredSpaceId !== null ? findSpaceItem(preferredSpaceId) : null) ?? findSpaceItem(activeSpaceId);
+  item?.focus();
 }
 
 /**
@@ -566,7 +626,6 @@ function SpaceItem({
  * (which implements ZeoApi). No Node or Electron imports.
  */
 export function App() {
-  useThemeTokens(null);
   const [state, setState] = useState<TabsState>({
     spaces: [],
     activeSpaceId: "",
@@ -614,6 +673,7 @@ export function App() {
       error: null,
     },
   });
+  useThemeTokens(activeSpaceTheme(state));
   const [showArchived, setShowArchived] = useState(false);
   const [now, setNow] = useState(() => Date.now());
 
@@ -641,6 +701,41 @@ export function App() {
     editRef.current = null;
     setEditState(null);
   }, []);
+
+  // The space whose theme picker is open (PRD 10.3 §6), or null. The picker
+  // closes when that space leaves the list, the active space changes or the
+  // sidebar hides; it dismisses itself on Escape, outside press and blur.
+  const [themeEditSpaceId, setThemeEditSpaceId] = useState<string | null>(null);
+  const closeThemePicker = useCallback(() => setThemeEditSpaceId(null), []);
+  // Set by ThemePicker's own useLayoutEffect cleanup, just before it unmounts,
+  // to whether focus was inside it at that moment; see restoreFocusFromThemePicker.
+  const themePickerHadFocusRef = useRef(false);
+  const reportThemePickerUnmountFocus = useCallback((hadFocus: boolean) => {
+    themePickerHadFocusRef.current = hadFocus;
+  }, []);
+  const sidebarShown = cardLeft(state.chrome) === state.chrome.sidebarWidth;
+  const themeEditSpace =
+    themeEditSpaceId !== null && sidebarShown
+      ? state.spaces.find((s) => s.id === themeEditSpaceId)
+      : undefined;
+  useEffect(() => {
+    if (themeEditSpaceId !== null && themeEditSpace === undefined) {
+      restoreFocusFromThemePicker(themePickerHadFocusRef.current, themeEditSpaceId, state.activeSpaceId);
+      themePickerHadFocusRef.current = false;
+      setThemeEditSpaceId(null);
+    }
+  }, [themeEditSpaceId, themeEditSpace, state.activeSpaceId]);
+  const activeSpaceId = state.activeSpaceId;
+  const lastActiveSpaceId = useRef(activeSpaceId);
+  useEffect(() => {
+    if (lastActiveSpaceId.current !== activeSpaceId) {
+      lastActiveSpaceId.current = activeSpaceId;
+      if (themeEditSpaceId !== null) {
+        restoreFocusFromThemePicker(pickerContainsActiveElement(), themeEditSpaceId, activeSpaceId);
+      }
+      setThemeEditSpaceId(null);
+    }
+  }, [activeSpaceId, themeEditSpaceId]);
 
   useEffect(() => {
     spacesRef.current = state.spaces;
@@ -674,7 +769,10 @@ export function App() {
       if (action.action === "rename") {
         const space = spacesRef.current.find((s) => s.id === action.spaceId);
         openEdit({ mode: "rename", spaceId: action.spaceId }, space?.name ?? "");
-      } else {
+      } else if (action.action === "edit-theme") {
+        cancelEdit();
+        setThemeEditSpaceId(action.spaceId);
+      } else if (action.action === "new-profile") {
         openEdit({ mode: "new-profile", spaceId: action.spaceId }, "");
       }
     });
@@ -690,7 +788,7 @@ export function App() {
       unsubState();
       unsubMenu();
     };
-  }, [openEdit]);
+  }, [openEdit, cancelEdit]);
 
   const commitEdit = useCallback(() => {
     const current = editRef.current;
@@ -1018,6 +1116,18 @@ export function App() {
           </div>
         )}
       </footer>
+      {themeEditSpace !== undefined && (
+        <ThemePicker
+          key={themeEditSpace.id}
+          space={themeEditSpace}
+          sidebarWidth={sidebarWidth}
+          onChange={(theme: SpaceTheme) =>
+            void window.zeo?.spaces.setTheme(themeEditSpace.id, theme).catch(() => {})
+          }
+          onClose={closeThemePicker}
+          reportUnmountFocus={reportThemePickerUnmountFocus}
+        />
+      )}
       <SidebarResizeHandle width={sidebarWidth} />
     </aside>
   );

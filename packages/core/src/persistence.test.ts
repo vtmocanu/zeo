@@ -178,6 +178,7 @@ describe("repair rules on deserialize", () => {
           createdAt: 1,
           activeTabId: "tArch",
           position: 0,
+          theme: null,
         },
       ],
       tabs: [baseTab({ id: "tArch", archivedAt: 5 })],
@@ -199,6 +200,7 @@ describe("repair rules on deserialize", () => {
           createdAt: 1,
           activeTabId: "ghost",
           position: 0,
+          theme: null,
         },
       ],
       tabs: [baseTab({ id: "tOpen" })],
@@ -220,6 +222,7 @@ describe("repair rules on deserialize", () => {
           createdAt: 1,
           activeTabId: "tInS2",
           position: 0,
+          theme: null,
         },
         {
           id: "s2",
@@ -228,6 +231,7 @@ describe("repair rules on deserialize", () => {
           createdAt: 2,
           activeTabId: null,
           position: 1,
+          theme: null,
         },
       ],
       tabs: [baseTab({ id: "tInS2", spaceId: "s2" })],
@@ -252,6 +256,7 @@ describe("repair rules on deserialize", () => {
           createdAt: 1,
           activeTabId: null,
           position: 0,
+          theme: null,
         },
       ],
       tabs: [baseTab({ id: "tArch", archivedAt: 5 })],
@@ -274,6 +279,7 @@ describe("repair rules on deserialize", () => {
           createdAt: 1,
           activeTabId: null,
           position: 0,
+          theme: null,
         },
         {
           id: "sSecond",
@@ -282,6 +288,7 @@ describe("repair rules on deserialize", () => {
           createdAt: 2,
           activeTabId: null,
           position: 1,
+          theme: null,
         },
       ],
       tabs: [],
@@ -301,6 +308,7 @@ describe("repair rules on deserialize", () => {
           createdAt: 1,
           activeTabId: null,
           position: 0,
+          theme: null,
         },
         {
           id: "sSecond",
@@ -309,6 +317,7 @@ describe("repair rules on deserialize", () => {
           createdAt: 2,
           activeTabId: null,
           position: 1,
+          theme: null,
         },
       ],
       tabs: [],
@@ -318,8 +327,8 @@ describe("repair rules on deserialize", () => {
 });
 
 describe("SCHEMA_VERSION", () => {
-  test("is 13", () => {
-    expect(SCHEMA_VERSION).toBe(13);
+  test("is 14", () => {
+    expect(SCHEMA_VERSION).toBe(14);
   });
 });
 
@@ -338,15 +347,16 @@ describe("migrationAction", () => {
     expect(migrationAction(10)).toBe("migrate");
     expect(migrationAction(11)).toBe("migrate");
     expect(migrationAction(12)).toBe("migrate");
-    expect(migrationAction(13)).toBe("noop");
-    expect(migrationAction(14)).toBe("abort");
+    expect(migrationAction(13)).toBe("migrate");
+    expect(migrationAction(14)).toBe("noop");
+    expect(migrationAction(15)).toBe("abort");
   });
 });
 
 describe("version guard", () => {
   test("deserialize of a newer schema version throws UnsupportedSchemaVersionError", () => {
     const state: PersistedState = {
-      meta: { schemaVersion: 14, activeSpaceId: null },
+      meta: { schemaVersion: 15, activeSpaceId: null },
       profiles: [{ id: "default", name: "Default", createdAt: 1, position: 0 }],
       spaces: [],
       tabs: [],

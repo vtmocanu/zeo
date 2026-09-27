@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { SpaceStore } from "./space-store.js";
+import { SpaceStore, deserializeStore } from "./space-store.js";
 
 /**
  * Builds a store with deterministic id and clock factories, SHARED across every
@@ -105,6 +105,97 @@ describe("SpaceStore.createSpace", () => {
     expect(() => store.createSpace("")).toThrow(/blank/);
     expect(() => store.createSpace("   ")).toThrow(/blank/);
     expect(store.spaces()).toHaveLength(1);
+  });
+});
+
+describe("SpaceStore space themes", () => {
+  test("the seed space is iris; the next three creates are rose, teal, amber", () => {
+    const store = makeStore();
+    const seed = store.spaces()[0];
+    expect(seed.theme).toEqual({ stops: ["iris"], intensity: 1 });
+
+    const a = store.createSpace("A");
+    const b = store.createSpace("B");
+    const c = store.createSpace("C");
+    expect(a.theme).toEqual({ stops: ["rose"], intensity: 1 });
+    expect(b.theme).toEqual({ stops: ["teal"], intensity: 1 });
+    expect(c.theme).toEqual({ stops: ["amber"], intensity: 1 });
+  });
+
+  test("after deleting one of four spaces the next create is MIGRATION_HUE_ORDER[3]", () => {
+    const store = makeStore();
+    const b = store.createSpace("B");
+    store.createSpace("C");
+    store.createSpace("D");
+    // Four spaces exist (Personal, B, C, D); delete one, leaving three.
+    store.deleteSpace(b.id);
+    const e = store.createSpace("E");
+    // this.order.length was 3 at creation time -> MIGRATION_HUE_ORDER[3] = "amber".
+    expect(e.theme).toEqual({ stops: ["amber"], intensity: 1 });
+  });
+
+  test("setSpaceTheme with an unknown id throws and changes nothing", () => {
+    const store = makeStore();
+    const before = store.spaces();
+    expect(() => store.setSpaceTheme("ghost", null)).toThrow(/Unknown space: ghost/);
+    expect(store.spaces()).toEqual(before);
+  });
+
+  test("spaceTheme on an unknown id throws", () => {
+    const store = makeStore();
+    expect(() => store.spaceTheme("ghost")).toThrow(/Unknown space: ghost/);
+  });
+
+  test("mutating store.spaceTheme(id)!.stops leaves the store unchanged", () => {
+    const store = makeStore();
+    const id = store.activeSpaceId;
+    const theme = store.spaceTheme(id);
+    (theme as { stops: string[] }).stops[0] = "teal";
+    expect(store.spaceTheme(id)).toEqual({ stops: ["iris"], intensity: 1 });
+  });
+
+  test("mutating store.createSpace(...).theme!.stops leaves the store unchanged", () => {
+    const store = makeStore();
+    const work = store.createSpace("Work");
+    (work.theme as { stops: string[] }).stops[0] = "teal";
+    expect(store.spaceTheme(work.id)).toEqual({ stops: ["rose"], intensity: 1 });
+  });
+
+  test("setSpaceTheme with an invalid theme throws and changes nothing", () => {
+    const store = makeStore();
+    const id = store.activeSpaceId;
+    const before = store.spaceTheme(id);
+    expect(() =>
+      store.setSpaceTheme(id, { stops: ["notahue"] as unknown as ["iris"], intensity: 1 }),
+    ).toThrow(/Invalid space theme/);
+    expect(store.spaceTheme(id)).toEqual(before);
+  });
+
+  test("setSpaceTheme accepts null", () => {
+    const store = makeStore();
+    const id = store.activeSpaceId;
+    store.setSpaceTheme(id, null);
+    expect(store.spaceTheme(id)).toBeNull();
+  });
+
+  test("mutating spaces()[0].theme.stops leaves the store unchanged", () => {
+    const store = makeStore();
+    const spaces = store.spaces();
+    (spaces[0].theme as { stops: string[] }).stops[0] = "teal";
+    expect(store.spaces()[0].theme).toEqual({ stops: ["iris"], intensity: 1 });
+  });
+
+  test("toPersisted writes JSON text; fromPersisted decodes, clamps, and maps garbage to null", () => {
+    const store = makeStore();
+    const id = store.activeSpaceId;
+    store.setSpaceTheme(id, { stops: ["teal"], intensity: 3 });
+    const persisted = store.toPersisted();
+    const row = persisted.spaces.find((s) => s.id === id)!;
+    expect(row.theme).toBe(JSON.stringify({ stops: ["teal"], intensity: 1 }));
+
+    const garbage = { ...persisted, spaces: persisted.spaces.map((s) => ({ ...s, theme: "garbage" })) };
+    const restored = deserializeStore(garbage);
+    expect(restored.spaceTheme(id)).toBeNull();
   });
 });
 

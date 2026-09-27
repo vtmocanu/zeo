@@ -57,7 +57,8 @@ export type CommandId =
   | "view.focusOtherPane"
   | "view.swapPanes"
   | "update.check"
-  | "view.toggleSidebar";
+  | "view.toggleSidebar"
+  | "space.editTheme";
 
 /**
  * One registry entry: its {@link CommandId}, human title, search `keywords`,
@@ -164,6 +165,7 @@ export const COMMANDS: readonly CommandDescriptor[] = [
   { id: "view.swapPanes", title: "Swap Panes", keywords: ["swap", "panes", "split", "exchange", "sides"], accelerator: "CmdOrCtrl+Alt+S", menu: "view" },
   { id: "update.check", title: "Check for Updates", keywords: ["update", "upgrade", "version", "release"], accelerator: null, menu: "view" },
   { id: "view.toggleSidebar", title: "Toggle Sidebar", keywords: ["sidebar", "toggle", "hide", "show", "collapse"], accelerator: "CmdOrCtrl+S", menu: "view" },
+  { id: "space.editTheme", title: "Edit Space Theme…", keywords: ["theme", "color", "colour", "tint", "space", "gradient"], accelerator: null, menu: "spaces" },
 ];
 
 /**
@@ -172,7 +174,7 @@ export const COMMANDS: readonly CommandDescriptor[] = [
  * `bar.open-commands`, `blocking.toggle`, `settings.open`, `history.open`,
  * `history.clear`, `settings.openGeneral`, `settings.openProfiles`,
  * `settings.openHistory`, `downloads.open`, `downloads.openFolder`,
- * `update.check`, `view.toggleSidebar`.
+ * `update.check`, `view.toggleSidebar`, `space.editTheme`.
  * `downloads.clearFinished` needs at least one finished download
  * (`hasFinishedDownload`). Every other
  * `tab.*` needs an active tab — `tab.copy-url`, `tab.moveToTop`,
@@ -212,6 +214,7 @@ export function isCommandEnabled(id: CommandId, context: CommandContext): boolea
     case "downloads.openFolder":
     case "update.check":
     case "view.toggleSidebar":
+    case "space.editTheme":
       return true;
     case "downloads.clearFinished":
       return context.hasFinishedDownload;

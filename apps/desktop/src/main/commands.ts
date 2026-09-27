@@ -28,6 +28,7 @@ import { openFindSession, findNext, findPrevious, closeFindSession } from "./fin
 import { teardownQuickBrowse, setAsDefaultBrowser } from "./quick-browse.js";
 import { doSplit, doUnsplit, doFocusOther, doSwap } from "./layout.js";
 import { toggleSidebarChrome } from "./chrome.js";
+import { openSpaceThemeEditor } from "./theme-editor.js";
 import { downloadsDir, logDownloadError } from "./downloads.js";
 import { checkForUpdates } from "./update.js";
 import { clearFinishedDownloadsSequenced } from "./download-ops.js";
@@ -118,6 +119,7 @@ const commandHandlers: Record<CommandId, () => void> = {
       action: "rename",
       spaceId: runtime.store.activeSpaceId,
     }),
+  "space.editTheme": () => openSpaceThemeEditor(runtime.store.activeSpaceId),
   "space.delete": () => deleteSpace(runtime.store.activeSpaceId),
   "bar.open-location": () => openCommandBar("navigate"),
   "bar.open-commands": () => {

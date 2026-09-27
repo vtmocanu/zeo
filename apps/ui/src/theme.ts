@@ -1,6 +1,6 @@
-import { useLayoutEffect, useEffect, useState } from "react";
-import type { Appearance, SpaceTheme } from "@zeo/core";
-import { themeTokens } from "@zeo/core";
+import { useLayoutEffect, useEffect, useRef, useState } from "react";
+import type { Appearance, SpaceTheme, TabsState } from "@zeo/core";
+import { activeSpaceTheme, themeTokens, themesEqual } from "@zeo/core";
 
 /**
  * Applies every semantic token returned by `themeTokens(theme, appearance)` to
@@ -47,14 +47,79 @@ export function useAppearance(): Appearance {
   return appearance;
 }
 
+/** What `useThemeTokens` last applied to the DOM. */
+export interface AppliedTheme {
+  theme: SpaceTheme | null;
+  appearance: Appearance;
+}
+
+/**
+ * Whether `next` needs applying given the last-applied `AppliedTheme` (`null`
+ * before anything has been applied). `activeSpaceTheme` (the caller's usual
+ * source) returns a fresh object on every state broadcast even when nothing
+ * changed, so this compares by VALUE (`themesEqual`) and appearance, not by
+ * object identity.
+ */
+export function themeApplyIsRedundant(
+  applied: AppliedTheme | null,
+  next: AppliedTheme,
+): boolean {
+  return (
+    applied !== null &&
+    applied.appearance === next.appearance &&
+    themesEqual(applied.theme, next.theme)
+  );
+}
+
 /**
  * Applies `theme`'s tokens to `document.documentElement` in a layout effect,
- * whenever `theme` or the OS appearance changes.
+ * whenever `theme` or the OS appearance changes, skipping the DOM write when
+ * `themeApplyIsRedundant` says the last applied theme/appearance already
+ * match — without altering the effect's timing (it still runs on every
+ * `theme`/`appearance` change; it just no-ops the write when redundant).
  */
 export function useThemeTokens(theme: SpaceTheme | null): void {
   const appearance = useAppearance();
+  const appliedRef = useRef<AppliedTheme | null>(null);
 
   useLayoutEffect(() => {
+    const next: AppliedTheme = { theme, appearance };
+    if (themeApplyIsRedundant(appliedRef.current, next)) {
+      return;
+    }
+    appliedRef.current = next;
     applyThemeTokens(document.documentElement, theme, appearance);
   }, [theme, appearance]);
+}
+
+/**
+ * The active space's theme for a surface that keeps no {@link TabsState} of its
+ * own (the overlay): mirrors state broadcasts, seeded from `tabs.list()` unless
+ * a broadcast already arrived, and yields `null` until either lands or without
+ * the bridge (a bare browser dev-open).
+ */
+export function useActiveSpaceTheme(): SpaceTheme | null {
+  const [state, setState] = useState<TabsState | null>(null);
+
+  useEffect(() => {
+    if (!window.zeo) {
+      return;
+    }
+    let sawBroadcast = false;
+    const unsubscribe = window.zeo.onStateChange((s) => {
+      sawBroadcast = true;
+      setState(s);
+    });
+    void window.zeo.tabs
+      .list()
+      .then((s) => {
+        if (!sawBroadcast) {
+          setState(s);
+        }
+      })
+      .catch(() => {});
+    return unsubscribe;
+  }, []);
+
+  return activeSpaceTheme(state);
 }

@@ -25,6 +25,7 @@ import {
   searchEngine,
   clampRatio,
   SINGLE_LAYOUT,
+  MIGRATION_HUE_ORDER,
 } from "@zeo/core";
 import type {
   PersistedState,
@@ -96,6 +97,19 @@ const WINDOW_STATE_CHROME_DDL =
   "ALTER TABLE window_state ADD COLUMN sidebarWidth INTEGER NOT NULL DEFAULT 240;" +
   "ALTER TABLE window_state ADD COLUMN sidebarCollapsed INTEGER NOT NULL DEFAULT 0;";
 
+/**
+ * Schema version 14 (PRD 10.3): adds the nullable `theme` column to `spaces`
+ * and backfills every existing row from {@link MIGRATION_HUE_ORDER} by its
+ * rank in `position` order (ties broken by `id`), repeating past the tenth.
+ */
+const SPACE_THEME_MIGRATION =
+  "ALTER TABLE spaces ADD COLUMN theme TEXT;" +
+  "UPDATE spaces SET theme = json_object('stops', json_array(json_extract('" +
+  JSON.stringify(MIGRATION_HUE_ORDER) + "', '$[' || ((SELECT COUNT(*) FROM spaces AS prior " +
+  "WHERE prior.position < spaces.position OR (prior.position = spaces.position AND prior.id < spaces.id)) % " +
+  MIGRATION_HUE_ORDER.length + ") || ']')), 'intensity', 1);" +
+  "UPDATE meta SET schemaVersion = 14 WHERE id = 0;";
+
 const DDL = `
 CREATE TABLE profiles (
   id TEXT PRIMARY KEY, name TEXT NOT NULL, createdAt INTEGER NOT NULL, position INTEGER NOT NULL
@@ -103,7 +117,7 @@ CREATE TABLE profiles (
 CREATE TABLE spaces (
   id TEXT PRIMARY KEY, name TEXT NOT NULL,
   profileId TEXT NOT NULL REFERENCES profiles(id) ON DELETE RESTRICT,
-  createdAt INTEGER NOT NULL, activeTabId TEXT, position INTEGER NOT NULL
+  createdAt INTEGER NOT NULL, activeTabId TEXT, position INTEGER NOT NULL, theme TEXT
 );
 CREATE TABLE tabs (
   id TEXT PRIMARY KEY,
@@ -196,6 +210,7 @@ const MIGRATION_STEPS: Record<number, string> = {
     "ALTER TABLE meta ADD COLUMN updateDismissedVersion TEXT;" +
     "ALTER TABLE meta ADD COLUMN updateLastCheckedAt INTEGER;" + "UPDATE meta SET schemaVersion = 12 WHERE id = 0;",
   13: WINDOW_STATE_CHROME_DDL + "UPDATE meta SET schemaVersion = 13 WHERE id = 0;",
+  14: SPACE_THEME_MIGRATION,
 };
 
 /** The module-level database handle, `null` until {@link loadStore} opens it. */
@@ -1012,7 +1027,7 @@ function readState(database: DatabaseType): PersistedState {
     .all() as ProfileRow[];
   const spaces = database
     .prepare(
-      "SELECT id, name, profileId, createdAt, activeTabId, position FROM spaces ORDER BY position",
+      "SELECT id, name, profileId, createdAt, activeTabId, position, theme FROM spaces ORDER BY position",
     )
     .all() as SpaceRow[];
   const tabRows = database
@@ -1045,10 +1060,11 @@ function writeState(database: DatabaseType, state: PersistedState): void {
       "ON CONFLICT(id) DO UPDATE SET name=excluded.name, createdAt=excluded.createdAt, position=excluded.position",
   );
   const upsertSpace = database.prepare(
-    "INSERT INTO spaces(id,name,profileId,createdAt,activeTabId,position) " +
-      "VALUES (@id,@name,@profileId,@createdAt,@activeTabId,@position) " +
+    "INSERT INTO spaces(id,name,profileId,createdAt,activeTabId,position,theme) " +
+      "VALUES (@id,@name,@profileId,@createdAt,@activeTabId,@position,@theme) " +
       "ON CONFLICT(id) DO UPDATE SET name=excluded.name, profileId=excluded.profileId, " +
-      "createdAt=excluded.createdAt, activeTabId=excluded.activeTabId, position=excluded.position",
+      "createdAt=excluded.createdAt, activeTabId=excluded.activeTabId, position=excluded.position, " +
+      "theme=excluded.theme",
   );
   const upsertTab = database.prepare(
     "INSERT INTO tabs(id,spaceId,url,title,faviconUrl,createdAt,pinned,lastActiveAt,archivedAt,position) " +

@@ -15,7 +15,8 @@ vi.mock("electron", () => ({
   },
 }));
 
-import { HISTORY_RETENTION_MS } from "@zeo/core";
+import { HISTORY_RETENTION_MS, MIGRATION_HUE_ORDER } from "@zeo/core";
+import type { SpaceTheme } from "@zeo/core";
 import {
   migrate,
   loadStore,
@@ -183,11 +184,15 @@ const V12_DDL =
   "ALTER TABLE meta ADD COLUMN updateDismissedVersion TEXT;" +
   "ALTER TABLE meta ADD COLUMN updateLastCheckedAt INTEGER;";
 
-/** The current (schema v13) DDL: v12 plus the two window_state chrome columns. */
+/** The schema v13 DDL: v12 plus the two window_state chrome columns. A
+ *  historical fixture predating the spaces.theme column. */
 const V13_DDL =
   V12_DDL +
   "ALTER TABLE window_state ADD COLUMN sidebarWidth INTEGER NOT NULL DEFAULT 240;" +
   "ALTER TABLE window_state ADD COLUMN sidebarCollapsed INTEGER NOT NULL DEFAULT 0;";
+
+/** The current (schema v14) DDL: v13 plus the spaces.theme column. */
+const V14_DDL = V13_DDL + "ALTER TABLE spaces ADD COLUMN theme TEXT;";
 
 /** True when the `history_visits` table exists in the database. */
 function hasHistoryTable(db: Database.Database): boolean {
@@ -227,6 +232,12 @@ function hasChromeColumns(db: Database.Database): boolean {
   const cols = db.prepare("PRAGMA table_info(window_state)").all() as { name: string }[];
   const names = new Set(cols.map((c) => c.name));
   return names.has("sidebarWidth") && names.has("sidebarCollapsed");
+}
+
+/** True when the `spaces` table has the `theme` column (schema v14). */
+function hasSpacesThemeColumn(db: Database.Database): boolean {
+  const cols = db.prepare("PRAGMA table_info(spaces)").all() as { name: string }[];
+  return cols.some((c) => c.name === "theme");
 }
 
 /** True when the `meta` table has all five window-layout columns. */
@@ -346,7 +357,7 @@ describe("migrate", () => {
       searchEngine: string;
       quickBrowseExternal: number;
     };
-    expect(meta.schemaVersion).toBe(13);
+    expect(meta.schemaVersion).toBe(14);
     expect(hasEnabledColumn(db)).toBe(true);
     expect(hasAllowlistTable(db)).toBe(true);
     expect(meta.enabled).toBe(1);
@@ -394,7 +405,7 @@ describe("migrate", () => {
       enabled: number;
       quickBrowseExternal: number;
     };
-    expect(meta.schemaVersion).toBe(13);
+    expect(meta.schemaVersion).toBe(14);
     expect(hasAllowlistTable(db)).toBe(true);
     expect(hasHistoryTable(db)).toBe(true);
     expect(hasSearchEngineColumn(db)).toBe(true);
@@ -449,7 +460,7 @@ describe("migrate", () => {
       enabled: number;
       quickBrowseExternal: number;
     };
-    expect(meta.schemaVersion).toBe(13);
+    expect(meta.schemaVersion).toBe(14);
     expect(hasHistoryTable(db)).toBe(true);
     expect(hasSearchEngineColumn(db)).toBe(true);
     expect(hasSiteZoomTable(db)).toBe(true);
@@ -496,7 +507,7 @@ describe("migrate", () => {
       searchEngine: string;
       quickBrowseExternal: number;
     };
-    expect(meta.schemaVersion).toBe(13);
+    expect(meta.schemaVersion).toBe(14);
     expect(hasSearchEngineColumn(db)).toBe(true);
     // The new column defaults to duckduckgo on the existing row.
     expect(meta.searchEngine).toBe("duckduckgo");
@@ -544,7 +555,7 @@ describe("migrate", () => {
       searchEngine: string;
       quickBrowseExternal: number;
     };
-    expect(meta.schemaVersion).toBe(13);
+    expect(meta.schemaVersion).toBe(14);
     expect(hasSiteZoomTable(db)).toBe(true);
     expect(hasLayoutColumns(db)).toBe(true);
     expect(hasDownloadsTable(db)).toBe(true);
@@ -604,7 +615,7 @@ describe("migrate", () => {
       layoutRatio: number;
       layoutFocused: string;
     };
-    expect(meta.schemaVersion).toBe(13);
+    expect(meta.schemaVersion).toBe(14);
     // The downloads table is present and empty.
     expect(hasDownloadsTable(db)).toBe(true);
     const downloadCount = db
@@ -674,7 +685,7 @@ describe("migrate", () => {
       layoutRatio: number;
       layoutFocused: string;
     };
-    expect(meta.schemaVersion).toBe(13);
+    expect(meta.schemaVersion).toBe(14);
     // The window_state table is present.
     expect(hasWindowStateTable(db)).toBe(true);
     // The quick-browse toggle column is added and defaults to 1 (ON).
@@ -744,7 +755,7 @@ describe("migrate", () => {
       layoutRatio: number;
       layoutFocused: string;
     };
-    expect(meta.schemaVersion).toBe(13);
+    expect(meta.schemaVersion).toBe(14);
     // Step 11 adds the window_state table.
     expect(hasWindowStateTable(db)).toBe(true);
     // Step 9 adds the quick-browse toggle column, defaulting to 1 (ON).
@@ -787,7 +798,7 @@ describe("migrate", () => {
       layoutFocused: string;
       defaultSessionMigratedAt: number | null;
     };
-    expect(meta.schemaVersion).toBe(13);
+    expect(meta.schemaVersion).toBe(14);
     expect(hasEnabledColumn(db)).toBe(true);
     expect(hasAllowlistTable(db)).toBe(true);
     expect(meta.enabled).toBe(1);
@@ -821,6 +832,8 @@ describe("migrate", () => {
     expect(
       db.prepare("SELECT sidebarWidth, sidebarCollapsed FROM window_state WHERE id=0").get(),
     ).toBeUndefined();
+    // The spaces.theme column (schema v14) exists on a fresh install.
+    expect(hasSpacesThemeColumn(db)).toBe(true);
     db.close();
   });
 
@@ -857,7 +870,7 @@ describe("migrate", () => {
       layoutFocused: string;
       defaultSessionMigratedAt: number | null;
     };
-    expect(meta.schemaVersion).toBe(13);
+    expect(meta.schemaVersion).toBe(14);
     // The window_state table is present after the upgrade.
     expect(hasWindowStateTable(db)).toBe(true);
     // The new column exists and, for an UPGRADED database, reads null (unmigrated).
@@ -896,7 +909,7 @@ describe("migrate", () => {
     const meta = db
       .prepare("SELECT schemaVersion, activeSpaceId FROM meta WHERE id=0")
       .get() as { schemaVersion: number; activeSpaceId: string };
-    expect(meta.schemaVersion).toBe(13);
+    expect(meta.schemaVersion).toBe(14);
     // The window_state table is created and starts EMPTY (no seed row).
     expect(hasWindowStateTable(db)).toBe(true);
     const windowStateCount = db
@@ -933,7 +946,7 @@ describe("migrate", () => {
       updateDismissedVersion: string | null;
       updateLastCheckedAt: number | null;
     };
-    expect(meta.schemaVersion).toBe(13);
+    expect(meta.schemaVersion).toBe(14);
     // The updateCheckEnabled column defaults to 1 (on); the two nullable
     // columns default to null (never dismissed, never checked).
     expect(meta.updateCheckEnabled).toBe(1);
@@ -947,10 +960,107 @@ describe("migrate", () => {
     db.close();
   });
 
-  test("is a no-op on a database already at the current version (v13) with non-default layout values, quickBrowseExternal, updateCheckEnabled, and a set default-session marker, leaving the site_zoom and downloads rows untouched", () => {
-    const path = join(tempDir, "v13.db");
+  test("upgrades a v13 database to the current version (v14), backfilling spaces.theme by position rank from MIGRATION_HUE_ORDER, repeating past the tenth", () => {
+    const path = join(tempDir, "v13-to-v14.db");
     const db = new Database(path);
     db.exec(V13_DDL);
+    db.prepare(
+      "INSERT INTO meta(id,schemaVersion,activeSpaceId) VALUES (0, 13, 'space-r0')",
+    ).run();
+    db.prepare(
+      "INSERT INTO profiles(id,name,createdAt,position) VALUES ('p1','Personal',1,0)",
+    ).run();
+
+    // Twelve spaces at positions 0, 1, 2, 4, 5 … 12 (a gap at 3, tolerated by the
+    // migration's rank subquery), inserted in an order that matches neither
+    // position nor id, so ORDER BY position — not insertion or id order — must
+    // drive the backfill.
+    const positions = [0, 1, 2, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+    const insertSpace = db.prepare(
+      "INSERT INTO spaces(id,name,profileId,createdAt,activeTabId,position) VALUES (?, ?, 'p1', 1, NULL, ?)",
+    );
+    const insertionOrder = [7, 2, 10, 0, 5, 11, 3, 8, 1, 9, 4, 6];
+    for (const rank of insertionOrder) {
+      insertSpace.run(`space-r${rank}`, `Space ${rank}`, positions[rank]);
+    }
+
+    migrate(db);
+
+    const meta = db.prepare("SELECT schemaVersion FROM meta WHERE id=0").get() as {
+      schemaVersion: number;
+    };
+    expect(meta.schemaVersion).toBe(14);
+
+    const rows = db
+      .prepare("SELECT id, theme FROM spaces ORDER BY position")
+      .all() as { id: string; theme: string }[];
+    expect(rows).toHaveLength(12);
+    rows.forEach((row, rank) => {
+      expect(row.id).toBe(`space-r${rank}`);
+      expect(JSON.parse(row.theme)).toEqual({
+        stops: [MIGRATION_HUE_ORDER[rank % 10]],
+        intensity: 1,
+      });
+    });
+    // The eleventh and twelfth ranks (index 10, 11) repeat iris and rose.
+    expect(JSON.parse(rows[10].theme)).toEqual({ stops: ["iris"], intensity: 1 });
+    expect(JSON.parse(rows[11].theme)).toEqual({ stops: ["rose"], intensity: 1 });
+    db.close();
+  });
+
+  test("v13->v14 backfill breaks equal-position ties by id, not insertion order", () => {
+    const path = join(tempDir, "v13-to-v14-ties.db");
+    const db = new Database(path);
+    db.exec(V13_DDL);
+    db.prepare(
+      "INSERT INTO meta(id,schemaVersion,activeSpaceId) VALUES (0, 13, 'space-z')",
+    ).run();
+    db.prepare(
+      "INSERT INTO profiles(id,name,createdAt,position) VALUES ('p1','Personal',1,0)",
+    ).run();
+
+    // Three spaces all sharing position 0: the tie-break must rank them by id
+    // ascending ("space-a" < "space-b" < "space-z"), regardless of insertion
+    // order, which here is deliberately z, a, b.
+    const insertSpace = db.prepare(
+      "INSERT INTO spaces(id,name,profileId,createdAt,activeTabId,position) VALUES (?, ?, 'p1', 1, NULL, ?)",
+    );
+    insertSpace.run("space-z", "Z", 0);
+    insertSpace.run("space-a", "A", 0);
+    insertSpace.run("space-b", "B", 0);
+
+    migrate(db);
+
+    const rows = db
+      .prepare("SELECT id, theme FROM spaces ORDER BY id")
+      .all() as { id: string; theme: string }[];
+    // Rank 0 (space-a) -> MIGRATION_HUE_ORDER[0], rank 1 (space-b) -> [1],
+    // rank 2 (space-z) -> [2]. The backfill's rank subquery (db.ts) breaks a
+    // position tie by `prior.id < spaces.id`; drop just that conjunct and
+    // each tied row counts every tied row (itself included), so all three
+    // collapse onto the SAME later hue instead. Drop the whole `OR (...)`
+    // branch instead and a position tie counts 0 prior rows for every tied
+    // row, so all three collapse onto the same EARLIER hue instead. Either
+    // mutation fails this assertion.
+    expect(JSON.parse(rows.find((r) => r.id === "space-a")!.theme)).toEqual({
+      stops: [MIGRATION_HUE_ORDER[0]],
+      intensity: 1,
+    });
+    expect(JSON.parse(rows.find((r) => r.id === "space-b")!.theme)).toEqual({
+      stops: [MIGRATION_HUE_ORDER[1]],
+      intensity: 1,
+    });
+    expect(JSON.parse(rows.find((r) => r.id === "space-z")!.theme)).toEqual({
+      stops: [MIGRATION_HUE_ORDER[2]],
+      intensity: 1,
+    });
+    db.close();
+  });
+
+  test("is a no-op on a database already at the current version (v14) with non-default layout values, quickBrowseExternal, updateCheckEnabled, and a set default-session marker, leaving the site_zoom and downloads rows untouched", () => {
+    const path = join(tempDir, "v14.db");
+    const db = new Database(path);
+    db.exec(V14_DDL);
     // Seed enabled=0, a non-default searchEngine, NON-default layout values,
     // quickBrowseExternal=0, updateCheckEnabled=0 with a dismissed version and a
     // set last-checked time, and a NON-null default-session marker so a spurious
@@ -959,7 +1069,7 @@ describe("migrate", () => {
     // non-default chrome columns) so a re-create would be observable.
     db.prepare(
       "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled,searchEngine,layoutMode,layoutLeftTabId,layoutRightTabId,layoutRatio,layoutFocused,quickBrowseExternal,defaultSessionMigratedAt,updateCheckEnabled,updateDismissedVersion,updateLastCheckedAt) " +
-        "VALUES (0, 13, 'space-10', 0, 'google', 'split', 'tL', 'tR', 0.35, 'right', 0, 12345, 0, '9.9.9', 55555)",
+        "VALUES (0, 14, 'space-10', 0, 'google', 'split', 'tL', 'tR', 0.35, 'right', 0, 12345, 0, '9.9.9', 55555)",
     ).run();
     db.prepare(
       "INSERT INTO site_zoom(host,factor,updatedAt) VALUES ('example.com', 1.5, 42)",
@@ -994,7 +1104,7 @@ describe("migrate", () => {
       updateDismissedVersion: string | null;
       updateLastCheckedAt: number | null;
     };
-    expect(meta.schemaVersion).toBe(13);
+    expect(meta.schemaVersion).toBe(14);
     expect(meta.activeSpaceId).toBe("space-10");
     expect(meta.enabled).toBe(0);
     expect(meta.searchEngine).toBe("google");
@@ -1363,7 +1473,7 @@ describe("readChromePrefs / writeChromePrefs", () => {
     const meta = inspect.prepare("SELECT schemaVersion FROM meta WHERE id=0").get() as {
       schemaVersion: number;
     };
-    expect(meta.schemaVersion).toBe(13);
+    expect(meta.schemaVersion).toBe(14);
     inspect.close();
   });
 });
@@ -1392,7 +1502,7 @@ describe("readBlockingEnabled / writeBlockingEnabled", () => {
     const meta = inspect
       .prepare("SELECT schemaVersion, activeSpaceId, enabled FROM meta WHERE id=0")
       .get() as { schemaVersion: number; activeSpaceId: string; enabled: number };
-    expect(meta.schemaVersion).toBe(13);
+    expect(meta.schemaVersion).toBe(14);
     expect(meta.activeSpaceId).toBe("space-x");
     expect(meta.enabled).toBe(0);
     inspect.close();
@@ -2084,5 +2194,42 @@ describe("downloads helpers", () => {
     // writeState covers profiles/spaces/tabs/meta only; download rows are intact
     // and unchanged (newest first by startedAt: d1 then d2).
     expect(listDownloads()).toEqual([d1, d2]);
+  });
+
+  test("setSpaceTheme round-trips a gradient theme and a null theme across a debounced save and reopen", () => {
+    // Hand-build a seeded current (v14) database with two spaces so loadStore
+    // returns a real store with both to mutate.
+    const path = join(tempDir, "zeo.db");
+    const seed = new Database(path);
+    seed.exec(V14_DDL);
+    seed.prepare(
+      "INSERT INTO meta(id,schemaVersion,activeSpaceId) VALUES (0, 14, 'space-a')",
+    ).run();
+    seed.prepare(
+      "INSERT INTO profiles(id,name,createdAt,position) VALUES ('p1','Personal',1,0)",
+    ).run();
+    seed.prepare(
+      "INSERT INTO spaces(id,name,profileId,createdAt,activeTabId,position,theme) " +
+        "VALUES ('space-a','A','p1',1,NULL,0,NULL), " +
+        "('space-b','B','p1',2,NULL,1,'{\"stops\":[\"rose\"],\"intensity\":1}')",
+    ).run();
+    seed.close();
+
+    let store = loadStore();
+    expect(store).not.toBeNull();
+
+    const gradient: SpaceTheme = { stops: ["teal", "amber"], intensity: 0.6 };
+    store!.setSpaceTheme("space-a", gradient);
+    store!.setSpaceTheme("space-b", null);
+
+    scheduleSave(store!);
+    flush(store!);
+    closeDb();
+
+    store = loadStore();
+    expect(store).not.toBeNull();
+    const spaces = store!.spaces();
+    expect(spaces.find((s) => s.id === "space-a")!.theme).toEqual(gradient);
+    expect(spaces.find((s) => s.id === "space-b")!.theme).toBeNull();
   });
 });

@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "vitest";
 import { SEMANTIC_TOKENS, themeTokens, type Appearance, type SpaceTheme } from "@zeo/core";
-import { applyThemeTokens } from "./theme.js";
+import { applyThemeTokens, themeApplyIsRedundant } from "./theme.js";
 
 /** A minimal fake root: just enough surface for applyThemeTokens to touch. */
 function fakeRoot(): { style: { setProperty(name: string, value: string): void }; dataset: DOMStringMap; properties: Record<string, string> } {
@@ -43,6 +43,38 @@ describe("applyThemeTokens", () => {
       expect(root.properties[token]).toBe(expected[token]);
     }
     expect(root.dataset.appearance).toBe("dark");
+  });
+});
+
+describe("themeApplyIsRedundant", () => {
+  test("nothing applied yet is never redundant", () => {
+    expect(themeApplyIsRedundant(null, { theme: null, appearance: "light" })).toBe(false);
+  });
+
+  test("an equal-by-value theme (a fresh object) in the same appearance is redundant", () => {
+    const applied = { theme: { stops: ["teal"], intensity: 0.5 } as SpaceTheme, appearance: "light" as const };
+    const next = { theme: { stops: ["teal"], intensity: 0.5 } as SpaceTheme, appearance: "light" as const };
+    expect(applied.theme).not.toBe(next.theme);
+    expect(themeApplyIsRedundant(applied, next)).toBe(true);
+  });
+
+  test("a changed appearance is never redundant, even with an equal theme", () => {
+    const theme: SpaceTheme = { stops: ["teal"], intensity: 0.5 };
+    expect(
+      themeApplyIsRedundant({ theme, appearance: "light" }, { theme, appearance: "dark" }),
+    ).toBe(false);
+  });
+
+  test("a theme that differs by value is never redundant", () => {
+    const applied = { theme: { stops: ["teal"], intensity: 0.5 } as SpaceTheme, appearance: "light" as const };
+    const next = { theme: { stops: ["teal"], intensity: 1 } as SpaceTheme, appearance: "light" as const };
+    expect(themeApplyIsRedundant(applied, next)).toBe(false);
+  });
+
+  test("null theme to null theme in the same appearance is redundant", () => {
+    expect(
+      themeApplyIsRedundant({ theme: null, appearance: "dark" }, { theme: null, appearance: "dark" }),
+    ).toBe(true);
   });
 });
 
