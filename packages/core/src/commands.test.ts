@@ -57,6 +57,7 @@ const ALL_IDS: CommandId[] = [
   "view.swapPanes",
   "update.check",
   "view.toggleSidebar",
+  "space.editTheme",
 ];
 
 /**
@@ -569,13 +570,13 @@ describe("isCommandEnabled — no active tab yields exactly the expected set", (
 
   test("with one space: only the always-enabled commands", () => {
     expect(enabledIds(context({ activeTab: null, spaceCount: 1 }))).toEqual(
-      ["bar.open-commands", "bar.open-location", "blocking.toggle", "browser.setDefault", "downloads.open", "downloads.openFolder", "history.clear", "history.open", "settings.open", "settings.openGeneral", "settings.openHistory", "settings.openProfiles", "space.new", "space.rename", "tab.new", "update.check", "view.toggleSidebar"].sort(),
+      ["bar.open-commands", "bar.open-location", "blocking.toggle", "browser.setDefault", "downloads.open", "downloads.openFolder", "history.clear", "history.open", "settings.open", "settings.openGeneral", "settings.openHistory", "settings.openProfiles", "space.editTheme", "space.new", "space.rename", "tab.new", "update.check", "view.toggleSidebar"].sort(),
     );
   });
 
   test("with more than one space: the always-enabled commands plus space.delete", () => {
     expect(enabledIds(context({ activeTab: null, spaceCount: 2 }))).toEqual(
-      ["bar.open-commands", "bar.open-location", "blocking.toggle", "browser.setDefault", "downloads.open", "downloads.openFolder", "history.clear", "history.open", "settings.open", "settings.openGeneral", "settings.openHistory", "settings.openProfiles", "space.delete", "space.new", "space.rename", "tab.new", "update.check", "view.toggleSidebar"].sort(),
+      ["bar.open-commands", "bar.open-location", "blocking.toggle", "browser.setDefault", "downloads.open", "downloads.openFolder", "history.clear", "history.open", "settings.open", "settings.openGeneral", "settings.openHistory", "settings.openProfiles", "space.delete", "space.editTheme", "space.new", "space.rename", "tab.new", "update.check", "view.toggleSidebar"].sort(),
     );
   });
 });

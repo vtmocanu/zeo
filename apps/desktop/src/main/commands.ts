@@ -119,6 +119,18 @@ const commandHandlers: Record<CommandId, () => void> = {
       spaceId: runtime.store.activeSpaceId,
     }),
   "space.delete": () => deleteSpace(runtime.store.activeSpaceId),
+  "space.editTheme": () => {
+    // closeCommandBar FIRST: run from Cmd+K, the bar's own close (on the send
+    // below reaching the renderer) would otherwise steal focus back to the
+    // page view after we focus the window. closeCommandBar is a no-op when
+    // the bar is already closed, so this is safe outside the command bar too.
+    closeCommandBar();
+    runtime.win?.webContents.send(IPC.spaceMenuAction, {
+      action: "edit-theme",
+      spaceId: runtime.store.activeSpaceId,
+    });
+    runtime.win?.webContents.focus();
+  },
   "bar.open-location": () => openCommandBar("navigate"),
   "bar.open-commands": () => {
     if (runtime.commandBar.open && runtime.commandBar.mode === "commands") {

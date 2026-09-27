@@ -1,3 +1,5 @@
+import type { SpaceTheme } from "./theme.js";
+
 /**
  * A named workspace in the Zeo domain model. Each space owns its own tab set
  * (an independent {@link TabStore}) and references a profile.
@@ -16,4 +18,5 @@ export interface Space {
    */
   profileId: string;
   createdAt: number;
+  theme: SpaceTheme | null;
 }

@@ -4,7 +4,7 @@ import type { Space } from "./space.js";
 
 /** Builds a minimal Space literal with just the fields defaultSpaceName reads. */
 function space(name: string): Space {
-  return { id: name, name, profileId: "default", createdAt: 0 };
+  return { id: name, name, profileId: "default", createdAt: 0, theme: null };
 }
 
 describe("defaultSpaceName", () => {

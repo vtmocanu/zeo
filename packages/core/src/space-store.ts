@@ -5,6 +5,13 @@ import type { Profile } from "./profile.js";
 import type { StoreSnapshot, SpacesState } from "./ipc.js";
 import { SCHEMA_VERSION, UnsupportedSchemaVersionError } from "./persistence.js";
 import type { PersistedState, TabRow } from "./persistence.js";
+import {
+  cloneTheme,
+  decodeSpaceTheme,
+  defaultSpaceTheme,
+  encodeSpaceTheme,
+} from "./space-theme.js";
+import { normalizeTheme, type SpaceTheme } from "./theme.js";
 
 export interface SpaceStoreOptions {
   idFactory?: () => string;
@@ -113,13 +120,14 @@ export class SpaceStore {
       name,
       profileId,
       createdAt: this.now(),
+      theme: defaultSpaceTheme(this.order.length),
     };
     this.spacesById.set(space.id, {
       space,
       tabs: new TabStore({ idFactory: this.idFactory, now: this.now }),
     });
     this.order.push(space.id);
-    return { ...space };
+    return { ...space, theme: cloneTheme(space.theme) };
   }
 
   /** Looks up a space record, throwing on an unknown id. */
@@ -320,7 +328,10 @@ export class SpaceStore {
 
   /** The spaces in creation order, as defensive copies. */
   spaces(): Space[] {
-    return this.order.map((id) => ({ ...this.spacesById.get(id)!.space }));
+    return this.order.map((id) => {
+      const space = this.spacesById.get(id)!.space;
+      return { ...space, theme: cloneTheme(space.theme) };
+    });
   }
 
   get activeSpaceId(): string {
@@ -329,7 +340,31 @@ export class SpaceStore {
 
   /** The active space, as a defensive copy. */
   get activeSpace(): Space {
-    return { ...this.spacesById.get(this.activeId)!.space };
+    const space = this.spacesById.get(this.activeId)!.space;
+    return { ...space, theme: cloneTheme(space.theme) };
+  }
+
+  /** The active space's theme, or `null` for a null theme. Throws on an unknown id. */
+  spaceTheme(id: string): SpaceTheme | null {
+    return cloneTheme(this.require(id).space.theme);
+  }
+
+  /**
+   * Sets `id`'s theme, throwing `Unknown space: <id>` on an unknown id and
+   * `Invalid space theme` when a non-null theme fails {@link normalizeTheme}.
+   * Stores the normalized value.
+   */
+  setSpaceTheme(id: string, theme: SpaceTheme | null): void {
+    const record = this.require(id);
+    if (theme === null) {
+      record.space.theme = null;
+      return;
+    }
+    const normalized = normalizeTheme(theme);
+    if (normalized === null) {
+      throw new Error("Invalid space theme");
+    }
+    record.space.theme = normalized;
   }
 
   // --- Delegated tab operations --------------------------------------------
@@ -635,6 +670,7 @@ export class SpaceStore {
         createdAt: record.space.createdAt,
         activeTabId: record.tabs.activeTabId,
         position,
+        theme: encodeSpaceTheme(record.space.theme),
       };
     });
 
@@ -721,6 +757,7 @@ export class SpaceStore {
         name: row.name,
         profileId: row.profileId,
         createdAt: row.createdAt,
+        theme: decodeSpaceTheme(row.theme),
       };
       const spaceTabs = state.tabs
         .filter((tab) => tab.spaceId === row.id)

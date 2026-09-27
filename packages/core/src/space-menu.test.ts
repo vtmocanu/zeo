@@ -52,8 +52,22 @@ describe("buildSpaceContextMenu", () => {
     expect(submenu[2]).toEqual({ id: "new-profile", label: "New profile…", enabled: true });
   });
 
-  test("orders items rename, delete, profile", () => {
+  test("orders items rename, edit-theme, delete, profile", () => {
     const result = buildSpaceContextMenu(input({ tabCount: 1 }));
-    expect(result.items.map((i) => i.id)).toEqual(["rename", "delete", "profile"]);
+    expect(result.items.map((i) => i.id)).toEqual(["rename", "edit-theme", "delete", "profile"]);
+  });
+
+  test("orders items rename, edit-theme, profile for the last remaining space", () => {
+    const result = buildSpaceContextMenu(input({ canDelete: false }));
+    expect(result.items.map((i) => i.id)).toEqual(["rename", "edit-theme", "profile"]);
+  });
+
+  test("labels the edit-theme item 'Edit Theme…'", () => {
+    const result = buildSpaceContextMenu(input());
+    expect(result.items.find((i) => i.id === "edit-theme")).toEqual({
+      id: "edit-theme",
+      label: "Edit Theme…",
+      enabled: true,
+    });
   });
 });

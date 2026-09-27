@@ -13,6 +13,7 @@ import type { QuickBrowse } from "./quick-browse.js";
 import type { PaneSide, WindowLayout } from "./split-view.js";
 import type { UpdateState } from "./update.js";
 import type { ChromeState } from "./chrome.js";
+import type { SpaceTheme } from "./theme.js";
 
 /**
  * A single space's tab payload, in the pre-space shape. This is what
@@ -166,10 +167,12 @@ export interface SpaceContextMenuResult {
 /** A menu action the MAIN process pushes to the renderer over IPC.spaceMenuAction
  *  when a native space-menu item needs renderer-side inline editing: "rename" opens
  *  inline rename of the space; "new-profile" opens an inline new-profile-name prompt
- *  for the space. (Delete and profile-assignment dispatch entirely in main.) */
+ *  for the space; "edit-theme" opens the theme picker for the space. (Delete and
+ *  profile-assignment dispatch entirely in main.) */
 export type SpaceMenuAction =
   | { action: "rename"; spaceId: string }
-  | { action: "new-profile"; spaceId: string };
+  | { action: "new-profile"; spaceId: string }
+  | { action: "edit-theme"; spaceId: string };
 
 /**
  * Commands the renderer invokes over IPC. The main process handles each of
@@ -220,6 +223,12 @@ export interface SpacesApi {
   delete(id: string): Promise<void>;
   activate(id: string): Promise<void>;
   setProfile(spaceId: string, profileId: string): Promise<void>;
+  /**
+   * Sets `id`'s theme (`null` clears it). Validates through `normalizeTheme`;
+   * a non-null theme that fails to normalize rejects without changing
+   * anything. A theme equal to the current one does not rebroadcast.
+   */
+  setTheme(id: string, theme: SpaceTheme | null): Promise<void>;
   list(): Promise<SpacesState>;
   /**
    * Builds (and, outside test mode, pops) the native space context menu for `id`
@@ -587,6 +596,7 @@ export const IPC = {
   spacesActivate: "zeo:spaces:activate",
   spacesList: "zeo:spaces:list",
   spacesSetProfile: "zeo:spaces:set-profile",
+  spacesSetTheme: "zeo:spaces:set-theme",
   spacesContextMenu: "zeo:spaces:context-menu",
   spaceMenuAction: "zeo:spaces:menu-action",
   profilesCreate: "zeo:profiles:create",

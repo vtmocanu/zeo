@@ -49,6 +49,8 @@ export interface SpaceRow {
   createdAt: number;
   activeTabId: string | null;
   position: number;
+  /** The space's theme, as the JSON text `encodeSpaceTheme`/`decodeSpaceTheme` (in `space-theme.ts`) read and write. */
+  theme: string | null;
 }
 
 /**

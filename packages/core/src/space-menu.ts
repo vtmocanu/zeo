@@ -16,12 +16,15 @@ export interface SpaceContextMenuInput {
 }
 
 /** Builds the serializable descriptor for a space's native context menu: Rename,
- *  an optional Delete (omitted for the last remaining space, labelled with the tab
- *  count when the space owns any), and a Profile submenu listing every profile —
- *  the current one checked — followed by a "New profile…" entry. Pure and
+ *  Edit Theme…, an optional Delete (omitted for the last remaining space, labelled
+ *  with the tab count when the space owns any), and a Profile submenu listing every
+ *  profile — the current one checked — followed by a "New profile…" entry. Pure and
  *  electron-free so the main process can pop it and a headless test can assert it. */
 export function buildSpaceContextMenu(input: SpaceContextMenuInput): SpaceContextMenuResult {
-  const items: SpaceContextMenuItem[] = [{ id: "rename", label: "Rename", enabled: true }];
+  const items: SpaceContextMenuItem[] = [
+    { id: "rename", label: "Rename", enabled: true },
+    { id: "edit-theme", label: "Edit Theme…", enabled: true },
+  ];
   if (input.canDelete) {
     items.push({
       id: "delete",

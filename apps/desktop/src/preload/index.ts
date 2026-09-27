@@ -21,6 +21,7 @@ import type {
   SpaceContextMenuResult,
   SpaceMenuAction,
   SpacesState,
+  SpaceTheme,
   Tab,
   TabContextMenuResult,
   TabsState,
@@ -60,6 +61,8 @@ const api = {
     activate: (id: string): Promise<void> => ipcRenderer.invoke(IPC.spacesActivate, id),
     setProfile: (spaceId: string, profileId: string): Promise<void> =>
       ipcRenderer.invoke(IPC.spacesSetProfile, spaceId, profileId),
+    setTheme: (id: string, theme: SpaceTheme | null): Promise<void> =>
+      ipcRenderer.invoke(IPC.spacesSetTheme, id, theme),
     list: (): Promise<SpacesState> => ipcRenderer.invoke(IPC.spacesList),
     showContextMenu: (id: string, x: number, y: number): Promise<SpaceContextMenuResult> =>
       ipcRenderer.invoke(IPC.spacesContextMenu, id, x, y),
