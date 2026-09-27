@@ -769,8 +769,9 @@ test.describe("PRD 10.6 find pill", () => {
     );
     expect(onLeft.x).toBeLessThan(after.x);
   });
-  // PRD 10.6 §4 relies on "focus-pane changes already close find through
-  // setActive", so the pill never outlives the card it belongs to. Pin it.
+  // PRD 10.6 §4: a pane-focus change closes find (applyLayout's split branch
+  // closes a session bound to a tab that is no longer active), so the pill never
+  // outlives the card it belongs to. Pin it.
   test("focusing the other split pane closes an open find session", async () => {
     const left = await createTab(sidebar, "data:text/html,ZEOPILL_FOCUS_LEFT");
     const right = await createTab(sidebar, "data:text/html,ZEOPILL_FOCUS_RIGHT");

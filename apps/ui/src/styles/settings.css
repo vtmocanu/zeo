@@ -72,7 +72,8 @@
   background: var(--popover-hover);
 }
 
-/* Doubled class so the selection fill outranks :hover on the selected row. */
+/* Doubled class, and after :hover in source order, so the selection fill wins
+   over :hover on the selected row (both are specificity 0,2,0). */
 .settings__section-item.settings__section-item--active,
 .settings__section-item.settings__section-item--selected {
   background: var(--accent-soft);

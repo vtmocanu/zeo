@@ -1267,7 +1267,7 @@ test.describe("PRD 10.6 settings sheet", () => {
           return zeo.find.open();
         })
         .catch(() => undefined);
-      await new Promise((resolve) => setTimeout(resolve, 300));
+      // openFindSession is synchronous in main, so the state is final here.
       expect(await findOpen()).toBe(false);
       expect(await settingsOpen(sidebar)).toBe(true);
     } finally {

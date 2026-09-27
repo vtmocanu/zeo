@@ -98,6 +98,7 @@ export function applyLayout(): void {
     }
     return;
   }
+  closeFindOffActiveTab();
   // Split: materialize each pane's view if it has none yet (mirroring
   // ensureActiveView's lazy create), then lay both panes + the divider out.
   const paneIds: readonly [string, string] = [layout.left, layout.right];
@@ -411,7 +412,6 @@ export function doFocusPane(pane: PaneSide): void {
     runtime.store.list().map((t) => t.id),
     runtime.store.activeTabId,
   );
-  closeFindOffActiveTab();
   persistLayout();
   applyLayout();
   broadcast();
@@ -431,17 +431,17 @@ export function doFocusOther(): void {
   if (focusedTabId !== null) {
     runtime.store.activate(focusedTabId);
   }
-  closeFindOffActiveTab();
   persistLayout();
   applyLayout();
   broadcast();
 }
 
 /**
- * A find session never follows a pane-focus change: the pane-focus paths
- * activate the other pane's tab without going through `setActive` (views.ts),
- * so close an open session bound to a tab that is no longer active here, as
- * `setActive` does for every other tab change.
+ * A find session never follows a tab change. In single mode `setActive`
+ * (views.ts) enforces that; the split branch of {@link applyLayout} never
+ * reaches `setActive`, so every split-mode tab change (pane focus, a sidebar
+ * click on a pane tab, `tabs.activate` of the other pane) closes an open
+ * session bound to a tab that is no longer active here.
  */
 function closeFindOffActiveTab(): void {
   if (runtime.find.open && runtime.find.tabId !== runtime.store.activeTabId) {

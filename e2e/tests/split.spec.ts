@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { waitForViewUrl, VIEW_POLL_TIMEOUT_MS } from "./helpers/view";
 // PRD 10.6 — the card geometry the sidebar draws (the same formula main uses for
 // the pane views) and the token probe the focus-ring check compares against.
-import { windowCardRects } from "@zeo/core";
+import { DIVIDER_WIDTH, windowCardRects } from "@zeo/core";
 import type { ChromeState, Rect, WindowLayout } from "@zeo/core";
 import { tokenBackground } from "./helpers/token";
 
@@ -828,7 +828,7 @@ test.describe("PRD 10.6 split cards and divider", () => {
       await expect(handle).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
       await expect(handle).toHaveCSS("cursor", "col-resize");
 
-      await expect.poll(async () => (await handle.boundingBox())?.width).toBe(8);
+      await expect.poll(async () => (await handle.boundingBox())?.width).toBe(DIVIDER_WIDTH);
       const grip = await divider.locator(".divider-handle__grip").boundingBox();
       expect(grip === null ? null : { width: grip.width, height: grip.height }).toEqual({
         width: 4,

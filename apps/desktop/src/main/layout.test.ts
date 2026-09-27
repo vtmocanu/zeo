@@ -39,16 +39,22 @@ vi.mock("./overlay.js", () => ({
 }));
 
 import { runtime } from "./state.js";
-import { applyLayout } from "./layout.js";
+import { applyLayout, doFocusPane } from "./layout.js";
 
 describe("applyLayout", () => {
   const originalWin = runtime.win;
   const originalFind = runtime.find;
 
   const originalLayout = runtime.layout;
+  const originalCloseFind = runtime.closeFindSession;
+  const closeFind = vi.fn(() => {
+    runtime.find = { ...runtime.find, open: false };
+  });
 
   beforeEach(() => {
     h.layoutOverlay.mockClear();
+    closeFind.mockClear();
+    runtime.closeFindSession = closeFind;
     runtime.win = {
       getContentSize: () => [1000, 700],
       contentView: { addChildView: () => {} },
@@ -59,7 +65,17 @@ describe("applyLayout", () => {
     runtime.win = originalWin;
     runtime.find = originalFind;
     runtime.layout = originalLayout;
+    runtime.closeFindSession = originalCloseFind;
   });
+
+  /** Two fresh tabs in a split focused on `focused`, with that pane's tab active. */
+  function split(focused: "left" | "right"): { left: string; right: string } {
+    const left = runtime.store.create({ url: "https://left.test", title: "Left" }).id;
+    const right = runtime.store.create({ url: "https://right.test", title: "Right" }).id;
+    runtime.store.activate(focused === "left" ? left : right);
+    runtime.layout = { mode: "split", left, right, ratio: 0.5, focused };
+    return { left, right };
+  }
 
   test("re-lays out an open find overlay in single mode", () => {
     runtime.find = { ...runtime.find, open: true };
@@ -78,19 +94,32 @@ describe("applyLayout", () => {
   });
 
   test("re-lays out an open find overlay in split mode", () => {
-    const left = runtime.store.create({ url: "https://left.test", title: "Left" });
-    const right = runtime.store.create({ url: "https://right.test", title: "Right" });
-    runtime.layout = {
-      mode: "split",
-      left: left.id,
-      right: right.id,
-      ratio: 0.5,
-      focused: "left",
-    };
-    runtime.find = { ...runtime.find, open: true };
+    const { left } = split("left");
+    runtime.find = { ...runtime.find, open: true, tabId: left };
 
     applyLayout();
 
+    expect(closeFind).not.toHaveBeenCalled();
     expect(h.layoutOverlay).toHaveBeenCalledTimes(1);
+  });
+
+  test("closes a split-mode find bound to a tab that is no longer active", () => {
+    const { left } = split("right");
+    runtime.find = { ...runtime.find, open: true, tabId: left };
+
+    applyLayout();
+
+    expect(closeFind).toHaveBeenCalledTimes(1);
+    expect(h.layoutOverlay).not.toHaveBeenCalled();
+  });
+
+  test("doFocusPane closes find bound to the pane losing focus", () => {
+    const { left } = split("left");
+    runtime.find = { ...runtime.find, open: true, tabId: left };
+
+    doFocusPane("right");
+
+    expect(closeFind).toHaveBeenCalledTimes(1);
+    expect(runtime.find.open).toBe(false);
   });
 });
