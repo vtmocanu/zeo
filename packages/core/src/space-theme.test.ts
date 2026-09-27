@@ -197,12 +197,16 @@ describe("pickerSetKind", () => {
     expect(result).toEqual({ stops: ["iris"], intensity: 1 });
   });
 
-  test("same kind is a no-op on stops", () => {
-    const solid = pickerSetKind({ stops: ["teal"], intensity: 1 }, "solid");
+  test("same kind is a no-op on stops, but still returns a fresh stops array", () => {
+    const solidInput: SpaceTheme = { stops: ["teal"], intensity: 1 };
+    const solid = pickerSetKind(solidInput, "solid");
     expect(solid.stops).toEqual(["teal"]);
+    expect(solid.stops).not.toBe(solidInput.stops);
 
-    const gradient = pickerSetKind({ stops: ["teal", "violet"], intensity: 1 }, "gradient");
+    const gradientInput: SpaceTheme = { stops: ["teal", "violet"], intensity: 1 };
+    const gradient = pickerSetKind(gradientInput, "gradient");
     expect(gradient.stops).toEqual(["teal", "violet"]);
+    expect(gradient.stops).not.toBe(gradientInput.stops);
   });
 });
 
@@ -229,5 +233,11 @@ describe("pickerSetIntensity", () => {
 
   test("a non-finite percent leaves the draft's intensity unchanged", () => {
     expect(pickerSetIntensity({ stops: ["iris"], intensity: 0.65 }, NaN).intensity).toBe(0.65);
+  });
+
+  test("always returns a fresh stops array, distinct from the input's", () => {
+    const input: SpaceTheme = { stops: ["iris"], intensity: 1 };
+    expect(pickerSetIntensity(input, 47).stops).not.toBe(input.stops);
+    expect(pickerSetIntensity(input, NaN).stops).not.toBe(input.stops);
   });
 });

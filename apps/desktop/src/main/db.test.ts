@@ -1102,6 +1102,45 @@ describe("migrate", () => {
     expect(meta.schemaVersion).toBe(14);
     db.close();
   });
+
+  test("v13 to v14: same-position spaces rank by id, not insertion order (§3 prior.id < spaces.id)", () => {
+    const path = join(tempDir, "v13-to-v14-position-ties.db");
+    const db = new Database(path);
+    migrate(db);
+    db.exec("ALTER TABLE spaces DROP COLUMN theme;");
+    db.prepare("UPDATE meta SET schemaVersion = 13 WHERE id = 0").run();
+
+    db.prepare(
+      "INSERT INTO profiles(id,name,createdAt,position) VALUES ('p1','Personal',1,0)",
+    ).run();
+
+    // Three spaces at position 0 (a real-world tie), inserted in reverse id
+    // order so insertion order cannot be mistaken for the id-based tiebreak.
+    // A fourth space at position 1 confirms ranking resumes correctly after
+    // the tied group.
+    const insertSpace = db.prepare(
+      "INSERT INTO spaces(id,name,profileId,createdAt,activeTabId,position) VALUES (?, ?, 'p1', 1, NULL, ?)",
+    );
+    insertSpace.run("space-c", "Space C", 0);
+    insertSpace.run("space-b", "Space B", 0);
+    insertSpace.run("space-a", "Space A", 0);
+    insertSpace.run("space-d", "Space D", 1);
+
+    migrate(db);
+
+    const rows = db
+      .prepare("SELECT id, position, theme FROM spaces ORDER BY position, id")
+      .all() as { id: string; position: number; theme: string }[];
+    expect(rows.map((r) => r.id)).toEqual(["space-a", "space-b", "space-c", "space-d"]);
+    // Ties at position 0 rank by id ascending (a, b, c), then space-d follows.
+    rows.forEach((row, i) => {
+      expect(JSON.parse(row.theme)).toEqual({
+        stops: [MIGRATION_HUE_ORDER[i % MIGRATION_HUE_ORDER.length]],
+        intensity: 1,
+      });
+    });
+    db.close();
+  });
 });
 
 describe("readAllowlist / insertAllowlistHost / deleteAllowlistHost", () => {

@@ -130,9 +130,18 @@ describe("ThemePicker markup", () => {
       expect(tag).toContain(`title="${HUE_DEFINITIONS[hue].label}"`);
       expect(tag).toContain(`--swatch:${hueSwatchColor(hue)}`);
     });
-    // Roving tab stop on the pressed swatch.
-    expect(swatches.filter((tag) => tag.includes('tabindex="0"'))).toHaveLength(1);
-    expect(swatches[0]).toContain('tabindex="0"');
+  });
+
+  test("roving tab stop lands on the pressed swatch, not just index 0", () => {
+    // iris is index 0, the same as the no-selection fallback: use amber
+    // instead so the assertion can't pass by accident.
+    const html = render({ stops: ["amber"], intensity: 1 });
+    const swatches = [...html.matchAll(/<button[^>]*data-testid="theme-swatch"[^>]*>/g)].map(
+      (m) => m[0],
+    );
+    const withTabStop = swatches.filter((tag) => tag.includes('tabindex="0"'));
+    expect(withTabStop).toHaveLength(1);
+    expect(withTabStop[0]).toContain('data-hue="amber"');
   });
 
   test.each<SpaceTheme | null>([
@@ -209,7 +218,7 @@ describe("draft sync", () => {
   const t = (intensity: number): SpaceTheme => ({ stops: ["teal"], intensity });
 
   test("starts from the space theme with nothing pending", () => {
-    expect(initialDraftSync(t(1))).toEqual({ draft: t(1), pending: [] });
+    expect(initialDraftSync(t(1))).toEqual({ draft: t(1), pending: [], base: t(1) });
   });
 
   test("stale echoes during a drag never move the draft back", () => {
@@ -226,17 +235,64 @@ describe("draft sync", () => {
     sync = draftBroadcast(sync, t(0.8));
     expect(sync.pending).toEqual([t(0.8), t(0.7)]);
     sync = draftBroadcast(sync, t(0.7));
-    expect(sync).toEqual({ draft: t(0.7), pending: [t(0.7)] });
+    expect(sync).toEqual({ draft: t(0.7), pending: [t(0.7)], base: t(0.7) });
     // A repeat of the final echo still changes nothing.
     expect(draftBroadcast(sync, t(0.7))).toBe(sync);
+  });
+
+  test("a stale broadcast of the pre-drag base is ignored while sends are pending", () => {
+    // main queued a broadcast of the old stored theme (t(1)) before it saw
+    // our first send; it lands after we've already sent two more values.
+    // Gradient example from the review: sent [teal, violet], stale echo of
+    // the old solid teal theme arrives, then the user picks a new hue.
+    const solidTeal: SpaceTheme = { stops: ["teal"], intensity: 1 };
+    const gradTealViolet: SpaceTheme = { stops: ["teal", "violet"], intensity: 1 };
+    const gradTealAmber: SpaceTheme = { stops: ["teal", "amber"], intensity: 1 };
+    let sync = initialDraftSync(solidTeal);
+    sync = draftSent(sync, gradTealViolet);
+    sync = draftSent(sync, gradTealAmber);
+    // Stale broadcast of the base arrives: must not replace the draft.
+    sync = draftBroadcast(sync, solidTeal);
+    expect(sync.draft).toEqual(gradTealAmber);
+    expect(sync.pending).toEqual([gradTealViolet, gradTealAmber]);
+    expect(sync.base).toEqual(solidTeal);
+  });
+
+  test("a matching echo drops older pending entries and advances base", () => {
+    let sync = initialDraftSync(t(1));
+    sync = draftSent(sync, t(0.9));
+    sync = draftSent(sync, t(0.8));
+    sync = draftBroadcast(sync, t(0.8));
+    expect(sync.pending).toEqual([t(0.8)]);
+    // Main has confirmed 0.8, so it can no longer re-send anything from
+    // before it: base advances past the pre-drag value.
+    expect(sync.base).toEqual(t(0.8));
+    expect(sync.draft).toEqual(t(0.8));
   });
 
   test("an outside change replaces the draft and clears pending", () => {
     let sync = draftSent(initialDraftSync(t(1)), t(0.5));
     sync = draftBroadcast(sync, { stops: ["rose", "amber"], intensity: 1 });
-    expect(sync).toEqual({ draft: { stops: ["rose", "amber"], intensity: 1 }, pending: [] });
+    expect(sync).toEqual({
+      draft: { stops: ["rose", "amber"], intensity: 1 },
+      pending: [],
+      base: { stops: ["rose", "amber"], intensity: 1 },
+    });
     sync = draftBroadcast(sync, null);
-    expect(sync).toEqual({ draft: null, pending: [] });
+    expect(sync).toEqual({ draft: null, pending: [], base: null });
+  });
+
+  test("after every echo settles, a later base-equal broadcast is an ordinary outside change", () => {
+    let sync = initialDraftSync(t(1));
+    sync = draftSent(sync, t(0.9));
+    // The one pending send is confirmed: base advances to it.
+    sync = draftBroadcast(sync, t(0.9));
+    expect(sync).toEqual({ draft: t(0.9), pending: [t(0.9)], base: t(0.9) });
+    // A broadcast equal to the *old* base (t(1)) is no longer special: main
+    // can no longer be behind that value, so it's an ordinary external
+    // change (e.g. someone reverted the theme) and replaces the draft.
+    sync = draftBroadcast(sync, t(1));
+    expect(sync).toEqual({ draft: t(1), pending: [], base: t(1) });
   });
 
   test("an unchanged broadcast with nothing pending keeps the same object", () => {

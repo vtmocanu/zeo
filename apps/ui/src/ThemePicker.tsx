@@ -39,38 +39,62 @@ export interface ThemePickerProps {
  * back yet. Live apply means a slider drag sends many values in a row; each
  * broadcast carries one of them, lagging the pointer. A broadcast equal to any
  * pending value is our own echo and must not move the draft back.
+ *
+ * `base` is the theme that was in effect just before the first pending send:
+ * a broadcast still carrying it while sends are pending is a stale broadcast
+ * that main queued before it saw our send (not yet processed), not an outside
+ * change, and must be ignored too. Once every pending send has been echoed,
+ * `base` stops mattering: a later broadcast equal to it is a real outside
+ * change (e.g. someone edited the theme back to what it was) and replaces the
+ * draft like any other.
  */
 export interface DraftSync {
   draft: SpaceTheme | null;
   pending: SpaceTheme[];
+  base: SpaceTheme | null;
 }
 
 export function initialDraftSync(theme: SpaceTheme | null): DraftSync {
-  return { draft: theme, pending: [] };
+  return { draft: theme, pending: [], base: theme };
 }
 
 /** The picker sent `next`: it becomes the draft and waits for its echo. */
 export function draftSent(sync: DraftSync, next: SpaceTheme): DraftSync {
-  return { draft: next, pending: [...sync.pending, next] };
+  const base = sync.pending.length === 0 ? sync.draft : sync.base;
+  return { draft: next, pending: [...sync.pending, next], base };
 }
 
 /**
  * A broadcast carried `incoming` for the edited space. Our own echo is
  * ignored; entries sent before it are dropped, but the echoed value itself
  * stays pending, since every later unrelated broadcast (a tab change) repeats
- * it until main processes the next send. Anything else is an outside change
- * and replaces the draft.
+ * it until main processes the next send. While sends are pending, a broadcast
+ * equal to `base` is stale (queued before our first send landed) and is
+ * ignored the same way. A broadcast that confirms a send moves `base` up to
+ * that value, since main cannot go on to re-send anything older; once every
+ * send has been confirmed this way, an old-`base` broadcast is no longer
+ * possible from main and a later one equal to it is a genuine outside change.
+ * Anything else is an outside change and replaces the draft.
  */
 export function draftBroadcast(sync: DraftSync, incoming: SpaceTheme | null): DraftSync {
   const index =
     incoming === null ? -1 : sync.pending.findIndex((sent) => themesEqual(sent, incoming));
-  if (index >= 0) {
-    return index === 0 ? sync : { draft: sync.draft, pending: sync.pending.slice(index) };
+  if (index > 0) {
+    return { draft: sync.draft, pending: sync.pending.slice(index), base: incoming };
+  }
+  if (index === 0) {
+    if (sync.pending.length === 1 && !themesEqual(sync.base, incoming)) {
+      return { draft: sync.draft, pending: sync.pending, base: incoming };
+    }
+    return sync;
+  }
+  if (sync.pending.length > 0 && themesEqual(sync.base, incoming)) {
+    return sync;
   }
   if (sync.pending.length === 0 && themesEqual(sync.draft, incoming)) {
     return sync;
   }
-  return { draft: incoming, pending: [] };
+  return { draft: incoming, pending: [], base: incoming };
 }
 
 /** Background for a contrast chip: the window ground, or both grounds as a gradient. */

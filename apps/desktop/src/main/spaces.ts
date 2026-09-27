@@ -151,9 +151,9 @@ export function setSpaceTheme(id: unknown, theme: unknown): void {
  * native menu for it. Mirrors {@link showTabContextMenu}: an unknown id returns
  * an empty descriptor (and skips the throwing store reads), the descriptor is
  * built purely by core's `buildSpaceContextMenu`, and the returned descriptor is
- * the assertable seam. The native popup is dispatched by stable item id — rename
- * and new-profile push a `spaceMenuAction` to the renderer for inline editing,
- * delete and profile-assignment resolve entirely in main.
+ * the assertable seam. The native popup is dispatched by stable item id — rename,
+ * new-profile and edit-theme push a `spaceMenuAction` to the renderer for inline
+ * editing, delete and profile-assignment resolve entirely in main.
  */
 export function showSpaceContextMenu(id: string, x: number, y: number): SpaceContextMenuResult {
   if (!runtime.store.spaces().some((s) => s.id === id)) {
