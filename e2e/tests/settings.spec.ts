@@ -668,8 +668,9 @@ test.describe("PRD 6.5 settings sections + search engine (offline)", () => {
       await expect(settings.getByTestId("settings-history-retention")).toContainText("90 days");
       // Stats reflect the two seeded entries/visits (read on the section's mount,
       // so poll the rendered text).
-      await expect(settings.getByTestId("settings-history-stats")).toContainText("2 entries");
-      await expect(settings.getByTestId("settings-history-stats")).toContainText("2 visits");
+      await expect(settings.getByTestId("settings-history-stats")).toHaveText(
+        historyStatsLabel(2, 2),
+      );
 
       // A single click of Clear does NOT clear — it only reveals the confirm step.
       await settings.getByTestId("settings-history-clear").click();
@@ -683,8 +684,9 @@ test.describe("PRD 6.5 settings sections + search engine (offline)", () => {
           message: "expected history.stats() to report zero after confirm",
         })
         .toEqual({ entries: 0, visits: 0 });
-      await expect(settings.getByTestId("settings-history-stats")).toContainText("0 entries");
-      await expect(settings.getByTestId("settings-history-stats")).toContainText("0 visits");
+      await expect(settings.getByTestId("settings-history-stats")).toHaveText(
+        historyStatsLabel(0, 0),
+      );
     } finally {
       await app.close();
       await server.close();
@@ -705,7 +707,9 @@ test.describe("PRD 6.5 settings sections + search engine (offline)", () => {
       await navigateAndRecord(sidebar, tabId, `${server.base}/a.html`, 1);
 
       let settings = await openSettings(app, sidebar, "settings.openHistory");
-      await expect(settings.getByTestId("settings-history-stats")).toContainText("1 entries");
+      await expect(settings.getByTestId("settings-history-stats")).toHaveText(
+        historyStatsLabel(1, 1),
+      );
       await settings.getByTestId("settings-history-clear").click();
       const dialog = settings.getByTestId("settings-history-clear-dialog");
       await expect(dialog).toBeVisible();
@@ -723,8 +727,9 @@ test.describe("PRD 6.5 settings sections + search engine (offline)", () => {
       settings = await openSettings(app, sidebar, "settings.openHistory");
       // The dialog is not already open on reopen.
       await expect(settings.getByTestId("settings-history-clear-dialog")).toHaveCount(0);
-      await expect(settings.getByTestId("settings-history-stats")).toContainText("2 entries");
-      await expect(settings.getByTestId("settings-history-stats")).toContainText("2 visits");
+      await expect(settings.getByTestId("settings-history-stats")).toHaveText(
+        historyStatsLabel(2, 2),
+      );
 
       await settings.getByTestId("settings-history-clear").click();
       const reopenedDialog = settings.getByTestId("settings-history-clear-dialog");
@@ -771,14 +776,20 @@ test.describe("PRD 6.5 settings sections + search engine (offline)", () => {
       await expect(dialog).not.toContainText("entries");
 
       // Replace the clear handler with one that counts invocations and rejects
-      // after a delay, so an in-flight double confirm is observable.
+      // only once the test releases it (via __zeoReleaseHistoryClear), so the
+      // disabled-Confirm assertion below has no timing dependence on a fixed
+      // delay racing the test.
       await app.evaluate(({ ipcMain }) => {
-        (globalThis as unknown as { __zeoHistoryClearCalls: number }).__zeoHistoryClearCalls = 0;
+        const g = globalThis as unknown as {
+          __zeoHistoryClearCalls: number;
+          __zeoReleaseHistoryClear?: () => void;
+        };
+        g.__zeoHistoryClearCalls = 0;
         ipcMain.removeHandler("zeo:history:clear");
         ipcMain.handle("zeo:history:clear", () => {
-          (globalThis as unknown as { __zeoHistoryClearCalls: number }).__zeoHistoryClearCalls += 1;
+          g.__zeoHistoryClearCalls += 1;
           return new Promise((_resolve, reject) => {
-            setTimeout(() => reject(new Error("clear failed")), 300);
+            g.__zeoReleaseHistoryClear = () => reject(new Error("clear failed"));
           });
         });
       });
@@ -791,6 +802,11 @@ test.describe("PRD 6.5 settings sections + search engine (offline)", () => {
           () => (globalThis as unknown as { __zeoHistoryClearCalls: number }).__zeoHistoryClearCalls,
         ),
       ).toBe(1);
+
+      // Release the pending clear so it rejects.
+      await app.evaluate(() => {
+        (globalThis as unknown as { __zeoReleaseHistoryClear?: () => void }).__zeoReleaseHistoryClear?.();
+      });
 
       const error = settings.getByTestId("settings-history-clear-dialog-error");
       await expect(error).toBeVisible();
@@ -866,6 +882,15 @@ function historyStats(sidebar: Page): Promise<{ entries: number; visits: number 
     const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
     return zeo.history.stats();
   });
+}
+
+/**
+ * The exact "loaded" rendering of the settings history stats row, mirroring
+ * `historyStatsText`'s `"loaded"` branch (apps/ui/src/history-clear.ts), so
+ * tests can assert the full text rather than a substring.
+ */
+function historyStatsLabel(entries: number, visits: number): string {
+  return `${entries} entries · ${visits} visits`;
 }
 
 /** Navigate a tab over the sidebar bridge (records synchronously in did-navigate). */

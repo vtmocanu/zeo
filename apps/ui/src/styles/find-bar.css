@@ -1,8 +1,10 @@
 /* Find pill (PRD 10.6 §4, design book §6 Find bar) ---------------------------
 
    The find surface of the overlay WebContentsView. Main sizes the view to the
-   pill grown by FIND_BAR_SHADOW_MARGIN on every side (findBarBounds), 8px
-   inside the top-right of the active card. The frame is transparent and pads
+   pill grown by FIND_BAR_SHADOW_MARGIN on every side (findBarBounds): normally
+   8px inside the top-right of the active card, but when the card is narrower
+   than FIND_PILL_MIN_WIDTH the pill is extended leftward past the card and
+   clamped inside the page region instead. The frame is transparent and pads
    by that margin (inline, from the core constant) so --shadow-popover has room;
    the pill fills the frame's width at FIND_BAR_HEIGHT (inline). */
 .find-bar-frame {

@@ -4,13 +4,22 @@ import { contentRect, type ChromeState, type Rect } from "./chrome.js";
 /** Delay before a single click on a space row activates it, so a double-click can cancel it. */
 export const SPACE_ACTIVATE_DELAY_MS = 250;
 
-/** Fixed width of the find pill, before clamping to its anchor card ({@link findPillRect}). */
+/**
+ * Fixed width of the find pill. Normally it sits at this width in its card's
+ * top-right corner; when the card is narrower than {@link
+ * FIND_PILL_MIN_WIDTH}, {@link findPillRect} extends it leftward and clamps
+ * it inside the page region instead.
+ */
 export const FIND_BAR_WIDTH = 360;
 
 /** Fixed height of the find pill. */
 export const FIND_BAR_HEIGHT = 38;
 
-/** Inset the find pill keeps from the top and right (and, when clamped, left) edges of its card. */
+/**
+ * Inset the find pill keeps from the top and right edges of its card. Also
+ * the inset from the page region's left edge in the clamped case, where
+ * {@link findPillRect} extends the pill leftward past its card.
+ */
 export const FIND_BAR_INSET = 8;
 
 /**
@@ -241,7 +250,9 @@ export function findAnchorRect(
  * FIND_PILL_MIN_WIDTH} (below that the pill's fixed contents no longer fit —
  * see its doc comment), and clamped again to `bounds.width - 2 *
  * FIND_BAR_INSET` so it never exceeds the page region. {@link FIND_BAR_HEIGHT}
- * tall, inset {@link FIND_BAR_INSET} from the anchor card's top-right corner.
+ * tall, inset {@link FIND_BAR_INSET} from its card's top-right corner — or,
+ * when the card is narrower than {@link FIND_PILL_MIN_WIDTH}, extended
+ * leftward past the card and clamped inside the page region instead.
  * All-zero when even the `bounds`-clamped width cannot seat any pill.
  *
  * `bounds` defaults to `anchor`, matching the old unclamped behavior. When a

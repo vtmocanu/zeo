@@ -14,8 +14,8 @@ milestone, a minor bump only for very large breakthroughs.
 ### Added
 
 - An in-app confirmation dialog. Clearing browsing history now asks "Clear
-  browsing history?" with the entry and visit counts, and Cancel is focused by
-  default.
+  browsing history?" with the entry and visit counts, falling back to general
+  wording when the counts can't be read, and Cancel is focused by default.
 
 ### Changed
 

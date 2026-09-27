@@ -81,6 +81,15 @@ export function ConfirmDialog(props: ConfirmDialogProps): ReactElement {
     };
   }, []);
 
+  // A confirm that disables itself while in flight (e.g. Confirm, mid-click)
+  // drops focus to the body once it becomes disabled; on a rejection, pull
+  // focus back into the dialog rather than leave it stranded.
+  useEffect(() => {
+    if (error !== null) {
+      cancelRef.current?.focus();
+    }
+  }, [error]);
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
       if (event.key === "Escape") {

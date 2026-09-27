@@ -1049,8 +1049,17 @@ function ProfilesSection({
  * close (main only detaches the native view; `closeSettings` does not tear
  * down this React tree), so without `open` a dialog left open, or stats read
  * on a now-stale mount, would still be showing when the sheet reopens. The
- * effect below re-reads stats and resets the dialog/error/in-flight state on
- * every `open` transition, so a reopen always starts clean.
+ * effect below resets the dialog/error/in-flight state when the sheet closes,
+ * and on a (re)open sets `status` back to `"loading"` and re-reads the counts
+ * fresh, so a reopen never shows a stale count with the trigger enabled.
+ *
+ * `sessionRef` is bumped on every `open` transition, in both directions, and
+ * captured by `onConfirmClear` before it calls `history.clear()`. Its
+ * `.then`/`.catch` compare against the live `sessionRef` before touching
+ * state, so a clear that settles after the sheet has since closed and
+ * reopened (or closed again) is a no-op: it can neither surface its error
+ * against a new session nor re-enable/close a newer dialog out from under an
+ * in-flight clear that superseded it.
  *
  * `status` tracks the stats read itself (`"loading"` | `"loaded"` |
  * `"failed"`) so a rejected `history.stats()` cannot disable the trigger
@@ -1074,9 +1083,14 @@ function HistorySection({ open }: { open: boolean }) {
   // a ref because it must be read/set synchronously within one click handler,
   // before any state update re-renders.
   const pendingRef = useRef(false);
+  // Bumped on every `open` transition (both directions) so a clear started in
+  // one session can recognize, once it settles, that a later transition has
+  // since happened — see the docstring above.
+  const sessionRef = useRef(0);
   const sheet = useContext(SheetContext);
 
   useEffect(() => {
+    sessionRef.current += 1;
     if (!open) {
       // The sheet closed (or has not opened yet): drop any in-progress dialog
       // state so a reopen never shows a stale confirm.
@@ -1086,8 +1100,10 @@ function HistorySection({ open }: { open: boolean }) {
       pendingRef.current = false;
       return;
     }
-    // The sheet (re)opened: read the counts fresh. Guard against a stale
-    // response landing after a close-then-reopen raced past it.
+    // The sheet (re)opened: read the counts fresh, first resetting status to
+    // "loading" so a stale count from the previous open never shows with the
+    // trigger enabled. Guard against a stale response landing after a
+    // close-then-reopen raced past it.
     let cancelled = false;
     setStatus("loading");
     void window.zeo?.history
@@ -1115,17 +1131,28 @@ function HistorySection({ open }: { open: boolean }) {
    * the dialog open with an inline error instead of silently doing nothing.
    * A failed re-read after a successful clear still closes the dialog (the
    * clear itself succeeded) and reports `status: "failed"` instead.
+   *
+   * Captures `sessionRef` up front; every continuation below checks it is
+   * still current before touching state, so a clear that settles after the
+   * sheet has since closed/reopened is a no-op (see the docstring above).
+   * `pendingRef` is left untouched on a stale settle: it was already reset by
+   * the close transition (or is owned by a newer confirm), so a late settle
+   * here must never flip it.
    */
   const onConfirmClear = (): void => {
     const api = window.zeo;
     if (!api || pendingRef.current) {
       return;
     }
+    const session = sessionRef.current;
     pendingRef.current = true;
     setClearing(true);
     setError(null);
     void api.history.clear().then(
       () => {
+        if (sessionRef.current !== session) {
+          return;
+        }
         pendingRef.current = false;
         setClearing(false);
         setConfirming(false);
@@ -1133,12 +1160,22 @@ function HistorySection({ open }: { open: boolean }) {
         void api.history
           .stats()
           .then((next) => {
+            if (sessionRef.current !== session) {
+              return;
+            }
             setStats(next);
             setStatus("loaded");
           })
-          .catch(() => setStatus("failed"));
+          .catch(() => {
+            if (sessionRef.current === session) {
+              setStatus("failed");
+            }
+          });
       },
       () => {
+        if (sessionRef.current !== session) {
+          return;
+        }
         pendingRef.current = false;
         setClearing(false);
         setError(HISTORY_CLEAR_ERROR);
@@ -1165,7 +1202,10 @@ function HistorySection({ open }: { open: boolean }) {
             data-testid="settings-history-clear"
             aria-haspopup="dialog"
             disabled={historyClearTriggerDisabled(status)}
-            onClick={() => setConfirming(true)}
+            onClick={() => {
+              setError(null);
+              setConfirming(true);
+            }}
           >
             Clear Browsing History…
           </button>
