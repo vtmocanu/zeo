@@ -169,7 +169,17 @@ export function SidebarResizeHandle(props: { width: number }): ReactElement {
   const dragRef = useRef<ResizeDrag | null>(null);
   const pendingRef = useRef<number | null>(null);
   const frameRef = useRef<number | null>(null);
+  // The width the last arrow key asked for, until the broadcast catches up.
+  // Auto-repeat can fire faster than the round trip through main, and stepping
+  // from the stale `width` prop would resend the same value.
+  const keyTargetRef = useRef<number | null>(null);
   const [dragging, setDragging] = useState(false);
+
+  useEffect(() => {
+    if (keyTargetRef.current === width) {
+      keyTargetRef.current = null;
+    }
+  }, [width]);
 
   const flush = (): void => {
     frameRef.current = null;
@@ -194,6 +204,7 @@ export function SidebarResizeHandle(props: { width: number }): ReactElement {
       return;
     }
     event.preventDefault();
+    keyTargetRef.current = null;
     event.currentTarget.setPointerCapture(event.pointerId);
     dragRef.current = { pointerId: event.pointerId, startX: event.clientX, startWidth: width };
     setDragging(true);
@@ -237,7 +248,13 @@ export function SidebarResizeHandle(props: { width: number }): ReactElement {
       return;
     }
     event.preventDefault();
-    sendSidebarWidth(width + step);
+    const from = keyTargetRef.current ?? width;
+    const next = clampSidebarWidth(from + step);
+    if (next === from) {
+      return;
+    }
+    keyTargetRef.current = next;
+    sendSidebarWidth(next);
   };
 
   return (
@@ -257,8 +274,116 @@ export function SidebarResizeHandle(props: { width: number }): ReactElement {
       onPointerCancel={endDrag}
       onLostPointerCapture={endDrag}
       onKeyDown={onKeyDown}
+      onBlur={() => {
+        keyTargetRef.current = null;
+      }}
     />
   );
+}
+
+/** The slice of `window.zeo.chrome` the edge reveal drives. */
+export interface SidebarRevealApi {
+  setSidebarRevealed(revealed: boolean): Promise<void>;
+}
+
+/** The chrome fields the edge reveal reacts to. */
+export type SidebarRevealState = Pick<
+  ChromeState,
+  "sidebarCollapsed" | "sidebarRevealed" | "sidebarWidth"
+>;
+
+/**
+ * The edge-reveal state machine behind {@link useSidebarReveal}, kept free of
+ * React and the DOM so its timing is testable with fake timers. It owns the
+ * hide timer across state updates: a width change (or any other broadcast)
+ * while a hide is pending leaves the timer running, so the sidebar still hides
+ * {@link SIDEBAR_HIDE_DELAY_MS} after the pointer left. The timer is dropped
+ * only when the sidebar stops being revealed (hidden, or un-collapsed), when
+ * the pointer comes back over it, or on {@link dispose}.
+ */
+export class SidebarRevealController {
+  private state: SidebarRevealState = {
+    sidebarCollapsed: false,
+    sidebarRevealed: false,
+    sidebarWidth: 0,
+  };
+  private hideTimer: ReturnType<typeof setTimeout> | null = null;
+  // Set once a reveal is in flight so a burst of edge moves sends one call;
+  // cleared when the pointer leaves the edge (or the reveal state flips) so a
+  // later touch retries.
+  private revealRequested = false;
+
+  constructor(private readonly api: () => SidebarRevealApi | undefined) {}
+
+  /** Adopt the latest broadcast chrome state. */
+  update(next: SidebarRevealState): void {
+    if (next.sidebarRevealed !== this.state.sidebarRevealed) {
+      this.revealRequested = false;
+    }
+    this.state = { ...next };
+    if (!next.sidebarCollapsed || !next.sidebarRevealed) {
+      this.cancelHide();
+    }
+    if (!next.sidebarCollapsed) {
+      this.revealRequested = false;
+    }
+  }
+
+  /** A pointer move anywhere in the document, at viewport x `clientX`. */
+  pointerMove(clientX: number): void {
+    const { sidebarCollapsed, sidebarRevealed, sidebarWidth } = this.state;
+    if (!sidebarCollapsed) {
+      return;
+    }
+    if (!sidebarRevealed) {
+      if (clientX >= SIDEBAR_REVEAL_EDGE) {
+        this.revealRequested = false;
+      } else if (!this.revealRequested) {
+        this.revealRequested = true;
+        void this.api()?.setSidebarRevealed(true).catch(() => {});
+      }
+      return;
+    }
+    if (clientX >= sidebarWidth) {
+      this.scheduleHide();
+    } else {
+      this.cancelHide();
+    }
+  }
+
+  /** The pointer left the document. */
+  pointerLeave(): void {
+    if (this.state.sidebarCollapsed && this.state.sidebarRevealed) {
+      this.scheduleHide();
+    }
+  }
+
+  /** Whether a hide is pending. */
+  get hidePending(): boolean {
+    return this.hideTimer !== null;
+  }
+
+  /** Drop any pending hide; call on unmount. */
+  dispose(): void {
+    this.cancelHide();
+  }
+
+  private cancelHide(): void {
+    if (this.hideTimer !== null) {
+      clearTimeout(this.hideTimer);
+      this.hideTimer = null;
+    }
+  }
+
+  private scheduleHide(): void {
+    if (this.hideTimer !== null) {
+      return;
+    }
+    this.hideTimer = setTimeout(() => {
+      this.hideTimer = null;
+      void this.api()?.setSidebarRevealed(false).catch(() => {});
+    }, SIDEBAR_HIDE_DELAY_MS);
+  }
 }
 
 /**
@@ -266,65 +391,32 @@ export function SidebarResizeHandle(props: { width: number }): ReactElement {
  * {@link SIDEBAR_REVEAL_EDGE}px reveals it; while revealed, leaving the
  * document or moving right of the sidebar starts a {@link SIDEBAR_HIDE_DELAY_MS}
  * timer that hides it again, and moving back over the sidebar cancels it.
- * Inactive (no listeners, no timers) while the sidebar is not collapsed.
+ * Inactive (no listeners, no timers) while the sidebar is not collapsed. The
+ * timing lives in a {@link SidebarRevealController} held for the component's
+ * lifetime, so a broadcast mid-delay does not reset or drop the hide timer.
  */
 export function useSidebarReveal(chrome: ChromeState): void {
   const { sidebarCollapsed, sidebarRevealed, sidebarWidth } = chrome;
+  const [controller] = useState(() => new SidebarRevealController(() => window.zeo?.chrome));
+
   useEffect(() => {
-    const api = window.zeo?.chrome;
-    if (!sidebarCollapsed || !api) {
+    controller.update({ sidebarCollapsed, sidebarRevealed, sidebarWidth });
+  }, [controller, sidebarCollapsed, sidebarRevealed, sidebarWidth]);
+
+  useEffect(() => {
+    if (!sidebarCollapsed || !window.zeo?.chrome) {
       return;
     }
-    let hideTimer: ReturnType<typeof setTimeout> | null = null;
-    // Set once a reveal is in flight so a burst of edge moves sends one call;
-    // cleared when the pointer leaves the edge so a later touch retries.
-    let revealRequested = false;
-
-    const cancelHide = (): void => {
-      if (hideTimer !== null) {
-        clearTimeout(hideTimer);
-        hideTimer = null;
-      }
-    };
-    const scheduleHide = (): void => {
-      if (hideTimer !== null) {
-        return;
-      }
-      hideTimer = setTimeout(() => {
-        hideTimer = null;
-        void api.setSidebarRevealed(false).catch(() => {});
-      }, SIDEBAR_HIDE_DELAY_MS);
-    };
-
-    const onPointerMove = (event: PointerEvent): void => {
-      if (!sidebarRevealed) {
-        if (event.clientX >= SIDEBAR_REVEAL_EDGE) {
-          revealRequested = false;
-        } else if (!revealRequested) {
-          revealRequested = true;
-          void api.setSidebarRevealed(true).catch(() => {});
-        }
-        return;
-      }
-      if (event.clientX >= sidebarWidth) {
-        scheduleHide();
-      } else {
-        cancelHide();
-      }
-    };
-    const onPointerLeave = (): void => {
-      if (sidebarRevealed) {
-        scheduleHide();
-      }
-    };
-
+    const onPointerMove = (event: PointerEvent): void => controller.pointerMove(event.clientX);
+    const onPointerLeave = (): void => controller.pointerLeave();
     const root = document.documentElement;
     document.addEventListener("pointermove", onPointerMove);
     root.addEventListener("pointerleave", onPointerLeave);
     return () => {
-      cancelHide();
       document.removeEventListener("pointermove", onPointerMove);
       root.removeEventListener("pointerleave", onPointerLeave);
     };
-  }, [sidebarCollapsed, sidebarRevealed, sidebarWidth]);
+  }, [controller, sidebarCollapsed]);
+
+  useEffect(() => () => controller.dispose(), [controller]);
 }

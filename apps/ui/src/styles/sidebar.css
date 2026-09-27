@@ -18,9 +18,14 @@
 }
 
 /* Resize strip along the sidebar's right edge, just left of the card. The
-   2px bar only shows on hover, focus and drag, so the gap stays quiet. */
+   2px bar only shows on hover, focus and drag, so the gap stays quiet.
+   `z-index: 2` lifts it over the sticky pinned section (z-index 1), which
+   otherwise swallows the strip across the pinned band. Nothing else inside the
+   sidebar is positioned above it (menus and popovers are separate surfaces),
+   and the window row's 8px right padding keeps its buttons clear of the 6px strip. */
 .sidebar__resize-handle {
   position: absolute;
+  z-index: 2;
   top: 0;
   bottom: 0;
   right: 0;
