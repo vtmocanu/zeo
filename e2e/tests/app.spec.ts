@@ -17,6 +17,8 @@ import type { AddressInfo } from "node:net";
 // #171 adds `VIEW_UNLOAD_AFTER_MS`: the idle-unload test injects a clock just past
 // the real threshold instead of shortening it.
 import { commandBarBounds, COMMANDS, VIEW_UNLOAD_AFTER_MS } from "@zeo/core";
+// PRD 10.2 — the chrome shape commandBarBounds takes; a type-only import.
+import type { ChromeState } from "@zeo/core";
 // PRD 9.1 — shared view-URL poll helpers (VIEW_POLL_TIMEOUT_MS-bounded), so
 // every WebContentsView URL/partition/existence/absence wait in this spec goes
 // through one module rather than an inline `getAllWebContents()` poll.
@@ -164,6 +166,12 @@ interface ZeoBridge {
   // Mirrors @zeo/core's ZeoApi.onStateChange; the view-lifecycle re-sync test
   // counts invocations to prove a REJECTED command still re-syncs the renderer.
   onStateChange(listener: (state: BridgeState) => void): () => void;
+  // PRD 10.2 — the frameless-chrome bridge. Only `state()` is read here: the
+  // overlay-bounds assertions pass it to commandBarBounds as its third argument
+  // (the sidebar width and collapsed state move the card the bar centres in).
+  chrome: {
+    state(): Promise<ChromeState>;
+  };
 }
 // PRD 4.2 — one command-bar suggestion row, structurally the @zeo/core
 // `Suggestion` union (redeclared import-free like the rest of this file). Row 0
@@ -316,7 +324,7 @@ const canonicalTabUrl = (u: string | null): string | null =>
  * hosting view's bounds), locating the overlay among the window's child views by
  * its `?view=command-bar` url. Returns `null` if the window or overlay is not
  * found. Callers compare `overlayHeight` against `commandBarBounds(width, height,
- * rowCount).height` from @zeo/core — the exact math main applies.
+ * chrome, rowCount).height` from @zeo/core — the exact math main applies.
  */
 async function overlayNativeBounds(
   app: ElectronApplication,
@@ -2772,8 +2780,13 @@ test.describe("zeo desktop app", () => {
         return b === null ? null : b.overlayHeight;
       })
       .toBe(
-        await overlayNativeBounds(app).then((b) =>
-          b === null ? null : commandBarBounds(b.width, b.height, 2).height,
+        await Promise.all([
+          overlayNativeBounds(app),
+          sidebar.evaluate(() =>
+            (globalThis as unknown as { zeo: ZeoBridge }).zeo.chrome.state(),
+          ),
+        ]).then(([b, chrome]) =>
+          b === null ? null : commandBarBounds(b.width, b.height, chrome, 2).height,
         ),
       );
 
@@ -2790,8 +2803,13 @@ test.describe("zeo desktop app", () => {
         return b === null ? null : b.overlayHeight;
       })
       .toBe(
-        await overlayNativeBounds(app).then((b) =>
-          b === null ? null : commandBarBounds(b.width, b.height, 1).height,
+        await Promise.all([
+          overlayNativeBounds(app),
+          sidebar.evaluate(() =>
+            (globalThis as unknown as { zeo: ZeoBridge }).zeo.chrome.state(),
+          ),
+        ]).then(([b, chrome]) =>
+          b === null ? null : commandBarBounds(b.width, b.height, chrome, 1).height,
         ),
       );
 
@@ -3409,6 +3427,9 @@ test.describe("zeo desktop app", () => {
     "view.splitChoose",
     // PRD 9.6 — update.check is always enabled.
     "update.check",
+    // PRD 10.2 — view.toggleSidebar is always enabled and appended last in the
+    // registry, so it closes out the commands-mode list.
+    "view.toggleSidebar",
   ];
 
   // §5 bullet 1 — commands mode opens empty, lists only enabled command rows in

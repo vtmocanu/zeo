@@ -2,17 +2,25 @@
 
 /* The draggable gutter between the two split panes, rendered in its own
    full-viewport WebContentsView (?view=divider) that main sizes and positions
-   between the panes. The handle fills that view: a thin subtle bar in the window
-   hairline that highlights with the accent on hover, with a col-resize cursor.
-   `body` already resets its margin to 0 (base.css), so the handle sits
-   flush to the view edges without a per-view root rule. */
+   in the 8px gap between the two cards. The handle fills that view and is
+   transparent at rest, so the gap shows the window ground between the cards;
+   hover and an active drag wash it in the soft accent. `body` already resets
+   its margin to 0 (base.css), so the handle sits flush to the view edges. */
 .divider-handle {
   width: 100%;
   height: 100vh;
   cursor: col-resize;
-  background: var(--hairline);
+  background: transparent;
+  transition: background-color var(--motion-fast) var(--ease-standard);
 }
 
-.divider-handle:hover {
-  background: var(--accent);
+.divider-handle:hover,
+.divider-handle:active {
+  background: var(--accent-soft);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .divider-handle {
+    transition: none;
+  }
 }

@@ -8,16 +8,18 @@ import {
   resolveWindowBounds,
   fitAndCenterInWorkArea,
   MIN_WINDOW_SIZE,
+  TRAFFIC_LIGHT_POSITION,
+  restoreChrome,
+  withSidebarRevealed,
 } from "@zeo/core";
 import type { WindowLayout, WindowState } from "@zeo/core";
-import { readWindowLayout, readWindowState, writeWindowState } from "./db.js";
+import { readWindowLayout } from "./db.js";
+import { readWindowState, writeWindowState, readChromePrefs } from "./db-window.js";
 import { runtime, moduleDir, DEFAULT_URL } from "./state.js";
 import { broadcast } from "./broadcast.js";
 import { closeCommandBar } from "./command-bar.js";
-import { layoutOverlay } from "./overlay.js";
 import { applyLayout, sendDividerGeometry } from "./layout.js";
-import { viewBounds } from "./views.js";
-import { settingsBoundsRect } from "./settings.js";
+import { relayoutWindow, applyWindowButtons, setChrome, flushChromeSave } from "./chrome.js";
 
 let windowStateSaveTimer: ReturnType<typeof setTimeout> | null = null;
 let windowStateSaveErrorLogged = false;
@@ -65,6 +67,7 @@ export function flushWindowStateSave(): void {
     windowStateSaveTimer = null;
   }
   saveWindowState();
+  flushChromeSave();
 }
 
 /**
@@ -75,6 +78,12 @@ export function flushWindowStateSave(): void {
  * every other tab materializes on first activation.
  */
 export function createWindow(seed: boolean): void {
+  try {
+    runtime.chrome = restoreChrome(readChromePrefs());
+  } catch (err) {
+    console.error("[window] failed to read saved chrome prefs; using defaults:", err);
+    runtime.chrome = restoreChrome(null);
+  }
   let savedWindowState: WindowState | null = null;
   try {
     savedWindowState = readWindowState();
@@ -106,6 +115,11 @@ export function createWindow(seed: boolean): void {
     ...frame,
     minWidth: MIN_WINDOW_SIZE.width,
     minHeight: MIN_WINDOW_SIZE.height,
+    titleBarStyle: "hidden",
+    trafficLightPosition: { ...TRAFFIC_LIGHT_POSITION },
+    vibrancy: "sidebar",
+    visualEffectState: "followWindow",
+    backgroundColor: "#00000000",
     webPreferences: {
       preload: join(moduleDir, "../preload/index.cjs"),
       contextIsolation: true,
@@ -113,6 +127,7 @@ export function createWindow(seed: boolean): void {
       nodeIntegration: false,
     },
   });
+  applyWindowButtons();
   // getNormalBounds reports the pre-maximize frame, so restoring the frame then
   // maximizing is correct — and this MUST run before the renderer load below.
   if (maximized) {
@@ -168,31 +183,7 @@ export function createWindow(seed: boolean): void {
 
   runtime.win!.on("resize", () => {
     scheduleWindowStateSave();
-    const active = runtime.store.activeTabId;
-    if (active !== null) {
-      runtime.views.get(active)?.setBounds(viewBounds());
-    }
-    if (runtime.settingsOpen && runtime.settingsView !== null) {
-      runtime.settingsView.setBounds(settingsBoundsRect());
-    }
-    if (runtime.commandBar.open || runtime.find.open) {
-      // A resize that grows a too-short window can bring a previously collapsed
-      // (all-zero rect) overlay back into view. Focus is returned to the overlay
-      // only on that hidden→visible transition, so a resize of an already-shown
-      // bar (command or find surface) never steals focus from the input mid-typing.
-      const wasVisible = runtime.overlay?.getVisible() ?? false;
-      const shown = layoutOverlay();
-      if (shown && !wasVisible) {
-        runtime.overlay?.webContents.focus();
-      }
-    }
-    // In split, re-bound both panes + the divider to the new content size and push
-    // the fresh divider geometry (the single-mode active-view bound above is a
-    // harmless no-op, immediately overwritten by applyLayout).
-    if (runtime.layout.mode === "split") {
-      applyLayout();
-      sendDividerGeometry();
-    }
+    relayoutWindow();
   });
 
   // Persist window geometry behind a debounce on move/maximize/unmaximize (resize
@@ -209,9 +200,10 @@ export function createWindow(seed: boolean): void {
     flushWindowStateSave();
   });
 
-  // Window lost OS focus → dismiss the command bar.
+  // Window lost OS focus → dismiss the command bar and hide a revealed sidebar.
   runtime.win!.on("blur", () => {
     closeCommandBar();
+    setChrome(withSidebarRevealed(runtime.chrome, false), { persist: false });
   });
 
   // Re-stamp the active tab's lastActiveAt on window focus so a tab left focused

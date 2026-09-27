@@ -1,0 +1,112 @@
+/* Frameless window chrome (PRD 10.2, design book §2) -------------------------
+
+   The main sidebar's webContents fills the window beneath every native page
+   view, so it paints the window itself: the tint over the vibrancy, one card
+   per page region (the hairline and shadow the native views sit in), and a
+   drag strip along the top edge. Every layer is position: fixed with inline
+   geometry from @zeo/core; the sidebar (z-index 1) stacks above them. */
+
+/* The window ground: the vibrancy fallback, then the space tint as a separate
+   layer so 10.3 can cross-fade --tint without touching the ground. */
+.window-tint {
+  position: fixed;
+  inset: 0;
+  background: var(--surface-window);
+  pointer-events: none;
+}
+
+.window-tint::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  background: var(--tint);
+  opacity: var(--tint-opacity);
+}
+
+/* The card a page, split pane or settings view floats in. The native view is
+   drawn over it with the same radius; this layer contributes the edge (the
+   shadow token's first ring is the hairline) and the drop shadow. */
+.window-card {
+  position: fixed;
+  background: var(--surface-card);
+  box-shadow: var(--shadow-card);
+  border-radius: var(--radius-card);
+  pointer-events: none;
+}
+
+/* The inset gutter above the card: keeps the window draggable when the
+   sidebar, and with it the window row, is collapsed. */
+.window-drag-strip {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: var(--card-inset);
+  -webkit-app-region: drag;
+}
+
+/* Window row: traffic lights (native, at 14/16) then the four icon buttons,
+   right-aligned. The whole row drags the window; only the buttons do not. */
+.window-row {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  height: var(--window-row-height);
+  padding: 0 var(--space-4) 0 78px;
+  -webkit-app-region: drag;
+  user-select: none;
+}
+
+.window-row__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin-left: auto;
+}
+
+/* `.icon-button` is shared with the hover-revealed row buttons (tab-item.css,
+   loaded later, starts them at opacity 0); the row scope keeps these always
+   visible and gives them the 28px hit target. */
+.window-row .icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border-radius: var(--radius-control);
+  color: var(--ink-secondary);
+  opacity: 1;
+  transition:
+    background-color var(--motion-fast) var(--ease-standard),
+    color var(--motion-fast) var(--ease-standard);
+  -webkit-app-region: no-drag;
+}
+
+.window-row .icon-button:hover {
+  background: var(--surface-hover);
+  color: var(--ink-primary);
+}
+
+.window-row .icon-button:active {
+  background: var(--fill-subtle);
+}
+
+.window-row .icon-button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+/* 16px line icon; stroke comes from the SVG attributes and currentColor. */
+.icon {
+  display: block;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .window-row .icon-button {
+    transition: none;
+  }
+}

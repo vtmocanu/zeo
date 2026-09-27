@@ -27,6 +27,7 @@ import { zoomActiveTab } from "./zoom.js";
 import { openFindSession, findNext, findPrevious, closeFindSession } from "./find.js";
 import { teardownQuickBrowse, setAsDefaultBrowser } from "./quick-browse.js";
 import { doSplit, doUnsplit, doFocusOther, doSwap } from "./layout.js";
+import { toggleSidebarChrome } from "./chrome.js";
 import { downloadsDir, logDownloadError } from "./downloads.js";
 import { checkForUpdates } from "./update.js";
 import { clearFinishedDownloadsSequenced } from "./download-ops.js";
@@ -276,6 +277,7 @@ const commandHandlers: Record<CommandId, () => void> = {
       openSettingsAt("general");
     }
   },
+  "view.toggleSidebar": () => toggleSidebarChrome(),
 };
 
 /**
