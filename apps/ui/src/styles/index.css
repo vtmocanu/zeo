@@ -2,6 +2,7 @@
    in the order their rules appeared in the former single stylesheet. */
 @import "./tokens.css";
 @import "./base.css";
+@import "./window.css";
 @import "./sidebar.css";
 @import "./space-switcher.css";
 @import "./tab-item.css";

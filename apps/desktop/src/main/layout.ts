@@ -2,7 +2,7 @@ import { ipcMain, WebContentsView } from "electron";
 import { join } from "node:path";
 import {
   IPC,
-  SIDEBAR_WIDTH,
+  contentRect,
   DIVIDER_WIDTH,
   splitPaneBounds,
   DEFAULT_SPLIT_RATIO,
@@ -31,8 +31,8 @@ export function dividableWidth(): number {
   if (runtime.win === null) {
     return 0;
   }
-  const [contentWidth] = runtime.win.getContentSize();
-  return contentWidth - SIDEBAR_WIDTH - DIVIDER_WIDTH;
+  const [contentWidth, contentHeight] = runtime.win.getContentSize();
+  return contentRect(contentWidth, contentHeight, runtime.chrome).width - DIVIDER_WIDTH;
 }
 
 /**
@@ -55,6 +55,7 @@ export function ensureDividerView(): void {
     },
   });
   runtime.win!.contentView.addChildView(runtime.dividerView);
+  runtime.dividerView!.setBackgroundColor("#00000000");
   runtime.dividerView!.setVisible(false);
   const rendererUrl = process.env.ELECTRON_RENDERER_URL;
   if (rendererUrl !== undefined && rendererUrl !== "") {
@@ -104,7 +105,7 @@ export function applyLayout(): void {
     }
   }
   const [contentWidth, contentHeight] = runtime.win!.getContentSize();
-  const b = splitPaneBounds(contentWidth, contentHeight, layout.ratio);
+  const b = splitPaneBounds(contentWidth, contentHeight, runtime.chrome, layout.ratio);
   for (const [tabId, view] of runtime.views) {
     if (view.webContents.isDestroyed()) {
       continue;

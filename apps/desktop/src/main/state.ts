@@ -2,9 +2,10 @@ import type { BrowserWindow, WebContentsView } from "electron";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Blocker } from "@zeo/adblock";
-import { SpaceStore, SINGLE_LAYOUT, initialBlockingState } from "@zeo/core";
+import { SpaceStore, SINGLE_LAYOUT, initialBlockingState, DEFAULT_CHROME_STATE } from "@zeo/core";
 import type {
   BlockingState,
+  ChromeState,
   CommandBarState,
   CommandContext,
   CommandId,
@@ -74,6 +75,7 @@ export interface RuntimeState {
   win: BrowserWindow | null;
   overlay: WebContentsView | null;
   layout: WindowLayout;
+  chrome: ChromeState;
   dividerView: WebContentsView | null;
   layoutSaveTimer: Timer;
   commandBar: CommandBarState;
@@ -146,6 +148,7 @@ export const runtime: RuntimeState = {
   win: null,
   overlay: null,
   layout: SINGLE_LAYOUT,
+  chrome: DEFAULT_CHROME_STATE,
   dividerView: null,
   layoutSaveTimer: null,
   commandBar: {

@@ -16,6 +16,7 @@ import "./find.js";
 import "./spaces.js";
 import "./command-bar.js";
 import "./commands.js";
+import "./chrome.js";
 import { startHistoryPruning } from "./history.js";
 import { initUpdateState, startUpdateChecks } from "./update.js";
 import { installDownloadHandler, logDownloadError } from "./downloads.js";

@@ -39,8 +39,6 @@ import {
   deleteSiteZoom,
   readWindowLayout,
   writeWindowLayout,
-  readWindowState,
-  writeWindowState,
   closeDb,
   recordVisit,
   updateVisitTitle,
@@ -59,6 +57,7 @@ import {
   scheduleSave,
   flush,
 } from "./db.js";
+import { readWindowState, writeWindowState, readChromePrefs, writeChromePrefs } from "./db-window.js";
 import type { Download, WindowState } from "@zeo/core";
 
 /** The pre-migration (schema v1) DDL: the four tables WITHOUT `meta.enabled`. */
@@ -176,12 +175,19 @@ const V11_DDL =
   V10_DDL +
   "CREATE TABLE window_state (id INTEGER PRIMARY KEY CHECK (id = 0), x INTEGER, y INTEGER, width INTEGER NOT NULL, height INTEGER NOT NULL, maximized INTEGER NOT NULL DEFAULT 0);";
 
-/** The current (schema v12) DDL: v11 plus the three update-check meta columns. */
+/** The schema v12 DDL: v11 plus the three update-check meta columns. A
+ *  historical fixture predating the window_state chrome columns. */
 const V12_DDL =
   V11_DDL +
   "ALTER TABLE meta ADD COLUMN updateCheckEnabled INTEGER NOT NULL DEFAULT 1;" +
   "ALTER TABLE meta ADD COLUMN updateDismissedVersion TEXT;" +
   "ALTER TABLE meta ADD COLUMN updateLastCheckedAt INTEGER;";
+
+/** The current (schema v13) DDL: v12 plus the two window_state chrome columns. */
+const V13_DDL =
+  V12_DDL +
+  "ALTER TABLE window_state ADD COLUMN sidebarWidth INTEGER NOT NULL DEFAULT 240;" +
+  "ALTER TABLE window_state ADD COLUMN sidebarCollapsed INTEGER NOT NULL DEFAULT 0;";
 
 /** True when the `history_visits` table exists in the database. */
 function hasHistoryTable(db: Database.Database): boolean {
@@ -214,6 +220,13 @@ function hasWindowStateTable(db: Database.Database): boolean {
       )
       .get() !== undefined
   );
+}
+
+/** True when the `window_state` table has both chrome columns (schema v13). */
+function hasChromeColumns(db: Database.Database): boolean {
+  const cols = db.prepare("PRAGMA table_info(window_state)").all() as { name: string }[];
+  const names = new Set(cols.map((c) => c.name));
+  return names.has("sidebarWidth") && names.has("sidebarCollapsed");
 }
 
 /** True when the `meta` table has all five window-layout columns. */
@@ -333,7 +346,7 @@ describe("migrate", () => {
       searchEngine: string;
       quickBrowseExternal: number;
     };
-    expect(meta.schemaVersion).toBe(12);
+    expect(meta.schemaVersion).toBe(13);
     expect(hasEnabledColumn(db)).toBe(true);
     expect(hasAllowlistTable(db)).toBe(true);
     expect(meta.enabled).toBe(1);
@@ -381,7 +394,7 @@ describe("migrate", () => {
       enabled: number;
       quickBrowseExternal: number;
     };
-    expect(meta.schemaVersion).toBe(12);
+    expect(meta.schemaVersion).toBe(13);
     expect(hasAllowlistTable(db)).toBe(true);
     expect(hasHistoryTable(db)).toBe(true);
     expect(hasSearchEngineColumn(db)).toBe(true);
@@ -436,7 +449,7 @@ describe("migrate", () => {
       enabled: number;
       quickBrowseExternal: number;
     };
-    expect(meta.schemaVersion).toBe(12);
+    expect(meta.schemaVersion).toBe(13);
     expect(hasHistoryTable(db)).toBe(true);
     expect(hasSearchEngineColumn(db)).toBe(true);
     expect(hasSiteZoomTable(db)).toBe(true);
@@ -483,7 +496,7 @@ describe("migrate", () => {
       searchEngine: string;
       quickBrowseExternal: number;
     };
-    expect(meta.schemaVersion).toBe(12);
+    expect(meta.schemaVersion).toBe(13);
     expect(hasSearchEngineColumn(db)).toBe(true);
     // The new column defaults to duckduckgo on the existing row.
     expect(meta.searchEngine).toBe("duckduckgo");
@@ -531,7 +544,7 @@ describe("migrate", () => {
       searchEngine: string;
       quickBrowseExternal: number;
     };
-    expect(meta.schemaVersion).toBe(12);
+    expect(meta.schemaVersion).toBe(13);
     expect(hasSiteZoomTable(db)).toBe(true);
     expect(hasLayoutColumns(db)).toBe(true);
     expect(hasDownloadsTable(db)).toBe(true);
@@ -591,7 +604,7 @@ describe("migrate", () => {
       layoutRatio: number;
       layoutFocused: string;
     };
-    expect(meta.schemaVersion).toBe(12);
+    expect(meta.schemaVersion).toBe(13);
     // The downloads table is present and empty.
     expect(hasDownloadsTable(db)).toBe(true);
     const downloadCount = db
@@ -661,7 +674,7 @@ describe("migrate", () => {
       layoutRatio: number;
       layoutFocused: string;
     };
-    expect(meta.schemaVersion).toBe(12);
+    expect(meta.schemaVersion).toBe(13);
     // The window_state table is present.
     expect(hasWindowStateTable(db)).toBe(true);
     // The quick-browse toggle column is added and defaults to 1 (ON).
@@ -731,7 +744,7 @@ describe("migrate", () => {
       layoutRatio: number;
       layoutFocused: string;
     };
-    expect(meta.schemaVersion).toBe(12);
+    expect(meta.schemaVersion).toBe(13);
     // Step 11 adds the window_state table.
     expect(hasWindowStateTable(db)).toBe(true);
     // Step 9 adds the quick-browse toggle column, defaulting to 1 (ON).
@@ -774,7 +787,7 @@ describe("migrate", () => {
       layoutFocused: string;
       defaultSessionMigratedAt: number | null;
     };
-    expect(meta.schemaVersion).toBe(12);
+    expect(meta.schemaVersion).toBe(13);
     expect(hasEnabledColumn(db)).toBe(true);
     expect(hasAllowlistTable(db)).toBe(true);
     expect(meta.enabled).toBe(1);
@@ -799,6 +812,15 @@ describe("migrate", () => {
     // exists and is seeded NON-null.
     expect(hasDefaultSessionMigratedAtColumn(db)).toBe(true);
     expect(meta.defaultSessionMigratedAt).not.toBeNull();
+    // The window_state chrome columns (schema v13) exist even on a fresh
+    // install, but there is deliberately no seed row (mirroring window_state
+    // itself), so a query against row 0 finds nothing until a first save
+    // (readChromePrefs, exercised against the module-level handle in the
+    // "readChromePrefs / writeChromePrefs" suite below, reads null the same way).
+    expect(hasChromeColumns(db)).toBe(true);
+    expect(
+      db.prepare("SELECT sidebarWidth, sidebarCollapsed FROM window_state WHERE id=0").get(),
+    ).toBeUndefined();
     db.close();
   });
 
@@ -835,7 +857,7 @@ describe("migrate", () => {
       layoutFocused: string;
       defaultSessionMigratedAt: number | null;
     };
-    expect(meta.schemaVersion).toBe(12);
+    expect(meta.schemaVersion).toBe(13);
     // The window_state table is present after the upgrade.
     expect(hasWindowStateTable(db)).toBe(true);
     // The new column exists and, for an UPGRADED database, reads null (unmigrated).
@@ -874,7 +896,7 @@ describe("migrate", () => {
     const meta = db
       .prepare("SELECT schemaVersion, activeSpaceId FROM meta WHERE id=0")
       .get() as { schemaVersion: number; activeSpaceId: string };
-    expect(meta.schemaVersion).toBe(12);
+    expect(meta.schemaVersion).toBe(13);
     // The window_state table is created and starts EMPTY (no seed row).
     expect(hasWindowStateTable(db)).toBe(true);
     const windowStateCount = db
@@ -911,7 +933,7 @@ describe("migrate", () => {
       updateDismissedVersion: string | null;
       updateLastCheckedAt: number | null;
     };
-    expect(meta.schemaVersion).toBe(12);
+    expect(meta.schemaVersion).toBe(13);
     // The updateCheckEnabled column defaults to 1 (on); the two nullable
     // columns default to null (never dismissed, never checked).
     expect(meta.updateCheckEnabled).toBe(1);
@@ -925,19 +947,19 @@ describe("migrate", () => {
     db.close();
   });
 
-  test("is a no-op on a database already at the current version (v12) with non-default layout values, quickBrowseExternal, updateCheckEnabled, and a set default-session marker, leaving the site_zoom and downloads rows untouched", () => {
-    const path = join(tempDir, "v12.db");
+  test("is a no-op on a database already at the current version (v13) with non-default layout values, quickBrowseExternal, updateCheckEnabled, and a set default-session marker, leaving the site_zoom and downloads rows untouched", () => {
+    const path = join(tempDir, "v13.db");
     const db = new Database(path);
-    db.exec(V12_DDL);
+    db.exec(V13_DDL);
     // Seed enabled=0, a non-default searchEngine, NON-default layout values,
     // quickBrowseExternal=0, updateCheckEnabled=0 with a dismissed version and a
     // set last-checked time, and a NON-null default-session marker so a spurious
     // re-create/migrate (which would reset them to their defaults / null) is
-    // detectable, plus site_zoom, downloads, and window_state rows so a re-create
-    // would be observable.
+    // detectable, plus site_zoom, downloads, and window_state rows (with
+    // non-default chrome columns) so a re-create would be observable.
     db.prepare(
       "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled,searchEngine,layoutMode,layoutLeftTabId,layoutRightTabId,layoutRatio,layoutFocused,quickBrowseExternal,defaultSessionMigratedAt,updateCheckEnabled,updateDismissedVersion,updateLastCheckedAt) " +
-        "VALUES (0, 12, 'space-10', 0, 'google', 'split', 'tL', 'tR', 0.35, 'right', 0, 12345, 0, '9.9.9', 55555)",
+        "VALUES (0, 13, 'space-10', 0, 'google', 'split', 'tL', 'tR', 0.35, 'right', 0, 12345, 0, '9.9.9', 55555)",
     ).run();
     db.prepare(
       "INSERT INTO site_zoom(host,factor,updatedAt) VALUES ('example.com', 1.5, 42)",
@@ -947,7 +969,7 @@ describe("migrate", () => {
         "VALUES ('d1','https://example.com/f.bin','f.bin','/dl/f.bin',100,100,'completed',1000,2000,'space-10')",
     ).run();
     db.prepare(
-      "INSERT INTO window_state(id,x,y,width,height,maximized) VALUES (0, 5, 6, 900, 700, 1)",
+      "INSERT INTO window_state(id,x,y,width,height,maximized,sidebarWidth,sidebarCollapsed) VALUES (0, 5, 6, 900, 700, 1, 320, 1)",
     ).run();
 
     migrate(db);
@@ -972,7 +994,7 @@ describe("migrate", () => {
       updateDismissedVersion: string | null;
       updateLastCheckedAt: number | null;
     };
-    expect(meta.schemaVersion).toBe(12);
+    expect(meta.schemaVersion).toBe(13);
     expect(meta.activeSpaceId).toBe("space-10");
     expect(meta.enabled).toBe(0);
     expect(meta.searchEngine).toBe("google");
@@ -1001,12 +1023,15 @@ describe("migrate", () => {
         .prepare("SELECT id, state, receivedBytes, completedAt FROM downloads")
         .get(),
     ).toEqual({ id: "d1", state: "completed", receivedBytes: 100, completedAt: 2000 });
-    // The seeded window_state row is left untouched (no re-create wiped it).
+    // The seeded window_state row, including the non-default chrome columns, is
+    // left untouched (no re-create wiped it).
     expect(
       db
-        .prepare("SELECT x, y, width, height, maximized FROM window_state WHERE id=0")
+        .prepare(
+          "SELECT x, y, width, height, maximized, sidebarWidth, sidebarCollapsed FROM window_state WHERE id=0",
+        )
         .get(),
-    ).toEqual({ x: 5, y: 6, width: 900, height: 700, maximized: 1 });
+    ).toEqual({ x: 5, y: 6, width: 900, height: 700, maximized: 1, sidebarWidth: 320, sidebarCollapsed: 1 });
     db.close();
   });
 });
@@ -1192,9 +1217,10 @@ describe("readWindowLayout / writeWindowLayout", () => {
 });
 
 describe("readWindowState / writeWindowState", () => {
-  /** Hand-builds a valid current (v12) database at the loadStore path and opens
-   *  the module-level handle the accessors use. The fresh window_state table has
-   *  no row, so readWindowState reads null until writeWindowState saves one. */
+  /** Hand-builds a valid v12 database at the loadStore path (migrated to the
+   *  current version, 13, by loadStore itself) and opens the module-level
+   *  handle the accessors use. The fresh window_state table has no row, so
+   *  readWindowState reads null until writeWindowState saves one. */
   function seedAndLoad(): void {
     const path = join(tempDir, "zeo.db");
     const seed = new Database(path);
@@ -1259,6 +1285,89 @@ describe("readWindowState / writeWindowState", () => {
   });
 });
 
+describe("readChromePrefs / writeChromePrefs", () => {
+  /** Hand-builds a valid v12 database at the loadStore path (migrated to the
+   *  current version, 13, by loadStore itself) and opens the module-level
+   *  handle the accessors use. The fresh window_state table has no row, so
+   *  readChromePrefs reads null until writeChromePrefs saves one. */
+  function seedAndLoad(): void {
+    const path = join(tempDir, "zeo.db");
+    const seed = new Database(path);
+    seed.exec(V12_DDL);
+    seed.prepare(
+      "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled) VALUES (0, 12, 'space-x', 1)",
+    ).run();
+    seedRows(seed, "space-x");
+    seed.close();
+    loadStore();
+  }
+
+  const FRAME: WindowState = { x: 10, y: 20, width: 1024, height: 768, maximized: false };
+
+  test("reads null when no window_state row has been saved", () => {
+    seedAndLoad();
+    expect(readChromePrefs()).toBeNull();
+  });
+
+  test("writeChromePrefs inserts row 0 from the frame when it is absent", () => {
+    seedAndLoad();
+    writeChromePrefs({ sidebarWidth: 300, sidebarCollapsed: true }, FRAME);
+    expect(readChromePrefs()).toEqual({ sidebarWidth: 300, sidebarCollapsed: true });
+    expect(readWindowState()).toEqual(FRAME);
+  });
+
+  test("writeChromePrefs against an existing row changes ONLY the chrome columns", () => {
+    seedAndLoad();
+    writeWindowState(FRAME);
+    writeChromePrefs({ sidebarWidth: 320, sidebarCollapsed: true }, {
+      x: 999,
+      y: 999,
+      width: 1,
+      height: 1,
+      maximized: true,
+    });
+    expect(readChromePrefs()).toEqual({ sidebarWidth: 320, sidebarCollapsed: true });
+    // The bounds seeded by writeWindowState are untouched — the second frame
+    // argument to writeChromePrefs is unused once the row exists.
+    expect(readWindowState()).toEqual(FRAME);
+  });
+
+  test("a later writeWindowState leaves the chrome columns intact", () => {
+    seedAndLoad();
+    writeChromePrefs({ sidebarWidth: 300, sidebarCollapsed: true }, FRAME);
+    writeWindowState({ x: 1, y: 2, width: 640, height: 400, maximized: true });
+    expect(readChromePrefs()).toEqual({ sidebarWidth: 300, sidebarCollapsed: true });
+    expect(readWindowState()).toEqual({ x: 1, y: 2, width: 640, height: 400, maximized: true });
+  });
+
+  test("a v12 database with a saved window_state row migrates to 13, keeps its bounds, and reads the chrome defaults", () => {
+    const path = join(tempDir, "zeo.db");
+    const seed = new Database(path);
+    seed.exec(V12_DDL);
+    seed.prepare(
+      "INSERT INTO meta(id,schemaVersion,activeSpaceId,enabled) VALUES (0, 12, 'space-x', 1)",
+    ).run();
+    seed
+      .prepare(
+        "INSERT INTO window_state(id,x,y,width,height,maximized) VALUES (0, 10, 20, 1280, 800, 0)",
+      )
+      .run();
+    seedRows(seed, "space-x");
+    seed.close();
+
+    loadStore();
+
+    expect(readWindowState()).toEqual({ x: 10, y: 20, width: 1280, height: 800, maximized: false });
+    expect(readChromePrefs()).toEqual({ sidebarWidth: 240, sidebarCollapsed: false });
+    const inspect = new Database(path, { readonly: true });
+    const meta = inspect.prepare("SELECT schemaVersion FROM meta WHERE id=0").get() as {
+      schemaVersion: number;
+    };
+    expect(meta.schemaVersion).toBe(13);
+    inspect.close();
+  });
+});
+
 describe("readBlockingEnabled / writeBlockingEnabled", () => {
   test("writeBlockingEnabled(false) round-trips and leaves schemaVersion/activeSpaceId intact", () => {
     // Hand-build a valid current (v11) database at the path loadStore will open.
@@ -1283,7 +1392,7 @@ describe("readBlockingEnabled / writeBlockingEnabled", () => {
     const meta = inspect
       .prepare("SELECT schemaVersion, activeSpaceId, enabled FROM meta WHERE id=0")
       .get() as { schemaVersion: number; activeSpaceId: string; enabled: number };
-    expect(meta.schemaVersion).toBe(12);
+    expect(meta.schemaVersion).toBe(13);
     expect(meta.activeSpaceId).toBe("space-x");
     expect(meta.enabled).toBe(0);
     inspect.close();

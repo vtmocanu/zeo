@@ -24,8 +24,8 @@ export function layoutOverlay(): boolean {
   // active and show it only while that surface's own open flag is set.
   const bounds =
     runtime.commandBar.surface === "find"
-      ? findBarBounds(width)
-      : commandBarBounds(width, height, runtime.commandBar.suggestions.length);
+      ? findBarBounds(width, height, runtime.chrome)
+      : commandBarBounds(width, height, runtime.chrome, runtime.commandBar.suggestions.length);
   if (bounds.width === 0) {
     runtime.overlay.setVisible(false);
     return false;

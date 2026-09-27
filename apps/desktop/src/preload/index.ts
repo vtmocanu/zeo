@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from "electron";
 import { IPC } from "@zeo/core";
 import type {
   BlockingState,
+  ChromeState,
   CommandBarMode,
   CommandBarState,
   CommandDescriptor,
@@ -157,6 +158,13 @@ const api = {
     dividerGeometry: (): Promise<DividerGeometry> =>
       ipcRenderer.invoke(IPC.splitViewDividerGeometry),
     state: (): Promise<WindowLayout> => ipcRenderer.invoke(IPC.splitViewState),
+  },
+  chrome: {
+    setSidebarWidth: (px: number): Promise<void> =>
+      ipcRenderer.invoke(IPC.chromeSetSidebarWidth, px),
+    setSidebarRevealed: (revealed: boolean): Promise<void> =>
+      ipcRenderer.invoke(IPC.chromeSetSidebarRevealed, revealed),
+    state: (): Promise<ChromeState> => ipcRenderer.invoke(IPC.chromeState),
   },
   update: {
     check: (): Promise<void> => ipcRenderer.invoke(IPC.updateCheck),

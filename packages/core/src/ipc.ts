@@ -12,6 +12,7 @@ import type { SettingsSectionId, SearchEngineId } from "./settings.js";
 import type { QuickBrowse } from "./quick-browse.js";
 import type { PaneSide, WindowLayout } from "./split-view.js";
 import type { UpdateState } from "./update.js";
+import type { ChromeState } from "./chrome.js";
 
 /**
  * A single space's tab payload, in the pre-space shape. This is what
@@ -111,6 +112,12 @@ export interface TabsState extends StoreSnapshot {
    * section.
    */
   appVersion: string;
+  /**
+   * The window-chrome slice (sidebar width, collapsed and revealed state).
+   * Rides the `stateChange` broadcast exactly like `layout` and `zoom` — main
+   * attaches it before every broadcast, so it is never absent.
+   */
+  chrome: ChromeState;
 }
 
 /**
@@ -508,6 +515,19 @@ export interface SplitViewApi {
 }
 
 /**
+ * The window-chrome bridge: `setSidebarWidth` drags the sidebar to a new
+ * width (clamped in main); `setSidebarRevealed` shows or hides a collapsed
+ * sidebar for the edge-reveal; `state()` reads back the current
+ * {@link ChromeState}. The state also rides the `stateChange` broadcast on
+ * `TabsState.chrome`.
+ */
+export interface ChromeApi {
+  setSidebarWidth(px: number): Promise<void>;
+  setSidebarRevealed(revealed: boolean): Promise<void>;
+  state(): Promise<ChromeState>;
+}
+
+/**
  * The full bridge surface exposed on `window.zeo` by the preload script.
  *
  * `onStateChange` registers a listener for main-pushed state updates and
@@ -528,6 +548,7 @@ export interface ZeoApi {
   quickBrowse: QuickBrowseApi;
   find: FindApi;
   splitView: SplitViewApi;
+  chrome: ChromeApi;
   update: UpdateApi;
   onStateChange(listener: (state: TabsState) => void): () => void;
   /** Registers a listener for main-pushed command-bar state updates and returns
@@ -625,6 +646,9 @@ export const IPC = {
   splitViewDividerGeometry: "zeo:split-view:divider-geometry",
   splitViewState: "zeo:split-view:state",
   splitViewDividerLayout: "zeo:split-view:divider-layout",
+  chromeSetSidebarWidth: "zeo:chrome:set-sidebar-width",
+  chromeSetSidebarRevealed: "zeo:chrome:set-sidebar-revealed",
+  chromeState: "zeo:chrome:state",
   updateCheck: "zeo:update:check",
   updateDismiss: "zeo:update:dismiss",
   updateOpenRelease: "zeo:update:open-release",

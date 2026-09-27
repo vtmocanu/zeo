@@ -27,6 +27,10 @@
   --radius-tile: 12px;
   --radius-palette: 14px;
 
+  /* Window chrome (PRD 10.2): card inset and the sidebar's window row. */
+  --card-inset: 8px;
+  --window-row-height: 44px;
+
   /* Type. */
   --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
   --text-xs: 11px;

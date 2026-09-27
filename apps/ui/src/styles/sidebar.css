@@ -1,11 +1,69 @@
+/* The sidebar is transparent: the window ground (.window-tint, window.css)
+   shows through it, and the card's own edge replaces the old right border.
+   `z-index: 1` stacks it above the fixed backdrop layers. */
 .sidebar {
+  position: relative;
+  z-index: 1;
   height: 100vh;
   display: flex;
   flex-direction: column;
-  background: var(--surface-window);
   color: var(--ink-primary);
-  border-right: 1px solid var(--hairline);
   overflow: hidden;
+}
+
+/* Collapsed and not revealed: the card spans the window. The sidebar keeps
+   its box (and scroll position) but neither paints nor takes pointer input. */
+.sidebar--hidden {
+  visibility: hidden;
+}
+
+/* Resize strip along the sidebar's right edge, just left of the card. The
+   2px bar only shows on hover, focus and drag, so the gap stays quiet.
+   `z-index: 2` lifts it over the sticky pinned section (z-index 1), which
+   otherwise swallows the strip across the pinned band. Nothing else inside the
+   sidebar is positioned above it (menus and popovers are separate surfaces),
+   and the window row's 8px right padding keeps its buttons clear of the 6px strip. */
+.sidebar__resize-handle {
+  position: absolute;
+  z-index: 2;
+  top: 0;
+  bottom: 0;
+  right: 0;
+  width: 6px;
+  cursor: col-resize;
+  touch-action: none;
+  -webkit-app-region: no-drag;
+}
+
+.sidebar__resize-handle::after {
+  content: "";
+  position: absolute;
+  top: var(--card-inset);
+  bottom: var(--card-inset);
+  left: 2px;
+  width: 2px;
+  border-radius: 1px;
+  background: transparent;
+  transition: background-color var(--motion-fast) var(--ease-standard);
+}
+
+.sidebar__resize-handle:hover::after,
+.sidebar__resize-handle--dragging::after {
+  background: var(--accent-soft);
+}
+
+.sidebar__resize-handle:focus-visible {
+  outline: none;
+}
+
+.sidebar__resize-handle:focus-visible::after {
+  background: var(--focus-ring);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar__resize-handle::after {
+    transition: none;
+  }
 }
 
 .sidebar__header {
@@ -56,12 +114,14 @@
 
 /* Stick the pinned section to the top of the `.sidebar__sections` scrollport so
    a long unpinned list scrolls beneath it instead of carrying it off-screen. The
-   background must be opaque or scrolled unpinned rows bleed through, but
-   `--surface-window` is translucent: it is layered as an image over the opaque
-   `--surface-card`, which reproduces the sidebar's own surface-window-over-canvas
-   colour (the card equals the light canvas and sits within a few levels of the
-   dark one). `z-index` keeps it above a dragged row, which becomes its own
-   stacking context via `.tab-item--dragging`'s `opacity`. */
+   background must be opaque or scrolled unpinned rows bleed through. The sidebar
+   itself is transparent (the window ground is .window-tint: `--surface-window`
+   over the vibrancy), so the section repaints that ground opaquely: the
+   translucent `--surface-window` layered as an image over the opaque
+   `--surface-card`, the closest opaque stand-in for the vibrancy beneath (the
+   card equals the light base and sits within a few levels of the dark one).
+   `z-index` keeps it above a dragged row, which becomes its own stacking context
+   via `.tab-item--dragging`'s `opacity`. */
 .sidebar__section--pinned {
   position: sticky;
   top: 0;

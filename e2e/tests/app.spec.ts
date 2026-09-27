@@ -15,6 +15,8 @@ import type { AddressInfo } from "node:net";
 // the registry itself rather than hard-coded literals, so a registry edit that
 // changes a shortcut or a command's menu is caught here without touching the test.
 import { commandBarBounds, COMMANDS } from "@zeo/core";
+// PRD 10.2 — the chrome shape commandBarBounds takes; a type-only import.
+import type { ChromeState } from "@zeo/core";
 // PRD 9.1 — shared view-URL poll helpers (VIEW_POLL_TIMEOUT_MS-bounded), so
 // every WebContentsView URL/partition/existence/absence wait in this spec goes
 // through one module rather than an inline `getAllWebContents()` poll.
@@ -162,6 +164,12 @@ interface ZeoBridge {
   // Mirrors @zeo/core's ZeoApi.onStateChange; the view-lifecycle re-sync test
   // counts invocations to prove a REJECTED command still re-syncs the renderer.
   onStateChange(listener: (state: BridgeState) => void): () => void;
+  // PRD 10.2 — the frameless-chrome bridge. Only `state()` is read here: the
+  // overlay-bounds assertions pass it to commandBarBounds as its third argument
+  // (the sidebar width and collapsed state move the card the bar centres in).
+  chrome: {
+    state(): Promise<ChromeState>;
+  };
 }
 // PRD 4.2 — one command-bar suggestion row, structurally the @zeo/core
 // `Suggestion` union (redeclared import-free like the rest of this file). Row 0
@@ -314,7 +322,7 @@ const canonicalTabUrl = (u: string | null): string | null =>
  * hosting view's bounds), locating the overlay among the window's child views by
  * its `?view=command-bar` url. Returns `null` if the window or overlay is not
  * found. Callers compare `overlayHeight` against `commandBarBounds(width, height,
- * rowCount).height` from @zeo/core — the exact math main applies.
+ * chrome, rowCount).height` from @zeo/core — the exact math main applies.
  */
 async function overlayNativeBounds(
   app: ElectronApplication,
@@ -2770,8 +2778,13 @@ test.describe("zeo desktop app", () => {
         return b === null ? null : b.overlayHeight;
       })
       .toBe(
-        await overlayNativeBounds(app).then((b) =>
-          b === null ? null : commandBarBounds(b.width, b.height, 2).height,
+        await Promise.all([
+          overlayNativeBounds(app),
+          sidebar.evaluate(() =>
+            (globalThis as unknown as { zeo: ZeoBridge }).zeo.chrome.state(),
+          ),
+        ]).then(([b, chrome]) =>
+          b === null ? null : commandBarBounds(b.width, b.height, chrome, 2).height,
         ),
       );
 
@@ -2788,8 +2801,13 @@ test.describe("zeo desktop app", () => {
         return b === null ? null : b.overlayHeight;
       })
       .toBe(
-        await overlayNativeBounds(app).then((b) =>
-          b === null ? null : commandBarBounds(b.width, b.height, 1).height,
+        await Promise.all([
+          overlayNativeBounds(app),
+          sidebar.evaluate(() =>
+            (globalThis as unknown as { zeo: ZeoBridge }).zeo.chrome.state(),
+          ),
+        ]).then(([b, chrome]) =>
+          b === null ? null : commandBarBounds(b.width, b.height, chrome, 1).height,
         ),
       );
 
@@ -3407,6 +3425,9 @@ test.describe("zeo desktop app", () => {
     "view.splitChoose",
     // PRD 9.6 — update.check is always enabled.
     "update.check",
+    // PRD 10.2 — view.toggleSidebar is always enabled and appended last in the
+    // registry, so it closes out the commands-mode list.
+    "view.toggleSidebar",
   ];
 
   // §5 bullet 1 — commands mode opens empty, lists only enabled command rows in
@@ -4134,11 +4155,15 @@ test.describe("zeo view lifecycle — idle unload", () => {
       args: launchArgs,
       // The two ZEO_VIEW_UNLOAD_* overrides shorten the idle threshold/sweep so
       // the policy fires within a test budget; both are honored only under ZEO_E2E=1.
+      // The threshold must dwarf the IPC + poll latency between creating tab1 and
+      // first observing its view: at 500ms a loaded macOS runner swept the view
+      // before the "tab1 is live" poll ever saw it. 5s still sweeps well inside
+      // VIEW_POLL_TIMEOUT_MS.
       env: {
         ...process.env,
         ELECTRON_RENDERER_URL: "",
         ZEO_E2E: "1",
-        ZEO_VIEW_UNLOAD_AFTER_MS: "500",
+        ZEO_VIEW_UNLOAD_AFTER_MS: "5000",
         ZEO_VIEW_UNLOAD_INTERVAL_MS: "200",
       },
     });
@@ -4169,7 +4194,7 @@ test.describe("zeo view lifecycle — idle unload", () => {
     await waitForViewUrl(app, "ZEO93IDLE1");
     await waitForViewUrl(app, "ZEO93IDLE2");
 
-    // tab1 (hidden, silent) goes idle past 500ms and the 200ms timer frees it.
+    // tab1 (hidden, silent) goes idle past 5s and the 200ms timer frees it.
     await waitForViewGone(app, "ZEO93IDLE1");
     // The visible active tab2 view is never idle-unloaded.
     await waitForViewUrl(app, "ZEO93IDLE2");
