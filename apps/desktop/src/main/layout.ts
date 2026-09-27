@@ -90,10 +90,11 @@ export function ensureDividerView(): void {
  * `opts.focus` (default `"passive"`) controls how the focused pane's view is
  * focused in split mode: `"passive"` (via {@link focusTabViewPassively}) never
  * steals focus from an open command bar, for a layout pass NOT initiated by
- * the user directly acting on the split (a background tab closing itself, a
- * window resize, a popup opening as a tab, idle sweeping); `"deliberate"` (via
- * {@link focusTabViewDeliberately}) closes an open command bar first, for the
- * explicit user split/focus ops in this file and {@link activateTab}.
+ * the user directly acting on the split (e.g. restoreTab, remapSpaceProfile,
+ * sweepIdle, doSetRatio, createWindow's first layout, a background tab closing
+ * itself, a non-pane tab closing, or a popup opening as a tab); `"deliberate"`
+ * (via {@link focusTabViewDeliberately}) closes an open command bar first, for
+ * the explicit user split/focus ops in this file and {@link activateTab}.
  */
 export function applyLayout(opts?: { focus?: "deliberate" | "passive" }): void {
   const focusMode = opts?.focus ?? "passive";
