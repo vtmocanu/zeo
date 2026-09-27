@@ -1948,7 +1948,7 @@ test.describe("zeo desktop app", () => {
     expect(lastSpaceDescriptor.spaceId).toBe(personalId);
     expect(lastSpaceDescriptor.items.some((i) => i.id === "delete")).toBe(false);
     // Rename and Profile are always present.
-    expect(lastSpaceDescriptor.items.map((i) => i.id)).toEqual(["rename", "profile"]);
+    expect(lastSpaceDescriptor.items.map((i) => i.id)).toEqual(["rename", "edit-theme", "profile"]);
 
     // (2) Create a second space so Personal becomes DELETABLE, then right-click it
     // in the UI and assert the stashed descriptor.
@@ -1973,7 +1973,7 @@ test.describe("zeo desktop app", () => {
     const res = (await lastSpaceMenu()) as BridgeSpaceMenuResult;
 
     expect(res.spaceId).toBe(personalId);
-    expect(res.items.map((i) => i.id)).toEqual(["rename", "delete", "profile"]);
+    expect(res.items.map((i) => i.id)).toEqual(["rename", "edit-theme", "delete", "profile"]);
 
     // The Profile submenu carries a checked current-profile entry and a trailing
     // "New profile…" item ending in the U+2026 ellipsis.
@@ -3475,6 +3475,10 @@ test.describe("zeo desktop app", () => {
     // PRD 10.2 — view.toggleSidebar is always enabled and appended last in the
     // registry, so it closes out the commands-mode list.
     "view.toggleSidebar",
+    // PRD 10.3 — space.editTheme is always enabled and appended after
+    // view.toggleSidebar in the registry, so it closes out the commands-mode
+    // list.
+    "space.editTheme",
   ];
 
   // §5 bullet 1 — commands mode opens empty, lists only enabled command rows in
