@@ -583,6 +583,9 @@ export interface ZeoApi {
   chrome: ChromeApi;
   update: UpdateApi;
   favorites: FavoritesApi;
+  /** "off" disables CSS motion (set by the preload under `ZEO_E2E=1` without
+   *  `ZEO_E2E_MOTION`); "system" defers to `prefers-reduced-motion`. */
+  readonly motion: "system" | "off";
   onStateChange(listener: (state: TabsState) => void): () => void;
   /** Registers a listener for main-pushed command-bar state updates and returns
    *  an unsubscribe function, mirroring onStateChange. */
