@@ -1052,10 +1052,25 @@ test.describe("PRD 10.6 settings sheet", () => {
         accentSoft,
       );
 
-      // The fill follows the selection. The pointer is moved off the nav first:
-      // this checks the resting selected fill, not the hover state.
-      await settings.getByTestId("settings-section-about").click();
+      // The fill follows the selection, and holds while the pointer is still
+      // over the clicked row (the selected fill outranks :hover).
+      const about = settings.getByTestId("settings-section-about");
+      await about.click();
       await expect(settings.locator(SELECTED("about"))).toHaveCount(1);
+      expect(
+        await about.evaluate((el) => el.matches(":hover")),
+        "the pointer is still over the clicked row",
+      ).toBe(true);
+      await expect(about).toHaveCSS("background-color", accentSoft);
+      // Control: hovering an unselected row does paint the hover fill, so the
+      // :hover rule is live in this page and the check above discriminates.
+      const hover = await tokenBackground(settings, "--popover-hover");
+      expect(hover).not.toBe(accentSoft);
+      const general = settings.getByTestId("settings-section-general");
+      await general.hover();
+      await expect(general).toHaveCSS("background-color", hover);
+
+      // Resting (pointer off the nav): the selected row keeps the fill.
       const panel = await settings.locator(".settings__panel-title").boundingBox();
       if (panel === null) {
         throw new Error("panel title has no box");
@@ -1133,6 +1148,8 @@ test.describe("PRD 10.6 settings sheet", () => {
       const dialog = settings.getByTestId("settings-history-clear-dialog");
       const cancel = settings.getByTestId("settings-history-clear-cancel");
       const confirm = settings.getByTestId("settings-history-clear-confirm");
+      // The trigger is gated on loaded stats; once they show, it is enabled.
+      await expect(trigger).toBeEnabled();
 
       // --- Escape: the dialog closes, the sheet stays, history is intact. ---
       await trigger.click();
@@ -1167,6 +1184,36 @@ test.describe("PRD 10.6 settings sheet", () => {
       expect(await settingsOpen(sidebar)).toBe(true);
       expect(await historyStats(sidebar)).toEqual({ entries: 2, visits: 2 });
       await expect(stats).toContainText("2 entries");
+
+      // --- Section nav is inert while the dialog is open, even with focus on
+      // <body> (outside the dialog): ArrowDown + Enter must not switch the
+      // section, which would unmount the History section and its dialog. ---
+      await trigger.click();
+      await expect(dialog).toBeVisible();
+      await expect(settings.locator(SELECTED("history"))).toHaveCount(1);
+      const focusedTag = await settings.evaluate(() => {
+        (document.activeElement as HTMLElement | null)?.blur();
+        return document.activeElement?.tagName ?? null;
+      });
+      // The keys really land on <body>, not inside the dialog.
+      expect(focusedTag).toBe("BODY");
+      await settings.keyboard.press("ArrowDown");
+      await settings.keyboard.press("Enter");
+      // The count already holds before the keys, so let React commit any
+      // re-render they caused (two frames) before reading it.
+      await settings.evaluate(
+        () =>
+          new Promise<void>((resolve) =>
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+          ),
+      );
+      await expect(dialog).toHaveCount(1);
+      await expect(settings.locator(SELECTED("history"))).toHaveCount(1);
+      await expect(settings.locator(HIGHLIGHT("history"))).toHaveCount(1);
+      await expect(stats).toContainText("2 entries");
+      await cancel.click();
+      await expect(dialog).toHaveCount(0);
+      expect(await historyStats(sidebar)).toEqual({ entries: 2, visits: 2 });
 
       // --- Confirm: clears. ---
       await trigger.click();
