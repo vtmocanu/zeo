@@ -250,3 +250,20 @@ export type {
   Rgb,
   ThemeReport,
 } from "./theme.js";
+export {
+  SPACE_DOT_LIGHTNESS,
+  SPACE_DOT_CHROMA_BOOST,
+  GRADIENT_SECOND_STOP_OFFSET,
+  defaultSpaceTheme,
+  encodeSpaceTheme,
+  decodeSpaceTheme,
+  themesEqual,
+  cloneTheme,
+  activeSpaceTheme,
+  hueSwatchColor,
+  spaceDotColor,
+  pickerSetKind,
+  pickerSelectHue,
+  pickerSetIntensity,
+} from "./space-theme.js";
+export type { ThemeKind } from "./space-theme.js";

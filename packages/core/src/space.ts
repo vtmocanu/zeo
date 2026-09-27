@@ -6,6 +6,8 @@
  * rename, delete, active-space switching) and the per-space tab sets live in
  * {@link SpaceStore}.
  */
+import type { SpaceTheme } from "./theme.js";
+
 export interface Space {
   id: string;
   name: string;
@@ -16,4 +18,6 @@ export interface Space {
    */
   profileId: string;
   createdAt: number;
+  /** The space's tint/gradient (PRD 10.3), or `null` for the untinted default. */
+  theme: SpaceTheme | null;
 }

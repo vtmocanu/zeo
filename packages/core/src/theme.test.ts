@@ -259,6 +259,65 @@ describe("null-theme golden values", () => {
   });
 });
 
+describe("intensity 0 keeps the first stop's accent, only null falls back to iris", () => {
+  const appearances: Appearance[] = ["light", "dark"];
+  for (const appearance of appearances) {
+    test(`${appearance}: teal accent equal at intensity 0 and 1; tint/tint-opacity equal null's`, () => {
+      const zero = themeTokens({ stops: ["teal"], intensity: 0 }, appearance);
+      const one = themeTokens({ stops: ["teal"], intensity: 1 }, appearance);
+      const nullTokens = themeTokens(null, appearance);
+      expect(zero["--accent"]).toBe(one["--accent"]);
+      expect(zero["--tint"]).toBe(nullTokens["--tint"]);
+      expect(zero["--tint-opacity"]).toBe(nullTokens["--tint-opacity"]);
+    });
+
+    test(`${appearance}: null theme's accent is the iris accent`, () => {
+      const nullTokens = themeTokens(null, appearance);
+      expect(nullTokens["--accent"]).toBe(
+        themeTokens({ stops: ["iris"], intensity: 0 }, appearance)["--accent"],
+      );
+    });
+  }
+});
+
+describe("inkOnAccentContrast floor (PRD 10.3 §1)", () => {
+  const appearances: Appearance[] = ["light", "dark"];
+  const intensities = [0, 0.25, 0.5, 0.75, 1];
+
+  const singleThemes: SpaceTheme[] = SPACE_HUES.map((hue) => ({
+    stops: [hue],
+    intensity: 1,
+  }));
+  const pairThemes: SpaceTheme[] = [];
+  for (const a of SPACE_HUES) {
+    for (const b of SPACE_HUES) {
+      if (a === b) continue;
+      pairThemes.push({ stops: [a, b], intensity: 1 });
+    }
+  }
+  const allThemes = [...singleThemes, ...pairThemes];
+
+  test("exactly 1000 cases sweep inkOnAccentContrast >= 4.5", () => {
+    let cases = 0;
+    for (const appearance of appearances) {
+      for (const intensity of intensities) {
+        for (const theme of allThemes) {
+          const t: SpaceTheme = { stops: theme.stops, intensity };
+          const report = themeReport(t, appearance);
+          expect(report.inkOnAccentContrast).toBeGreaterThanOrEqual(4.5);
+          cases++;
+        }
+      }
+    }
+    expect(cases).toBe(1000);
+  });
+
+  test("light, teal, intensity 0 reaches at least 4.5", () => {
+    const report = themeReport({ stops: ["teal"], intensity: 0 }, "light");
+    expect(report.inkOnAccentContrast).toBeGreaterThanOrEqual(4.5);
+  });
+});
+
 describe("normalizeTheme", () => {
   test("valid one-stop theme passes through", () => {
     expect(normalizeTheme({ stops: ["iris"], intensity: 0.5 })).toEqual({

@@ -120,6 +120,14 @@ export interface ThemeReport {
   inkSecondaryContrast: number;
   accentContrast: number;
   popoverSecondaryContrast: number;
+  /**
+   * Contrast of `--ink-on-accent` over `--accent`, both taken as the rounded
+   * channels {@link toHex} emits. Guaranteed >= 4.5 (WCAG AA) by the
+   * ink-on-accent floor in {@link computeInternalReport}. Shown nowhere in the
+   * UI (no picker chip, `data-*` attribute or token carries it) — it exists
+   * purely so a caller can verify the floor held.
+   */
+  inkOnAccentContrast: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -434,12 +442,10 @@ function computeInternalReport(theme: SpaceTheme | null, appearance: Appearance)
   let accentLightness = appearance === "light" ? 0.54 : 0.76;
   const lightnessStep = appearance === "light" ? -0.02 : 0.02;
   let accent: Rgb = oklchToRgb(accentLightness, accentChroma, accentHueDef.h);
-  let accentContrast = Math.min(contrastRatio(accent, card), minContrast(accent, grounds));
   for (let i = 0; i < 14; i++) {
     accent = oklchToRgb(accentLightness, accentChroma, accentHueDef.h);
     const cardContrast = contrastRatio(accent, card);
     const groundsContrast = minContrast(accent, grounds);
-    accentContrast = Math.min(cardContrast, groundsContrast);
     if (cardContrast >= 3 && groundsContrast >= 3) break;
     accentLightness += lightnessStep;
   }
@@ -447,6 +453,20 @@ function computeInternalReport(theme: SpaceTheme | null, appearance: Appearance)
   // Ink on accent.
   const inkOnAccent =
     contrastRatio(WHITE, accent) >= contrastRatio(INK_DARK, accent) ? WHITE : INK_DARK;
+
+  // Ink-on-accent floor: while the rounded ink/accent pair falls short of
+  // WCAG AA (4.5:1), nudge the accent's OKLCH lightness by 0.02 away from the
+  // chosen ink (down for white ink, up for the dark ink) and recompute the
+  // accent at the same chroma/hue. The ink itself never changes. Bounded so a
+  // pathological hue/chroma combination cannot loop forever.
+  const inkOnAccentStep = inkOnAccent === WHITE ? -0.02 : 0.02;
+  let inkOnAccentContrast = contrastRatio(roundRgb(inkOnAccent), roundRgb(accent));
+  for (let i = 0; i < 50 && inkOnAccentContrast < 4.5; i++) {
+    accentLightness += inkOnAccentStep;
+    accent = oklchToRgb(accentLightness, accentChroma, accentHueDef.h);
+    inkOnAccentContrast = contrastRatio(roundRgb(inkOnAccent), roundRgb(accent));
+  }
+  const accentContrast = Math.min(contrastRatio(accent, card), minContrast(accent, grounds));
 
   // Popover ink. Secondary: mix the popover base toward the popover ink
   // until the candidate holds 4.5:1 against every popover background —
@@ -484,6 +504,7 @@ function computeInternalReport(theme: SpaceTheme | null, appearance: Appearance)
     inkSecondaryContrast,
     accentContrast,
     popoverSecondaryContrast,
+    inkOnAccentContrast,
     isInkDark,
     danger,
     inkOnDanger,
@@ -508,6 +529,7 @@ export function themeReport(theme: SpaceTheme | null, appearance: Appearance): T
     inkSecondaryContrast,
     accentContrast,
     popoverSecondaryContrast,
+    inkOnAccentContrast,
   } = computeInternalReport(theme, appearance);
   return {
     grounds,
@@ -518,6 +540,7 @@ export function themeReport(theme: SpaceTheme | null, appearance: Appearance): T
     inkSecondaryContrast,
     accentContrast,
     popoverSecondaryContrast,
+    inkOnAccentContrast,
   };
 }
 

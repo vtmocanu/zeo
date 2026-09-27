@@ -5,6 +5,9 @@ import type { Profile } from "./profile.js";
 import type { StoreSnapshot, SpacesState } from "./ipc.js";
 import { SCHEMA_VERSION, UnsupportedSchemaVersionError } from "./persistence.js";
 import type { PersistedState, TabRow } from "./persistence.js";
+import { normalizeTheme } from "./theme.js";
+import type { SpaceTheme } from "./theme.js";
+import { cloneTheme, defaultSpaceTheme, encodeSpaceTheme, decodeSpaceTheme } from "./space-theme.js";
 
 export interface SpaceStoreOptions {
   idFactory?: () => string;
@@ -108,18 +111,20 @@ export class SpaceStore {
    * space. Does not change the active space.
    */
   private insertSpace(name: string, profileId: string): Space {
+    const theme = defaultSpaceTheme(this.order.length);
     const space: Space = {
       id: this.idFactory(),
       name,
       profileId,
       createdAt: this.now(),
+      theme,
     };
     this.spacesById.set(space.id, {
       space,
       tabs: new TabStore({ idFactory: this.idFactory, now: this.now }),
     });
     this.order.push(space.id);
-    return { ...space };
+    return { ...space, theme: cloneTheme(theme) };
   }
 
   /** Looks up a space record, throwing on an unknown id. */
@@ -318,18 +323,45 @@ export class SpaceStore {
 
   // --- Space read access ---------------------------------------------------
 
-  /** The spaces in creation order, as defensive copies. */
+  /** The spaces in creation order, as defensive copies (themes cloned too). */
   spaces(): Space[] {
-    return this.order.map((id) => ({ ...this.spacesById.get(id)!.space }));
+    return this.order.map((id) => {
+      const space = this.spacesById.get(id)!.space;
+      return { ...space, theme: cloneTheme(space.theme) };
+    });
   }
 
   get activeSpaceId(): string {
     return this.activeId;
   }
 
-  /** The active space, as a defensive copy. */
+  /** The active space, as a defensive copy (theme cloned too). */
   get activeSpace(): Space {
-    return { ...this.spacesById.get(this.activeId)!.space };
+    const space = this.spacesById.get(this.activeId)!.space;
+    return { ...space, theme: cloneTheme(space.theme) };
+  }
+
+  /** A space's theme, or `null`. Throws `Unknown space: <id>` on an unknown id. */
+  spaceTheme(id: string): SpaceTheme | null {
+    return cloneTheme(this.require(id).space.theme);
+  }
+
+  /**
+   * Sets a space's theme. Throws `Unknown space: <id>` on an unknown id, and
+   * `Invalid space theme` when a non-null `theme` fails {@link normalizeTheme}
+   * (validated BEFORE any mutation); the stored value is the normalized one.
+   */
+  setSpaceTheme(id: string, theme: SpaceTheme | null): void {
+    const record = this.require(id);
+    if (theme === null) {
+      record.space = { ...record.space, theme: null };
+      return;
+    }
+    const normalized = normalizeTheme(theme);
+    if (normalized === null) {
+      throw new Error("Invalid space theme");
+    }
+    record.space = { ...record.space, theme: normalized };
   }
 
   // --- Delegated tab operations --------------------------------------------
@@ -635,6 +667,7 @@ export class SpaceStore {
         createdAt: record.space.createdAt,
         activeTabId: record.tabs.activeTabId,
         position,
+        theme: encodeSpaceTheme(record.space.theme),
       };
     });
 
@@ -721,6 +754,7 @@ export class SpaceStore {
         name: row.name,
         profileId: row.profileId,
         createdAt: row.createdAt,
+        theme: decodeSpaceTheme(row.theme),
       };
       const spaceTabs = state.tabs
         .filter((tab) => tab.spaceId === row.id)
