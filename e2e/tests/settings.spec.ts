@@ -824,10 +824,58 @@ test.describe("PRD 6.5 settings sections + search engine (offline)", () => {
     }
   });
 
+  // Every new settings session remounts HistorySection (keyed on main's
+  // `settingsSession`), so its dialog state resets even when a quick
+  // close→reopen reaches the still-mounted settings renderer as broadcasts
+  // React renders together and `open` never reads false there. That
+  // coalescing depends on renderer scheduling and cannot be forced here, so
+  // this pins the remount itself: a DOM node tagged in one session is gone
+  // after a cold reopen, while a warm section-open keeps the same node.
+  test("a cold settings reopen remounts the history section; a warm section-open does not", async () => {
+    const userDataDir = mkdtempSync(join(tmpdir(), "zeo-settings-"));
+    const { app, sidebar } = await launch(userDataDir);
+    const TAG = "__zeoSessionTag";
+    const isTagged = (page: Page): Promise<boolean> =>
+      page
+        .getByTestId("settings-history-stats")
+        .evaluate((el, tag) => (el as unknown as Record<string, unknown>)[tag] === true, TAG);
+    try {
+      let settings = await openSettings(app, sidebar, "settings.openHistory");
+      await settings.getByTestId("settings-history-clear").click();
+      await expect(settings.getByTestId("settings-history-clear-dialog")).toBeVisible();
+      await settings
+        .getByTestId("settings-history-stats")
+        .evaluate((el, tag) => {
+          (el as unknown as Record<string, unknown>)[tag] = true;
+        }, TAG);
+      const sessionBefore = (await tabsList(sidebar)).settingsSession;
+
+      // A warm section-open while settings is open is the same session.
+      await runCommand(sidebar, "settings.openHistory");
+      expect((await tabsList(sidebar)).settingsSession).toBe(sessionBefore);
+      expect(await isTagged(settings)).toBe(true);
+      await expect(settings.getByTestId("settings-history-clear-dialog")).toBeVisible();
+
+      // A cold reopen is a new session: a fresh section, with no dialog.
+      await runCommand(sidebar, "settings.close");
+      await expect
+        .poll(() => settingsOpen(sidebar), { message: "expected settings.close to close settings" })
+        .toBe(false);
+      settings = await openSettings(app, sidebar, "settings.openHistory");
+      expect((await tabsList(sidebar)).settingsSession).toBe(sessionBefore + 1);
+      await expect.poll(() => isTagged(settings), { message: "expected a remounted section" }).toBe(false);
+      await expect(settings.getByTestId("settings-history-clear-dialog")).toHaveCount(0);
+    } finally {
+      await app.close();
+      rmSync(userDataDir, { recursive: true, force: true });
+    }
+  });
+
   // A clear started in one settings session must not touch a later session:
-  // `sessionRef` in HistorySection is bumped on every open/close transition,
-  // and `onConfirmClear`'s continuations compare against it before touching
-  // state. Here the clear is still in flight when settings is closed and
+  // each new session remounts HistorySection (keyed on `settingsSession`), so
+  // the superseded instance's continuations can only reach unmounted state;
+  // within a mounted instance `sessionRef` additionally guards them across a
+  // close. Here the clear is still in flight when settings is closed and
   // reopened, and the reopened session opens its own dialog; once the stale
   // promise is released (and rejects), that dialog must be untouched (no
   // error, Confirm enabled) rather than inheriting the stale failure.

@@ -1061,10 +1061,12 @@ function ProfilesSection({
  * The caller also keys this section on `settingsSession`, which main bumps on
  * every closed→open transition. A quick close→reopen can reach this renderer
  * as back-to-back broadcasts that React renders once, so `open` never reads
- * `false` and the effect below never fires; the key remounts the section on
- * every new session regardless, and the superseded instance (with any clear
- * still in flight) is unmounted, so its late settle cannot touch the new one.
+ * `false` and the effect below does not re-run for the reopen; the key
+ * remounts the section on every new session regardless, and the superseded
+ * instance (with any clear still in flight) is unmounted, so its late settle
+ * cannot touch the new one.
  *
+ * The key is the guard across a reopen. Within one mounted instance,
  * `sessionRef` is bumped on every `open` transition, in both directions, and
  * captured by `onConfirmClear` before it calls `history.clear()`. Its
  * `.then`/`.catch` compare against the live `sessionRef` before touching
