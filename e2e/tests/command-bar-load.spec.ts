@@ -10,8 +10,15 @@
 // MAX_PREVIOUS_SUGGESTION_LISTS of them) is remapped to where that row now sits
 // instead of being rejected as stale.
 //
-// These tests deliberately overlap a slow background load with bar interaction
-// (no waitForViewsIdle between opening the bar and the load finishing): a local
+// The ACTIVE tab's view is visible under the overlay, so its load is the one
+// that could steal native focus; a third test pins the contract for that case
+// (bar open, overlay focused, same row, typing lands in the input). CDP key
+// events reach the overlay page regardless of OS focus, and under xvfb a page
+// view never takes native focus, so that test does NOT guard the steal logic
+// itself: command-bar-focus.test.ts does.
+//
+// These tests deliberately overlap a slow load with bar interaction (no
+// waitForViewsIdle between opening the bar and the load finishing): a local
 // loopback server holds `/slow` for SLOW_DELAY_MS so the load is provably in
 // flight while the selection moves.
 import { test, expect, _electron as electron } from "@playwright/test";
@@ -136,6 +143,23 @@ function tabIdOf(s: Suggestion | undefined): string | null {
   return s !== undefined && s.kind === "tab" ? s.tabId : null;
 }
 
+/** How long a post-load state must hold, sampled every HOLD_SAMPLE_MS. */
+const HOLD_MS = 500;
+const HOLD_SAMPLE_MS = 50;
+
+/**
+ * Assert `read()` equals `expected` on every sample across {@link HOLD_MS}: a
+ * one-shot read taken just before a deferred close (the overlay blur check runs
+ * a `setTimeout(0)` later) would otherwise pass.
+ */
+async function expectHolds<T>(read: () => Promise<T>, expected: T, what: string): Promise<void> {
+  const deadline = Date.now() + HOLD_MS;
+  do {
+    expect((await read()) as unknown, `${what} (must hold for ${HOLD_MS}ms)`).toEqual(expected);
+    await new Promise((resolve) => setTimeout(resolve, HOLD_SAMPLE_MS));
+  } while (Date.now() < deadline);
+}
+
 /** Whether the live view whose url contains `sub` is currently loading. */
 function viewLoading(app: ElectronApplication, sub: string): Promise<boolean | null> {
   return app.evaluate(({ webContents }, s) => {
@@ -215,10 +239,10 @@ test.describe("command bar vs background load (#179)", () => {
   /**
    * Start a navigation of the view whose url contains `sub` to `url`, from main,
    * WITHOUT awaiting it; then poll until that view reports `isLoading()` so the
-   * caller provably overlaps the load. Usually a background view; the
-   * active-tab test drives the ACTIVE (visible) view through it too.
+   * caller provably overlaps the load. Works for a background or the active
+   * (visible) view alike.
    */
-  async function startBackgroundLoad(sub: string, url: string): Promise<void> {
+  async function startLoad(sub: string, url: string): Promise<void> {
     await app.evaluate(
       ({ webContents }, [s, u]) => {
         const wc = webContents.getAllWebContents().find((w) => w.getURL().includes(s));
@@ -232,7 +256,7 @@ test.describe("command bar vs background load (#179)", () => {
     await expect
       .poll(() => viewLoading(app, sub), {
         timeout: VIEW_POLL_TIMEOUT_MS,
-        message: `expected the background view ${sub} to be loading`,
+        message: `expected the view ${sub} to be loading`,
       })
       .toBe(true);
   }
@@ -283,7 +307,7 @@ test.describe("command bar vs background load (#179)", () => {
     // DIFFERENT row (row 1) makes a reset-to-0 observable: it would land on the
     // reloaded tab, not the kept one.
     const loadingSub = "/fast?n=2";
-    await startBackgroundLoad(loadingSub, `${server!.base}/slow`);
+    await startLoad(loadingSub, `${server!.base}/slow`);
 
     // Arrow to row 1 in the overlay while the load is in flight.
     await overlay.getByTestId("command-bar-input").press("ArrowDown");
@@ -353,12 +377,14 @@ test.describe("command bar vs background load (#179)", () => {
   });
 
   test("an ACTIVE tab's load finishing keeps the overlay focused, the arrowed-to row selected, and typing in the bar", async () => {
-    // The tests above slow-load a HIDDEN background tab, which can never take
+    // The test above slow-loads a HIDDEN background tab, which can never take
     // native focus. The ACTIVE tab's view is visible under the overlay, so its
-    // load is the one that could steal focus and blur-close the bar. Under xvfb
-    // a page view rarely takes native focus even when it would on a desktop, so
-    // this pins the CONTRACT (bar open, overlay focused, same row, typing lands
-    // in the input); the unit tests for command-bar-focus guard the steal logic.
+    // load is the one that could steal focus and blur-close the bar on a
+    // desktop. This pins the CONTRACT only (bar open, overlay focused, same row,
+    // typing lands in the input); it does not guard the steal logic: under xvfb
+    // a page view never takes native focus, and Playwright's keyboard goes over
+    // CDP straight to the overlay page regardless of OS focus. The unit tests in
+    // command-bar-focus.test.ts guard the steal logic.
     const tabs = await setUpTabs();
     const overlay = await openBar();
     const rows = overlay.getByTestId("command-bar-suggestion");
@@ -381,15 +407,20 @@ test.describe("command bar vs background load (#179)", () => {
     expect(moved.selectedIndex).toBe(1);
     const keptRow = moved.suggestions[1]!;
     expect(keptRow.kind).toBe("tab");
-    expect(tabIdOf(keptRow)).toBe(tabs[0]!.id);
+    const keptTabId = tabIdOf(keptRow);
+    expect(keptTabId).toBe(tabs[0]!.id);
 
     // Slow-load the ACTIVE tab (fast 3) from main, not through the bar. The
     // distinguishing query string keeps this view's url unique while it loads.
+    // Until the held response commits, the view still reports its old url, so
+    // the in-flight checks locate it by that one.
+    const activeSub = "/fast?n=3";
     const activeSlowSub = "/slow?active=3";
     expect(await activeTabId()).toBe(tabs[2]!.id);
-    await startBackgroundLoad("/fast?n=3", `${server!.base}${activeSlowSub}`);
-    // Still overlapping: the bar is open while the active view loads.
+    await startLoad(activeSub, `${server!.base}${activeSlowSub}`);
+    // Still overlapping: the bar is open while the active view is still loading.
     expect((await barState()).open).toBe(true);
+    expect(await viewLoading(app, activeSub)).toBe(true);
 
     // Let the load finish: the active view settles on the slow page and title.
     await expect
@@ -404,8 +435,24 @@ test.describe("command bar vs background load (#179)", () => {
         { timeout: VIEW_POLL_TIMEOUT_MS, message: "expected the active tab's slow load to finish" },
       )
       .toEqual({ loading: false, title: SLOW_TITLE });
-    // The loaded view is still the active tab.
-    expect(await activeTabId()).toBe(tabs[2]!.id);
+
+    // Wait for MAIN to have processed the load: the store's active tab is still
+    // fast 3 and now carries the slow page's title.
+    await expect
+      .poll(
+        () =>
+          sidebar.evaluate(async () => {
+            const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+            const st = await zeo.tabs.list();
+            const active = st.tabs.find((t) => t.id === st.activeTabId);
+            return { id: st.activeTabId, title: active?.title ?? null };
+          }),
+        {
+          timeout: VIEW_POLL_TIMEOUT_MS,
+          message: "expected main to record the active tab's new title",
+        },
+      )
+      .toEqual({ id: tabs[2]!.id, title: SLOW_TITLE });
 
     // The overlay (located by its `view=command-bar` url, as page-search.spec.ts
     // does) holds native focus, not the page view that just finished loading.
@@ -416,30 +463,54 @@ test.describe("command bar vs background load (#179)", () => {
           .find((w) => !w.isDestroyed() && w.getURL().includes("view=command-bar"));
         return wc === undefined ? null : wc.isFocused();
       });
-    expect(await overlayFocused()).toBe(true);
-
-    // The bar is still open and still on the SAME row by identity (kind + tab
-    // id), not merely the same index.
+    // The bar is open, on the kept row (kind + tab id), with the overlay focused.
+    // The active tab is not a bar row, so its load does not reorder the list and
+    // this cannot tell identity from index; the background-load tests cover the
+    // identity remap. Settle first, then require it to HOLD so a deferred
+    // blur-close cannot slip past a single read.
+    const settled = async () => {
+      const st = await barState();
+      const sel = st.suggestions[st.selectedIndex];
+      return {
+        open: st.open,
+        kind: sel?.kind ?? null,
+        tabId: tabIdOf(sel),
+        overlayFocused: await overlayFocused(),
+      };
+    };
+    const expectedSettled = {
+      open: true,
+      kind: keptRow.kind,
+      tabId: keptTabId,
+      overlayFocused: true,
+    };
+    await expect
+      .poll(settled, { timeout: VIEW_POLL_TIMEOUT_MS, message: "expected the bar to settle" })
+      .toEqual(expectedSettled);
+    await expectHolds(settled, expectedSettled, "bar open, kept row selected, overlay focused");
     const after = await barState();
-    expect(after.open).toBe(true);
-    const selected = after.suggestions[after.selectedIndex];
-    expect(selected?.kind).toBe(keptRow.kind);
-    expect(tabIdOf(selected)).toBe(tabIdOf(keptRow));
     await expect(rows.nth(after.selectedIndex)).toHaveAttribute("aria-selected", "true");
     await expect(
       overlay.locator('[data-testid="command-bar-suggestion"][aria-selected="true"]'),
     ).toHaveText(selectedText);
 
-    // Keystrokes on the overlay page reach the bar input: main's query and the
-    // input's DOM value both carry them.
+    // Keystrokes sent to the overlay page reach the bar input: main's query and
+    // the input's DOM value both carry them, and the bar stays open and focused.
     await expect(input).toBeFocused();
     await overlay.keyboard.type("fa");
     await expect(input).toHaveValue("fa");
     await expect
       .poll(async () => (await barState()).query, { timeout: VIEW_POLL_TIMEOUT_MS })
       .toBe("fa");
-    expect((await barState()).open).toBe(true);
-    expect(await overlayFocused()).toBe(true);
+    const typed = async () => ({
+      open: (await barState()).open,
+      overlayFocused: await overlayFocused(),
+    });
+    await expectHolds(
+      typed,
+      { open: true, overlayFocused: true },
+      "bar open and focused after typing",
+    );
   });
 
   test("a row click rendered before a background load reorders the rows activates the clicked row by identity", async () => {
@@ -475,7 +546,7 @@ test.describe("command bar vs background load (#179)", () => {
     // BELOW Fast 1. The real load re-ranks the open bar more than once (url
     // commit, title, finish); every one of those lists is background-superseded,
     // so the clicked revision stays remappable (MAX_PREVIOUS_SUGGESTION_LISTS).
-    await startBackgroundLoad("/fast?n=2", `${server!.base}/slow?fast=2`);
+    await startLoad("/fast?n=2", `${server!.base}/slow?fast=2`);
     await expect
       .poll(
         () =>
