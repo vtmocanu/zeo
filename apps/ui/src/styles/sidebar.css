@@ -11,7 +11,14 @@
   padding: 0 var(--space-4) var(--space-4);
   color: var(--ink-primary);
   font-size: var(--text-base);
-  overflow: hidden;
+  /* PRD 10.7 §4: `overflow: clip` on both axes rather than `overflow-x:
+     clip; overflow-y: hidden`, since the 28px space-switch shift is
+     horizontal and `.sidebar` itself never scrolls vertically (that is
+     `.sidebar__sections` below, whose own `overflow-y: auto` is the only
+     scroll container). `clip` establishes no scroll container on either
+     axis, so `.sidebar__section--pinned`'s `position: sticky` inside
+     `.sidebar__sections` keeps working. */
+  overflow: clip;
 }
 
 /* Collapsed and not revealed: the card spans the window. The sidebar keeps
@@ -55,18 +62,14 @@
   background: var(--accent-soft);
 }
 
-.sidebar__resize-handle:focus-visible {
-  outline: none;
-}
-
-.sidebar__resize-handle:focus-visible::after {
-  background: var(--focus-ring);
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .sidebar__resize-handle::after {
-    transition: none;
-  }
+/* Space-scoped block (PRD 10.7 §4): the space label and its sections. Holds
+   the switch's slide-in animation classes so .sidebar__sections stays the
+   only scroll container. */
+.sidebar__space {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
 }
 
 /* Space label: the active space's name above its tabs. A plain heading with
@@ -146,7 +149,7 @@
   display: flex;
   align-items: center;
   gap: var(--space-4);
-  height: var(--label-height);
+  height: var(--hit-target);
   padding-left: 10px;
 }
 
@@ -162,7 +165,7 @@
   display: inline-flex;
   align-items: center;
   gap: 3px;
-  height: var(--label-height);
+  min-height: var(--hit-target);
   padding: 0 6px;
   border: none;
   border-radius: var(--radius-control);
@@ -172,19 +175,12 @@
   font-size: var(--text-xs);
   font-weight: var(--weight-semibold);
   cursor: pointer;
-  transition:
-    background-color var(--motion-fast) var(--ease-standard),
-    color var(--motion-fast) var(--ease-standard);
+  transition: var(--transition-control);
 }
 
 .sidebar__clear:hover:not(:disabled) {
   background: var(--surface-hover);
   color: var(--ink-primary);
-}
-
-.sidebar__clear:focus-visible {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 1px;
 }
 
 /* Nothing to clear: the action recedes but stays legible as a label. */
@@ -211,9 +207,7 @@
   font-weight: var(--weight-medium);
   text-align: left;
   cursor: pointer;
-  transition:
-    background-color var(--motion-fast) var(--ease-standard),
-    color var(--motion-fast) var(--ease-standard);
+  transition: var(--transition-control);
 }
 
 .sidebar__new-tab:hover {
@@ -221,23 +215,11 @@
   color: var(--ink-primary);
 }
 
-.sidebar__new-tab:focus-visible {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 1px;
-}
-
 .sidebar__empty {
   margin: 0;
   padding: var(--space-4) 10px;
   font-size: var(--text-sm);
   color: var(--ink-secondary);
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .sidebar__clear,
-  .sidebar__new-tab {
-    transition: none;
-  }
 }
 
 /* Drag reorder ------------------------------------------------------------ */

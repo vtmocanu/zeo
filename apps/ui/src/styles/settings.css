@@ -62,6 +62,7 @@
   font-weight: var(--weight-medium);
   text-align: left;
   cursor: pointer;
+  transition: var(--transition-control);
 }
 
 .settings__section-item .icon {
@@ -113,6 +114,7 @@
   background: transparent;
   color: var(--ink-popover-secondary);
   cursor: pointer;
+  transition: var(--transition-control);
 }
 
 .settings__close:hover {
@@ -246,6 +248,7 @@
   font-weight: var(--weight-medium);
   white-space: nowrap;
   cursor: pointer;
+  transition: var(--transition-control);
 }
 
 .settings__button:hover:not(:disabled) {
@@ -295,13 +298,16 @@
 
 .settings__link-button {
   appearance: none;
+  min-height: var(--hit-target);
   padding: 0;
+  padding-inline: var(--space-2);
   border: none;
   background: none;
   color: var(--accent);
   font: inherit;
   font-size: var(--text-sm);
   cursor: pointer;
+  transition: var(--transition-control);
 }
 
 .settings__link-button:hover {
@@ -324,17 +330,6 @@
 
 .settings__input::placeholder {
   color: var(--ink-popover-secondary);
-}
-
-.settings__section-item:focus-visible,
-.settings__close:focus-visible,
-.settings__button:focus-visible,
-.settings__link-button:focus-visible,
-.settings__input:focus-visible,
-.settings__checkbox:focus-visible,
-.settings__radio:focus-visible {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 1px;
 }
 
 /* Updates -------------------------------------------------------------------- */

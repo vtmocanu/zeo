@@ -23,6 +23,15 @@
   opacity: var(--tint-opacity);
 }
 
+/* The previous theme's tint, cross-fading out over the incoming one on a
+   space switch (PRD 10.7 §4, styles/motion.css for the animation classes).
+   Its inline background/opacity are set from themeTokens(previousTheme). */
+.window-tint-outgoing {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+}
+
 /* The card a page, split pane or settings view floats in. The native view is
    drawn over it with the same radius; this layer contributes the edge (the
    shadow token's first ring is the hairline) and the drop shadow. */

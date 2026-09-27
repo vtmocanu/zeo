@@ -37,6 +37,7 @@ import {
   type HistoryStatsStatus,
 } from "./history-clear.js";
 import { Icon, type IconName } from "./icons.js";
+import { useEnterMotion } from "./motion.js";
 import { useThemeTokens } from "./theme.js";
 import { useWindowSize } from "./WindowChrome.js";
 
@@ -247,15 +248,22 @@ export function Settings() {
   const selectedTitle =
     SETTINGS_SECTIONS.find((section) => section.id === selected)?.title ?? "";
 
+  const scrimRef = useEnterMotion<HTMLDivElement>(state?.settingsOpen ?? false, "motion-fade");
+  const sheetRef = useEnterMotion<HTMLDivElement>(state?.settingsOpen ?? false);
+
   return (
     <div
+      ref={scrimRef}
       className="settings-scrim"
       data-testid="settings-scrim"
       onPointerDown={onScrimPointerDown}
       onClick={onScrimClick}
     >
       <div
-        ref={setSheetElement}
+        ref={(node) => {
+          sheetRef.current = node;
+          setSheetElement(node);
+        }}
         className="settings"
         data-testid="settings"
         role="dialog"

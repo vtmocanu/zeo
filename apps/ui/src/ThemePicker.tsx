@@ -21,6 +21,7 @@ import {
   toHex,
 } from "@zeo/core";
 import { findSpaceItem } from "./dom.js";
+import { useEnterMotion } from "./motion.js";
 
 export interface ThemePickerProps {
   /** The edited space, not necessarily the active one. */
@@ -249,10 +250,17 @@ export function ThemePicker({
   };
 
   const title = `${space.name} theme`;
+  // PRD 10.7 §3, §5: the picker only ever mounts while open, so `open` is
+  // always true; `useEnterMotion` still runs the initial "replay" step,
+  // which plays the enter animation on mount.
+  const motionRef = useEnterMotion<HTMLDivElement>(true);
 
   return (
     <div
-      ref={rootRef}
+      ref={(node) => {
+        motionRef.current = node;
+        rootRef.current = node;
+      }}
       className="theme-picker"
       role="dialog"
       aria-label={title}

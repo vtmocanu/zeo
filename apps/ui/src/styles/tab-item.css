@@ -10,9 +10,7 @@
   font-size: var(--text-base);
   font-weight: var(--weight-medium);
   cursor: pointer;
-  transition:
-    background-color var(--motion-fast) var(--ease-standard),
-    box-shadow var(--motion-fast) var(--ease-standard);
+  transition: var(--transition-control);
 }
 
 .tab-item:hover {
@@ -57,11 +55,6 @@
   text-align: left;
   padding: 0;
   cursor: pointer;
-}
-
-.tab-item__title:focus-visible {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 1px;
 }
 
 /* An unloaded tab (no live WebContentsView) is dimmed to signal it will reload
@@ -122,26 +115,23 @@
    actual size on click. */
 .tab-item__zoom {
   appearance: none;
-  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: var(--hit-target);
+  min-height: var(--hit-target);
   padding: 0 5px;
   border: none;
   border-radius: var(--radius-control);
   background: var(--fill-subtle);
   font-family: inherit;
   cursor: pointer;
-  transition:
-    background-color var(--motion-fast) var(--ease-standard),
-    color var(--motion-fast) var(--ease-standard);
+  transition: var(--transition-control);
 }
 
 .tab-item__zoom:hover {
   background: var(--surface-hover);
   color: var(--ink-primary);
-}
-
-.tab-item__zoom:focus-visible {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 1px;
 }
 
 /* Split view -------------------------------------------------------------- */
@@ -161,11 +151,4 @@
 .tab-item--pane-focused,
 .tab-item--pane-focused.tab-item--active {
   box-shadow: inset 2px 0 0 var(--accent), var(--shadow-raised);
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .tab-item,
-  .tab-item__zoom {
-    transition: none;
-  }
 }

@@ -1,0 +1,101 @@
+/*
+ * Motion (PRD 10.7 §2): keyframes, the enter/fade classes, the space-switch
+ * slide classes, the tint cross-fade classes, reduced motion and the
+ * zeo-motion-off kill switch. Every duration and easing here comes from a
+ * token in tokens.css; scripts/check-css-tokens.mjs rejects literals.
+ */
+
+@keyframes zeo-enter {
+  from {
+    opacity: 0;
+    transform: scale(var(--motion-enter-scale));
+  }
+}
+
+@keyframes zeo-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes zeo-space-in-forward {
+  from {
+    opacity: 0;
+    transform: translateX(var(--motion-space-shift));
+  }
+}
+
+@keyframes zeo-space-in-backward {
+  from {
+    opacity: 0;
+    transform: translateX(calc(-1 * var(--motion-space-shift)));
+  }
+}
+
+@keyframes zeo-tint-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes zeo-tint-out {
+  to {
+    opacity: 0;
+  }
+}
+
+.motion-enter {
+  animation: zeo-enter var(--motion-base) var(--ease-standard) both;
+}
+
+.motion-fade {
+  animation: zeo-fade-in var(--motion-base) var(--ease-standard) both;
+}
+
+[data-motion="closed"] {
+  opacity: 0;
+}
+
+/* Space-switch slide (PRD 10.7 §4): applied to the .sidebar__space wrapper. */
+.sidebar__space--enter-forward {
+  animation: zeo-space-in-forward var(--motion-space) var(--ease-standard) both;
+}
+
+.sidebar__space--enter-backward {
+  animation: zeo-space-in-backward var(--motion-space) var(--ease-standard) both;
+}
+
+.sidebar__space--enter-fade {
+  animation: zeo-fade-in var(--motion-space) var(--ease-standard) both;
+}
+
+/* Tint cross-fade (PRD 10.7 §4): .window-tint replays its ::after fade-in
+   while the outgoing layer fades out. Geometry for .window-tint-outgoing is
+   in window.css. */
+.window-tint--enter::after {
+  animation: zeo-tint-in var(--motion-space) var(--ease-standard) both;
+}
+
+.window-tint-outgoing {
+  animation: zeo-tint-out var(--motion-space) var(--ease-standard) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .motion-enter,
+  .sidebar__space--enter-forward,
+  .sidebar__space--enter-backward {
+    animation-name: zeo-fade-in;
+  }
+
+  input,
+  textarea {
+    caret-animation: manual;
+  }
+}
+
+.zeo-motion-off *,
+.zeo-motion-off *::before,
+.zeo-motion-off *::after {
+  animation: none !important;
+  transition: none !important;
+}

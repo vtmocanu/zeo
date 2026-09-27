@@ -41,25 +41,21 @@
   border-radius: var(--radius-control);
   background: transparent;
   cursor: pointer;
-  transition:
-    background-color var(--motion-fast) var(--ease-standard),
-    box-shadow var(--motion-fast) var(--ease-standard);
+  transition: var(--transition-control);
 }
 
 .space-item:hover {
   background: var(--surface-hover);
 }
 
+.space-item:active {
+  transform: scale(var(--motion-press-scale));
+}
+
 .space-item--active,
 .space-item--active:hover {
   background: var(--surface-raised);
   box-shadow: var(--shadow-raised);
-}
-
-/* Inside the scrolling strip an outer ring would be clipped; draw it inset. */
-.space-item:focus-visible {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: -2px;
 }
 
 /* Theme dot (PRD 10.3 §8): the space's swatch color or gradient, neutral
@@ -101,16 +97,4 @@
   color: var(--ink-primary);
   font: inherit;
   font-size: var(--text-base);
-}
-
-.space-name-input:focus {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 1px;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .space-item,
-  .space-item__dot {
-    transition: none;
-  }
 }

@@ -7,6 +7,7 @@ import {
   type ReactElement,
 } from "react";
 import { nextFocusIndex } from "./dialog.js";
+import { useEnterMotion } from "./motion.js";
 
 export interface ConfirmDialogProps {
   title: string;
@@ -124,13 +125,20 @@ export function ConfirmDialog(props: ConfirmDialogProps): ReactElement {
     }
   };
 
+  // PRD 10.7 §3, §5: ConfirmDialog only ever mounts while open, so `open` is
+  // always true and the enter animation plays once, on mount.
+  const scrimRef = useEnterMotion<HTMLDivElement>(true, "motion-fade");
+  const dialogRef = useEnterMotion<HTMLDivElement>(true);
+
   return (
     <div
+      ref={scrimRef}
       className="dialog-scrim"
       onPointerDown={onScrimPointerDown}
       onClick={onScrimClick}
     >
       <div
+        ref={dialogRef}
         className="dialog"
         role="alertdialog"
         aria-modal="true"

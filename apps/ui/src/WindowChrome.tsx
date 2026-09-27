@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type CSSProperties,
@@ -17,6 +18,7 @@ import {
   windowCardRects,
 } from "@zeo/core";
 import { Icon, type IconName } from "./icons.js";
+import { replayClass } from "./motion.js";
 
 /**
  * Frameless window chrome for the main sidebar surface (PRD 10.2 §6). The
@@ -81,11 +83,49 @@ export function WindowCards(props: {
 }
 
 /** Window ground, card(s) and top drag strip, rendered before the sidebar. */
-export function WindowBackdrop(props: { chrome: ChromeState; layout: WindowLayout }): ReactElement {
+export function WindowBackdrop(props: {
+  chrome: ChromeState;
+  layout: WindowLayout;
+  /** The previous theme's tint, faded out over the incoming one on a space
+   *  switch (PRD 10.7 §4), or null between switches. */
+  outgoingTint: { key: string; tint: string; opacity: number } | null;
+  /** Called with the outgoing layer's key when its fade finishes, so App can
+   *  drop it even if `animationend` never fires (motion off, the window
+   *  losing focus mid-fade). */
+  onOutgoingTintEnd: (key: string) => void;
+  /** Bumped by App on every switch that changes the tint, so `.window-tint`
+   *  replays its `window-tint--enter` fade-in without remounting. */
+  tintReplayKey: number;
+}): ReactElement {
   const { width, height } = useWindowSize();
+  const tintRef = useRef<HTMLDivElement>(null);
+  const replayedKeyRef = useRef(props.tintReplayKey);
+
+  useLayoutEffect(() => {
+    if (props.tintReplayKey === replayedKeyRef.current) {
+      return;
+    }
+    replayedKeyRef.current = props.tintReplayKey;
+    const element = tintRef.current;
+    if (element) {
+      replayClass(element, "window-tint--enter");
+    }
+  }, [props.tintReplayKey]);
+
+  const outgoingTint = props.outgoingTint;
+
   return (
     <>
-      <div className="window-tint" data-testid="window-tint" aria-hidden="true" />
+      <div ref={tintRef} className="window-tint" data-testid="window-tint" aria-hidden="true" />
+      {outgoingTint && (
+        <div
+          key={outgoingTint.key}
+          className="window-tint-outgoing"
+          aria-hidden="true"
+          style={{ background: outgoingTint.tint, opacity: outgoingTint.opacity }}
+          onAnimationEnd={() => props.onOutgoingTintEnd(outgoingTint.key)}
+        />
+      )}
       <WindowCards width={width} height={height} chrome={props.chrome} layout={props.layout} />
       <div className="window-drag-strip" data-testid="window-drag-strip" aria-hidden="true" />
     </>
