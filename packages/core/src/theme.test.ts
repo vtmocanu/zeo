@@ -338,6 +338,11 @@ describe("inkOnAccentContrast floor", () => {
         test(`${appearance} intensity=${intensity} stops=${theme.stops.join("+")}`, () => {
           const report = themeReport({ stops: theme.stops, intensity }, appearance);
           expect(report.inkOnAccentContrast).toBeGreaterThanOrEqual(4.5);
+
+          const tokens = themeTokens({ stops: theme.stops, intensity }, appearance);
+          expect(
+            contrastRatio(hexToRgb(tokens["--ink-on-accent"]), hexToRgb(tokens["--accent"])),
+          ).toBeGreaterThanOrEqual(4.5);
         });
       }
     }

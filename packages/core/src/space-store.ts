@@ -344,7 +344,7 @@ export class SpaceStore {
     return { ...space, theme: cloneTheme(space.theme) };
   }
 
-  /** The active space's theme, or `null` for a null theme. Throws on an unknown id. */
+  /** The theme of the space `id`, or `null` for a null theme. Throws on an unknown id. */
   spaceTheme(id: string): SpaceTheme | null {
     return cloneTheme(this.require(id).space.theme);
   }

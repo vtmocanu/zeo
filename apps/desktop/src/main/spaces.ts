@@ -1,7 +1,13 @@
 import { ipcMain, Menu, session } from "electron";
 import type { MenuItemConstructorOptions } from "electron";
-import { IPC, buildSpaceContextMenu } from "@zeo/core";
-import type { Profile, Space, SpaceContextMenuResult, SpacesState } from "@zeo/core";
+import { IPC, buildSpaceContextMenu, normalizeTheme, themesEqual } from "@zeo/core";
+import type {
+  Profile,
+  Space,
+  SpaceContextMenuResult,
+  SpacesState,
+  SpaceTheme,
+} from "@zeo/core";
 import { updateDownload } from "./db.js";
 import { terminalizeProfileDownloads } from "./download-ops.js";
 import { runtime } from "./state.js";
@@ -118,6 +124,29 @@ export function remapSpaceProfile(spaceId: string, profileId: string): void {
 }
 
 /**
+ * Sets a space's theme, validating `id`/`theme` through {@link normalizeTheme}
+ * (PRD 10.3 §4): a non-string id or a non-null theme that fails normalization
+ * throws a `TypeError` before any store mutation; an unknown id throws from
+ * `runtime.store.spaceTheme`; a theme equal to the current one is a no-op (no
+ * broadcast); otherwise the store is updated and a broadcast is sent.
+ */
+export function setSpaceTheme(id: unknown, theme: unknown): void {
+  if (typeof id !== "string") {
+    throw new TypeError("spaces.setTheme: id must be a string");
+  }
+  const next: SpaceTheme | null = theme === null ? null : normalizeTheme(theme);
+  if (theme !== null && next === null) {
+    throw new TypeError("spaces.setTheme: invalid theme");
+  }
+  const current = runtime.store.spaceTheme(id);
+  if (themesEqual(current, next)) {
+    return;
+  }
+  runtime.store.setSpaceTheme(id, next);
+  broadcast();
+}
+
+/**
  * Builds a space's context-menu descriptor and, outside headless e2e, pops the
  * native menu for it. Mirrors {@link showTabContextMenu}: an unknown id returns
  * an empty descriptor (and skips the throwing store reads), the descriptor is
@@ -159,6 +188,16 @@ export function showSpaceContextMenu(id: string, x: number, y: number): SpaceCon
             click: wrap(item.id, () =>
               popWin.webContents.send(IPC.spaceMenuAction, { action: "rename", spaceId: id }),
             ),
+          };
+        }
+        if (item.id === "edit-theme") {
+          return {
+            label: item.label,
+            enabled: item.enabled,
+            click: wrap(item.id, () => {
+              popWin.webContents.send(IPC.spaceMenuAction, { action: "edit-theme", spaceId: id });
+              popWin.webContents.focus();
+            }),
           };
         }
         if (item.id === "delete") {
@@ -338,6 +377,10 @@ ipcMain.handle(IPC.spacesDelete, (_event, id: string): void => {
 ipcMain.handle(IPC.spacesSetProfile, (_event, spaceId: string, profileId: string): void => {
   remapSpaceProfile(spaceId, profileId);
 });
+
+ipcMain.handle(IPC.spacesSetTheme, (_event, id: unknown, theme: unknown): void =>
+  setSpaceTheme(id, theme),
+);
 
 ipcMain.handle(IPC.profilesCreate, (_event, name: string): Profile => {
   const profile = runtime.store.createProfile(name);

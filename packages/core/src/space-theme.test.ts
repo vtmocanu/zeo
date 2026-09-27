@@ -196,6 +196,14 @@ describe("pickerSetKind", () => {
     const result = pickerSetKind(null, "solid");
     expect(result).toEqual({ stops: ["iris"], intensity: 1 });
   });
+
+  test("same kind is a no-op on stops", () => {
+    const solid = pickerSetKind({ stops: ["teal"], intensity: 1 }, "solid");
+    expect(solid.stops).toEqual(["teal"]);
+
+    const gradient = pickerSetKind({ stops: ["teal", "violet"], intensity: 1 }, "gradient");
+    expect(gradient.stops).toEqual(["teal", "violet"]);
+  });
 });
 
 describe("pickerSelectHue", () => {
@@ -217,5 +225,9 @@ describe("pickerSetIntensity", () => {
 
   test("130 clamps to 100%", () => {
     expect(pickerSetIntensity({ stops: ["iris"], intensity: 1 }, 130).intensity).toBe(1);
+  });
+
+  test("a non-finite percent leaves the draft's intensity unchanged", () => {
+    expect(pickerSetIntensity({ stops: ["iris"], intensity: 0.65 }, NaN).intensity).toBe(0.65);
   });
 });

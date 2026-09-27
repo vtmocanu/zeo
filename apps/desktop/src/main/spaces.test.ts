@@ -59,7 +59,12 @@ vi.mock("./broadcast.js", () => ({ broadcast: h.broadcast }));
 
 import { SpaceStore } from "@zeo/core";
 import { runtime } from "./state.js";
-import { createProfileAndAssign, createSpaceAndActivate, deleteSpace } from "./spaces.js";
+import {
+  createProfileAndAssign,
+  createSpaceAndActivate,
+  deleteSpace,
+  setSpaceTheme,
+} from "./spaces.js";
 
 describe("createSpaceAndActivate", () => {
   beforeEach(() => {
@@ -276,5 +281,65 @@ describe("deleteSpace", () => {
     // The function still ran to completion despite the forgetTab failure.
     expect(h.reconcileAndApply).toHaveBeenCalledTimes(1);
     expect(h.broadcast).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("setSpaceTheme", () => {
+  beforeEach(() => {
+    runtime.store = new SpaceStore();
+    runtime.win = null;
+    runtime.views.clear();
+    h.broadcast.mockReset();
+  });
+
+  test("a non-string id throws TypeError, changes nothing, and does not broadcast", () => {
+    const before = runtime.store.spaces();
+
+    expect(() => setSpaceTheme(42, { stops: ["teal"], intensity: 1 })).toThrow(TypeError);
+    expect(() => setSpaceTheme(42, { stops: ["teal"], intensity: 1 })).toThrow(
+      "spaces.setTheme: id must be a string",
+    );
+
+    expect(runtime.store.spaces()).toEqual(before);
+    expect(h.broadcast).not.toHaveBeenCalled();
+  });
+
+  test("an invalid theme throws TypeError, changes nothing, and does not broadcast", () => {
+    const id = runtime.store.activeSpaceId;
+    const before = runtime.store.spaceTheme(id);
+
+    expect(() => setSpaceTheme(id, { stops: ["mauve"], intensity: 1 })).toThrow(TypeError);
+    expect(() => setSpaceTheme(id, { stops: ["mauve"], intensity: 1 })).toThrow(
+      "spaces.setTheme: invalid theme",
+    );
+
+    expect(runtime.store.spaceTheme(id)).toEqual(before);
+    expect(h.broadcast).not.toHaveBeenCalled();
+  });
+
+  test("an equal theme does not broadcast", () => {
+    const id = runtime.store.activeSpaceId;
+    const current = runtime.store.spaceTheme(id);
+
+    setSpaceTheme(id, current);
+
+    expect(h.broadcast).not.toHaveBeenCalled();
+  });
+
+  test("a new theme is stored and broadcasts exactly once", () => {
+    const id = runtime.store.activeSpaceId;
+
+    setSpaceTheme(id, { stops: ["teal"], intensity: 1 });
+
+    expect(runtime.store.spaceTheme(id)).toEqual({ stops: ["teal"], intensity: 1 });
+    expect(h.broadcast).toHaveBeenCalledTimes(1);
+  });
+
+  test("intensity 1.7 is normalized and stored as 1", () => {
+    const id = runtime.store.activeSpaceId;
+
+    setSpaceTheme(id, { stops: ["teal"], intensity: 1.7 });
+
+    expect(runtime.store.spaceTheme(id)).toEqual({ stops: ["teal"], intensity: 1 });
   });
 });

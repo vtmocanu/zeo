@@ -111,7 +111,7 @@ export function pickerSetKind(theme: SpaceTheme | null, kind: ThemeKind): SpaceT
     return { stops: [draft.stops[0]], intensity };
   }
   if (draft.stops.length === 2) {
-    return { stops: draft.stops, intensity };
+    return { stops: [...draft.stops] as SpaceTheme["stops"], intensity };
   }
   const secondIndex =
     (SPACE_HUES.indexOf(draft.stops[0]) + GRADIENT_SECOND_STOP_OFFSET) % SPACE_HUES.length;
@@ -132,9 +132,17 @@ export function pickerSelectHue(
   return { stops, intensity };
 }
 
-/** Sets the draft theme's intensity, snapped to the nearest 5% and clamped to [0, 100]. */
+/**
+ * Sets the draft theme's intensity, snapped to the nearest 5% and clamped to
+ * [0, 100]. A non-finite `percent` (e.g. `NaN`) leaves the draft's intensity
+ * unchanged.
+ */
 export function pickerSetIntensity(theme: SpaceTheme | null, percent: number): SpaceTheme {
   const draft = asDraft(theme);
+  const stops = [...draft.stops] as SpaceTheme["stops"];
+  if (!Number.isFinite(percent)) {
+    return { stops, intensity: draft.intensity };
+  }
   const snapped = Math.min(100, Math.max(0, Math.round(percent / 5) * 5));
-  return { stops: draft.stops, intensity: snapped / 100 };
+  return { stops, intensity: snapped / 100 };
 }

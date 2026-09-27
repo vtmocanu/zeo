@@ -1188,7 +1188,9 @@ describe("SpaceStore space themes", () => {
 
   test("setSpaceTheme throws on an unknown id and changes nothing", () => {
     const store = makeStore();
+    const before = store.toPersisted();
     expect(() => store.setSpaceTheme("nope", null)).toThrow("Unknown space: nope");
+    expect(store.toPersisted()).toEqual(before);
   });
 
   test("setSpaceTheme throws Invalid space theme on an invalid theme and changes nothing", () => {
@@ -1196,7 +1198,7 @@ describe("SpaceStore space themes", () => {
     const id = store.activeSpaceId;
     const before = store.spaceTheme(id);
     expect(() =>
-      store.setSpaceTheme(id, { stops: ["mauve"] } as never),
+      store.setSpaceTheme(id, { stops: ["mauve"], intensity: 1 } as never),
     ).toThrow("Invalid space theme");
     expect(store.spaceTheme(id)).toEqual(before);
   });
@@ -1206,6 +1208,13 @@ describe("SpaceStore space themes", () => {
     const id = store.activeSpaceId;
     store.setSpaceTheme(id, null);
     expect(store.spaceTheme(id)).toBeNull();
+  });
+
+  test("setSpaceTheme stores the normalized theme (intensity 1.7 -> 1)", () => {
+    const store = makeStore();
+    const id = store.activeSpaceId;
+    store.setSpaceTheme(id, { stops: ["teal"], intensity: 1.7 } as never);
+    expect(store.spaceTheme(id)).toEqual({ stops: ["teal"], intensity: 1 });
   });
 
   test("mutating a returned space's theme.stops leaves the store unchanged", () => {
