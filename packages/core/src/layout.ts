@@ -14,6 +14,19 @@ export const FIND_BAR_HEIGHT = 38;
 export const FIND_BAR_INSET = 8;
 
 /**
+ * Minimum width of the find pill ({@link findPillRect}), the floor below
+ * which its fixed-size contents (apps/ui/src/styles/find-bar.css) no longer
+ * fit: padding `12px + 5px` = 17, the 14px search icon, 6 `--space-2` (4px)
+ * gaps between the 7 flex children = 24, the match-count label (~34px of
+ * digits/slash plus its 6px `padding-right`) = 40, the 1px separator, and
+ * three 28px `.find-bar__button`s = 84. Fixed contents sum to
+ * 17 + 14 + 24 + 40 + 1 + 84 = 180px; the remaining 80px leaves the
+ * `.find-bar__input` (the only `flex: 1 1 auto` child) a usable width even
+ * once every fixed piece has taken its share.
+ */
+export const FIND_PILL_MIN_WIDTH = 260;
+
+/**
  * Margin the find overlay view extends past the pill on every side, so the
  * pill's `--shadow-popover` is not clipped by the view's bounds.
  */
@@ -223,18 +236,37 @@ export function findAnchorRect(
 }
 
 /**
- * The find pill's rectangle: {@link FIND_BAR_WIDTH} wide (clamped to
- * `anchor.width - 2 * FIND_BAR_INSET`), {@link FIND_BAR_HEIGHT} tall, inset
- * {@link FIND_BAR_INSET} from the anchor card's top-right corner. All-zero when
- * the anchor cannot seat any pill.
+ * The find pill's rectangle: {@link FIND_BAR_WIDTH} wide, clamped down to
+ * `anchor.width - 2 * FIND_BAR_INSET` but never below {@link
+ * FIND_PILL_MIN_WIDTH} (below that the pill's fixed contents no longer fit —
+ * see its doc comment), and clamped again to `bounds.width - 2 *
+ * FIND_BAR_INSET` so it never exceeds the page region. {@link FIND_BAR_HEIGHT}
+ * tall, inset {@link FIND_BAR_INSET} from the anchor card's top-right corner.
+ * All-zero when even the `bounds`-clamped width cannot seat any pill.
+ *
+ * `bounds` defaults to `anchor`, matching the old unclamped behavior. When a
+ * narrower `bounds` is passed (main passes the PAGE region, {@link
+ * contentRect}), a split pane thinner than {@link FIND_PILL_MIN_WIDTH} lets
+ * the pill overflow the anchor card leftward — its `x` is pulled back from
+ * the anchor's right edge until the pill fits within `bounds`, clamped to
+ * `bounds.x + FIND_BAR_INSET` — so its buttons stay on-screen and clickable
+ * instead of running off the anchor's edge.
  */
-export function findPillRect(anchor: Rect): Rect {
-  const width = Math.min(FIND_BAR_WIDTH, anchor.width - 2 * FIND_BAR_INSET);
+export function findPillRect(anchor: Rect, bounds: Rect = anchor): Rect {
+  const width = Math.min(
+    FIND_BAR_WIDTH,
+    Math.max(anchor.width - 2 * FIND_BAR_INSET, FIND_PILL_MIN_WIDTH),
+    bounds.width - 2 * FIND_BAR_INSET,
+  );
   if (width <= 0) {
     return { x: 0, y: 0, width: 0, height: 0 };
   }
+  const x = Math.max(
+    anchor.x + anchor.width - width - FIND_BAR_INSET,
+    bounds.x + FIND_BAR_INSET,
+  );
   return {
-    x: anchor.x + anchor.width - width - FIND_BAR_INSET,
+    x,
     y: anchor.y + FIND_BAR_INSET,
     width,
     height: FIND_BAR_HEIGHT,
@@ -244,10 +276,11 @@ export function findPillRect(anchor: Rect): Rect {
 /**
  * The find overlay view's rectangle: the {@link findPillRect} grown by
  * {@link FIND_BAR_SHADOW_MARGIN} on every side so the pill's shadow is not
- * clipped. All-zero when the pill is.
+ * clipped. All-zero when the pill is. `bounds` is forwarded to {@link
+ * findPillRect} and defaults to `anchor`.
  */
-export function findBarBounds(anchor: Rect): Rect {
-  const pill = findPillRect(anchor);
+export function findBarBounds(anchor: Rect, bounds: Rect = anchor): Rect {
+  const pill = findPillRect(anchor, bounds);
   if (pill.width === 0) {
     return { x: 0, y: 0, width: 0, height: 0 };
   }

@@ -186,6 +186,7 @@ export {
   FIND_BAR_WIDTH,
   FIND_BAR_HEIGHT,
   FIND_BAR_INSET,
+  FIND_PILL_MIN_WIDTH,
   FIND_BAR_SHADOW_MARGIN,
   findAnchorRect,
   findPillRect,

@@ -505,7 +505,10 @@ function overlayBounds(app: ElectronApplication): Promise<Rect | null> {
  */
 async function expectedFindBounds(app: ElectronApplication, sidebar: Page): Promise<Rect> {
   const [{ width, height }, state] = await Promise.all([contentSize(app), tabsState(sidebar)]);
-  return findBarBounds(findAnchorRect(width, height, state.chrome, state.layout, state.find.tabId));
+  return findBarBounds(
+    findAnchorRect(width, height, state.chrome, state.layout, state.find.tabId),
+    contentRect(width, height, state.chrome),
+  );
 }
 
 /** Poll until the overlay's native bounds equal {@link expectedFindBounds}; return them. */
@@ -735,8 +738,10 @@ test.describe("PRD 10.6 find pill", () => {
     const before = await expectFindBoundsMatch(app, sidebar, "find bounds on the right pane");
     const { width: W, height: H } = await contentSize(app);
     const panes = splitPaneBounds(W, H, state.chrome, state.layout.ratio);
-    expect(before).toEqual(findBarBounds(panes.right));
-    expect(before).not.toEqual(findBarBounds(contentRect(W, H, state.chrome)));
+    expect(before).toEqual(findBarBounds(panes.right, contentRect(W, H, state.chrome)));
+    expect(before).not.toEqual(
+      findBarBounds(contentRect(W, H, state.chrome), contentRect(W, H, state.chrome)),
+    );
 
     // Drag the divider right: the right pane narrows and the pill follows it.
     const divider = await windowByUrl(app, "view=divider");
@@ -748,7 +753,10 @@ test.describe("PRD 10.6 find pill", () => {
       throw new Error(`expected a split layout, got ${state.layout.mode}`);
     }
     expect(after).toEqual(
-      findBarBounds(splitPaneBounds(W, H, state.chrome, state.layout.ratio).right),
+      findBarBounds(
+        splitPaneBounds(W, H, state.chrome, state.layout.ratio).right,
+        contentRect(W, H, state.chrome),
+      ),
     );
     expect(after).not.toEqual(before);
     expect((await findState(sidebar)).open).toBe(true);
@@ -765,7 +773,10 @@ test.describe("PRD 10.6 find pill", () => {
     expect((await findState(sidebar)).tabId).toBe(left.id);
     const onLeft = await expectFindBoundsMatch(app, sidebar, "find bounds on the left pane");
     expect(onLeft).toEqual(
-      findBarBounds(splitPaneBounds(W, H, state.chrome, state.layout.ratio).left),
+      findBarBounds(
+        splitPaneBounds(W, H, state.chrome, state.layout.ratio).left,
+        contentRect(W, H, state.chrome),
+      ),
     );
     expect(onLeft.x).toBeLessThan(after.x);
   });

@@ -6,13 +6,16 @@ import {
   findAnchorRect,
   findPillRect,
   findBarBounds,
+  FIND_PILL_MIN_WIDTH,
+  FIND_BAR_INSET,
+  FIND_BAR_SHADOW_MARGIN,
   windowCardRects,
   quickBrowsePageBounds,
   splitPaneBounds,
   DIVIDER_WIDTH,
   QUICK_BROWSE_CHROME_HEIGHT,
 } from "./layout.js";
-import { contentRect, DEFAULT_CHROME_STATE, type ChromeState } from "./chrome.js";
+import { contentRect, DEFAULT_CHROME_STATE, SIDEBAR_MAX_WIDTH, type ChromeState } from "./chrome.js";
 import type { WindowLayout } from "./split-view.js";
 
 const SINGLE: WindowLayout = { mode: "single" };
@@ -83,6 +86,72 @@ describe("findPillRect / findBarBounds", () => {
     const anchor = { x: 0, y: 0, width: 16, height: 400 };
     expect(findPillRect(anchor)).toEqual(ZERO);
     expect(findBarBounds(anchor)).toEqual(ZERO);
+  });
+
+  describe("at the minimum window size, an anchor narrower than FIND_PILL_MIN_WIDTH", () => {
+    // 640x400 is window-state's MIN_WINDOW_SIZE; at split-view's
+    // MIN_SPLIT_RATIO 0.2, a split pane is far narrower than
+    // FIND_PILL_MIN_WIDTH, so the pill must widen past its anchor and is
+    // bounded instead by the PAGE region (contentRect) passed as `bounds`.
+    const bounds = contentRect(640, 400, DEFAULT_CHROME_STATE);
+
+    it("widens the pill to FIND_PILL_MIN_WIDTH and clamps its left edge to bounds when the anchor sits at the near edge", () => {
+      const panes = splitPaneBounds(640, 400, DEFAULT_CHROME_STATE, 0.2);
+      const anchor = findAnchorRect(640, 400, DEFAULT_CHROME_STATE, { mode: "split", left: "a", right: "b", ratio: 0.2, focused: "left" }, "a");
+      expect(anchor).toEqual(panes.left);
+      // Proves the scenario: the anchor itself cannot seat the pill.
+      expect(anchor.width).toBeLessThan(FIND_PILL_MIN_WIDTH);
+
+      const pill = findPillRect(anchor, bounds);
+      expect(pill.width).toBe(FIND_PILL_MIN_WIDTH);
+      // Within contentRect, inset by FIND_BAR_INSET on both sides.
+      expect(pill.x).toBeGreaterThanOrEqual(bounds.x + FIND_BAR_INSET);
+      expect(pill.x + pill.width).toBeLessThanOrEqual(bounds.x + bounds.width - FIND_BAR_INSET);
+      // Clamped: the anchor-relative position would run off the left of bounds.
+      expect(pill.x).toBe(bounds.x + FIND_BAR_INSET);
+    });
+
+    it("widens the pill to FIND_PILL_MIN_WIDTH and keeps it anchor-relative when the anchor sits at the far edge", () => {
+      const panes = splitPaneBounds(640, 400, DEFAULT_CHROME_STATE, 0.8);
+      const anchor = findAnchorRect(640, 400, DEFAULT_CHROME_STATE, { mode: "split", left: "a", right: "b", ratio: 0.8, focused: "right" }, "b");
+      expect(anchor).toEqual(panes.right);
+      expect(anchor.width).toBeLessThan(FIND_PILL_MIN_WIDTH);
+
+      const pill = findPillRect(anchor, bounds);
+      expect(pill.width).toBe(FIND_PILL_MIN_WIDTH);
+      expect(pill.x).toBeGreaterThanOrEqual(bounds.x + FIND_BAR_INSET);
+      expect(pill.x + pill.width).toBeLessThanOrEqual(bounds.x + bounds.width - FIND_BAR_INSET);
+      // Not clamped: the right pane's right edge coincides with the page
+      // region's, so the anchor-relative position already stays in bounds.
+      expect(pill.x + pill.width).toBe(anchor.x + anchor.width - FIND_BAR_INSET);
+    });
+
+    it("falls back to bounds.width - 2 * FIND_BAR_INSET when even that is narrower than FIND_PILL_MIN_WIDTH", () => {
+      // A max-width sidebar leaves the page region itself narrower than
+      // FIND_PILL_MIN_WIDTH at the minimum window width.
+      const chrome: ChromeState = { sidebarWidth: SIDEBAR_MAX_WIDTH, sidebarCollapsed: false, sidebarRevealed: false };
+      const narrowBounds = contentRect(640, 400, chrome);
+      expect(narrowBounds.width - 2 * FIND_BAR_INSET).toBeLessThan(FIND_PILL_MIN_WIDTH);
+
+      const anchor = findAnchorRect(640, 400, chrome, SINGLE, null);
+      expect(anchor).toEqual(narrowBounds);
+
+      const pill = findPillRect(anchor, narrowBounds);
+      expect(pill.width).toBe(narrowBounds.width - 2 * FIND_BAR_INSET);
+      expect(pill.x).toBe(narrowBounds.x + FIND_BAR_INSET);
+    });
+
+    it("findBarBounds grows the widened pill by FIND_BAR_SHADOW_MARGIN, using the same bounds", () => {
+      const panes = splitPaneBounds(640, 400, DEFAULT_CHROME_STATE, 0.2);
+      const anchor = panes.left;
+      const pill = findPillRect(anchor, bounds);
+      expect(findBarBounds(anchor, bounds)).toEqual({
+        x: pill.x - FIND_BAR_SHADOW_MARGIN,
+        y: pill.y - FIND_BAR_SHADOW_MARGIN,
+        width: pill.width + 2 * FIND_BAR_SHADOW_MARGIN,
+        height: pill.height + 2 * FIND_BAR_SHADOW_MARGIN,
+      });
+    });
   });
 });
 
