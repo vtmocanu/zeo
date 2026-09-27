@@ -64,6 +64,7 @@ interface ZeoBridge {
   // PRD 10.2 — the frameless-chrome bridge slice the sidebar-prefs relaunch uses.
   chrome: {
     setSidebarWidth(px: number): Promise<void>;
+    setSidebarRevealed(revealed: boolean): Promise<void>;
     state(): Promise<BridgeChromeState>;
   };
   commands: {
@@ -549,27 +550,41 @@ test.describe("PRD 10.2 sidebar chrome restore", () => {
     const token = "ZEOCHROME_PERSIST_ACTIVE";
 
     // --- Launch #1: an active data: tab (so launch #2 has a view to measure),
-    // width 320, collapsed, then wait out the debounce and die abruptly. ---
+    // collapsed, then REVEALED, then width 320 — so the debounced save that
+    // carries 320 is taken while `sidebarRevealed` is true (AC6: the reveal is
+    // never persisted). Then wait out the debounce and die abruptly. ---
     const first = await launch(dir);
     const before = await first.sidebar.evaluate(async (tok) => {
       const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
       const tab = await zeo.tabs.create("data:text/html," + tok);
       await zeo.tabs.activate(tab.id);
-      await zeo.chrome.setSidebarWidth(320);
       await zeo.commands.run("view.toggleSidebar");
+      await zeo.chrome.setSidebarRevealed(true);
+      await zeo.chrome.setSidebarWidth(320);
       return zeo.chrome.state();
     }, token);
-    expect(before).toEqual({ sidebarWidth: 320, sidebarCollapsed: true, sidebarRevealed: false });
+    expect(before).toEqual({ sidebarWidth: 320, sidebarCollapsed: true, sidebarRevealed: true });
     // Poll the database rather than sleeping a fixed margin past the 500 ms
     // debounce: under xvfb the main process's event loop can stall for over a
     // second after a tab view is created, delaying every Node timer (observed:
     // the save firing ~750 ms late, or not before a 1300 ms sleep ran out).
+    // Width 320 was only ever set while revealed, so this row is a save taken
+    // in the revealed state.
     await expect
       .poll(() => readSavedChrome(dir), { timeout: 10_000 })
       .toEqual({ sidebarWidth: 320, sidebarCollapsed: 1 });
     // The tab row must be on disk too (1000 ms store debounce), so launch #2
     // restores the tab whose view is measured below.
     await waitForDebouncedSave();
+    // Still revealed after the save landed and right up to launch #1's death, so
+    // launch #2's `sidebarRevealed: false` can only mean the reveal is not restored.
+    expect(
+      (
+        await first.sidebar.evaluate(() =>
+          (globalThis as unknown as { zeo: ZeoBridge }).zeo.chrome.state(),
+        )
+      ).sidebarRevealed,
+    ).toBe(true);
     await first.app
       .evaluate(() => {
         process.exit(0);
@@ -577,7 +592,8 @@ test.describe("PRD 10.2 sidebar chrome restore", () => {
       .catch(() => {});
     await first.app.close().catch(() => {});
 
-    // --- Launch #2: restored as saved, not revealed, card inset 8 on the left. ---
+    // --- Launch #2: restored as saved, NOT revealed although launch #1 was, card
+    // inset 8 on the left. ---
     const second = await launch(dir);
     try {
       const restored = await second.sidebar.evaluate(async () => {

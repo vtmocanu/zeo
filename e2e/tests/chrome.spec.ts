@@ -174,7 +174,7 @@ test.describe("PRD 10.2 frameless chrome", () => {
     }
   });
 
-  test("window row: drag region of the window-row height, no-drag buttons, traffic lights at (14, 16)", async () => {
+  test("window row: drag region of the window-row height, no-drag buttons", async () => {
     const row = await sidebar.getByTestId("window-row").evaluate((el) => ({
       region: getComputedStyle(el).getPropertyValue("-webkit-app-region"),
       height: el.getBoundingClientRect().height,
@@ -183,22 +183,25 @@ test.describe("PRD 10.2 frameless chrome", () => {
     for (const id of ["sidebar-toggle", "nav-back", "nav-forward", "nav-reload"]) {
       await expect(sidebar.getByTestId(id)).toHaveCSS("-webkit-app-region", "no-drag");
     }
+  });
 
-    // getWindowButtonPosition is macOS-only (plan Decision 2: main calls the
-    // window-button APIs only on darwin), so the traffic-light position is
-    // asserted on the macOS CI job and skipped on Linux.
-    if (process.platform === "darwin") {
-      const pos = await app.evaluate(({ BrowserWindow }) =>
-        BrowserWindow.getAllWindows()[0].getWindowButtonPosition(),
-      );
-      expect(pos).toEqual(TRAFFIC_LIGHT_POSITION);
-    }
+  test("window row: traffic lights at TRAFFIC_LIGHT_POSITION (14, 16)", async () => {
+    test.skip(
+      process.platform !== "darwin",
+      "getWindowButtonPosition is macOS-only (plan Decision 2: main calls the window-button APIs only on darwin)",
+    );
+    const pos = await app.evaluate(({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows()[0].getWindowButtonPosition(),
+    );
+    expect(pos).toEqual(TRAFFIC_LIGHT_POSITION);
   });
 
   test("geometry: the active view and the window card equal contentRect at several content sizes", async () => {
     await activeTokenTab(app, sidebar, TOKEN);
     // 640×400 is MIN_WINDOW_SIZE; the window minimum applies to the frame, so the
-    // content size main measures is read back rather than assumed.
+    // content size main measures is read back rather than assumed. Every
+    // read-back is recorded so an OS clamp that collapses the cases is caught.
+    const measured: string[] = [];
     for (const [w, h] of [
       [1280, 800],
       [900, 600],
@@ -220,6 +223,8 @@ test.describe("PRD 10.2 frameless chrome", () => {
           { message: `view bounds at ${w}×${h}` },
         )
         .toBe("ok");
+      const got = await contentSize(app);
+      measured.push(`${w}×${h}->${got.width}×${got.height}`);
       // The renderer's viewport is the content area, so the card it draws uses
       // the same size main does.
       await expect
@@ -233,11 +238,11 @@ test.describe("PRD 10.2 frameless chrome", () => {
         )
         .toBe("ok");
     }
-    const final = await contentSize(app);
-    test.info().annotations.push({
-      type: "content-sizes",
-      description: `last requested 640×400, measured ${final.width}×${final.height}`,
-    });
+    test.info().annotations.push({ type: "content-sizes", description: measured.join(", ") });
+    // Three requested sizes must have produced three distinct measured sizes;
+    // otherwise the loop checked one geometry three times.
+    const sizes = measured.map((m) => m.split("->")[1]);
+    expect(new Set(sizes).size, `measured content sizes: ${measured.join(", ")}`).toBe(3);
   });
 
   test("width: setSidebarWidth moves the card and resizes the sidebar, clamped to 200–360", async () => {
