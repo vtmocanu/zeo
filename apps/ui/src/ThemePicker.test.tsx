@@ -14,10 +14,11 @@ import {
   ThemePicker,
   chipGround,
   chipLabel,
-  draftBroadcast,
-  draftSent,
   initialDraftSync,
   swatchIndexAfterKey,
+  syncBroadcast,
+  syncSent,
+  syncSettled,
 } from "./ThemePicker.js";
 
 function space(theme: SpaceTheme | null, name = "Work"): Space {
@@ -217,88 +218,84 @@ describe("swatchIndexAfterKey", () => {
 describe("draft sync", () => {
   const t = (intensity: number): SpaceTheme => ({ stops: ["teal"], intensity });
 
-  test("starts from the space theme with nothing pending", () => {
-    expect(initialDraftSync(t(1))).toEqual({ draft: t(1), pending: [], base: t(1) });
+  test("starts from the space theme with nothing in flight", () => {
+    expect(initialDraftSync(t(1))).toEqual({ draft: t(1), inFlight: 0 });
   });
 
-  test("stale echoes during a drag never move the draft back", () => {
-    let sync = initialDraftSync(t(1));
-    sync = draftSent(sync, t(0.9));
-    sync = draftSent(sync, t(0.8));
-    sync = draftSent(sync, t(0.7));
-    // The broadcast for the first send arrives, and repeats on unrelated broadcasts.
-    sync = draftBroadcast(sync, t(0.9));
-    expect(sync.draft).toEqual(t(0.7));
-    expect(sync.pending).toEqual([t(0.9), t(0.8), t(0.7)]);
-    sync = draftBroadcast(sync, t(0.9));
-    expect(sync.draft).toEqual(t(0.7));
-    sync = draftBroadcast(sync, t(0.8));
-    expect(sync.pending).toEqual([t(0.8), t(0.7)]);
-    sync = draftBroadcast(sync, t(0.7));
-    expect(sync).toEqual({ draft: t(0.7), pending: [t(0.7)], base: t(0.7) });
-    // A repeat of the final echo still changes nothing.
-    expect(draftBroadcast(sync, t(0.7))).toBe(sync);
+  test("B1: drag .40 -> .45 -> .40 -> .35 with a stale .40 broadcast arriving mid-drag", () => {
+    let sync = initialDraftSync(t(0.4));
+    sync = syncSent(sync, t(0.45));
+    sync = syncSent(sync, t(0.4));
+    sync = syncSent(sync, t(0.35));
+    expect(sync).toEqual({ draft: t(0.35), inFlight: 3 });
+    // A stale broadcast of an earlier value arrives while sends are still
+    // outstanding: ignored outright, draft doesn't move.
+    sync = syncBroadcast(sync, t(0.4));
+    expect(sync).toEqual({ draft: t(0.35), inFlight: 3 });
+    // The real echoes arrive too, in order; still ignored while in flight.
+    sync = syncBroadcast(sync, t(0.45));
+    sync = syncBroadcast(sync, t(0.4));
+    sync = syncBroadcast(sync, t(0.35));
+    expect(sync).toEqual({ draft: t(0.35), inFlight: 3 });
+    // Each send's promise settles in order; only the last settle (counter
+    // hits zero) resyncs, to main's actual stored value.
+    sync = syncSettled(sync, t(0.45));
+    expect(sync).toEqual({ draft: t(0.35), inFlight: 2 });
+    sync = syncSettled(sync, t(0.4));
+    expect(sync).toEqual({ draft: t(0.35), inFlight: 1 });
+    sync = syncSettled(sync, t(0.35));
+    expect(sync).toEqual({ draft: t(0.35), inFlight: 0 });
   });
 
-  test("a stale broadcast of the pre-drag base is ignored while sends are pending", () => {
-    // main queued a broadcast of the old stored theme (t(1)) before it saw
-    // our first send; it lands after we've already sent two more values.
-    // Gradient example from the review: sent [teal, violet], stale echo of
-    // the old solid teal theme arrives, then the user picks a new hue.
-    const solidTeal: SpaceTheme = { stops: ["teal"], intensity: 1 };
-    const gradTealViolet: SpaceTheme = { stops: ["teal", "violet"], intensity: 1 };
-    const gradTealAmber: SpaceTheme = { stops: ["teal", "amber"], intensity: 1 };
-    let sync = initialDraftSync(solidTeal);
-    sync = draftSent(sync, gradTealViolet);
-    sync = draftSent(sync, gradTealAmber);
-    // Stale broadcast of the base arrives: must not replace the draft.
-    sync = draftBroadcast(sync, solidTeal);
-    expect(sync.draft).toEqual(gradTealAmber);
-    expect(sync.pending).toEqual([gradTealViolet, gradTealAmber]);
-    expect(sync.base).toEqual(solidTeal);
+  test("a rejected send settles by resyncing to the latest prop value", () => {
+    let sync = initialDraftSync(t(0.4));
+    sync = syncSent(sync, t(0.45));
+    // The invoke rejects; App swallows it, but main never applied the
+    // change, so the prop is still the old stored value.
+    sync = syncSettled(sync, t(0.4));
+    expect(sync).toEqual({ draft: t(0.4), inFlight: 0 });
   });
 
-  test("a matching echo drops older pending entries and advances base", () => {
-    let sync = initialDraftSync(t(1));
-    sync = draftSent(sync, t(0.9));
-    sync = draftSent(sync, t(0.8));
-    sync = draftBroadcast(sync, t(0.8));
-    expect(sync.pending).toEqual([t(0.8)]);
-    // Main has confirmed 0.8, so it can no longer re-send anything from
-    // before it: base advances past the pre-drag value.
-    expect(sync.base).toEqual(t(0.8));
-    expect(sync.draft).toEqual(t(0.8));
+  test("an external change that happens mid-flight is adopted once the send settles", () => {
+    let sync = initialDraftSync(t(0.4));
+    sync = syncSent(sync, t(0.45));
+    // Some other change to the space's stored theme lands while our send is
+    // still outstanding, ignored by syncBroadcast because inFlight > 0.
+    sync = syncBroadcast(sync, t(0.9));
+    expect(sync).toEqual({ draft: t(0.45), inFlight: 1 });
+    // Once the send settles, the draft resyncs to whatever the latest prop
+    // value actually is now.
+    sync = syncSettled(sync, t(0.9));
+    expect(sync).toEqual({ draft: t(0.9), inFlight: 0 });
   });
 
-  test("an outside change replaces the draft and clears pending", () => {
-    let sync = draftSent(initialDraftSync(t(1)), t(0.5));
-    sync = draftBroadcast(sync, { stops: ["rose", "amber"], intensity: 1 });
-    expect(sync).toEqual({
-      draft: { stops: ["rose", "amber"], intensity: 1 },
-      pending: [],
-      base: { stops: ["rose", "amber"], intensity: 1 },
-    });
-    sync = draftBroadcast(sync, null);
-    expect(sync).toEqual({ draft: null, pending: [], base: null });
+  test("a duplicate send (clicking the same swatch twice before the echo) never sticks", () => {
+    // Since syncSent is a no-op when next already equals the draft, the
+    // second click while the first send is still in flight never bumps the
+    // counter, so there's nothing to get stuck waiting for.
+    let sync = initialDraftSync(t(0.4));
+    sync = syncSent(sync, t(0.6));
+    sync = syncSent(sync, t(0.6));
+    expect(sync).toEqual({ draft: t(0.6), inFlight: 1 });
+    sync = syncSettled(sync, t(0.6));
+    expect(sync).toEqual({ draft: t(0.6), inFlight: 0 });
   });
 
-  test("after every echo settles, a later base-equal broadcast is an ordinary outside change", () => {
-    let sync = initialDraftSync(t(1));
-    sync = draftSent(sync, t(0.9));
-    // The one pending send is confirmed: base advances to it.
-    sync = draftBroadcast(sync, t(0.9));
-    expect(sync).toEqual({ draft: t(0.9), pending: [t(0.9)], base: t(0.9) });
-    // A broadcast equal to the *old* base (t(1)) is no longer special: main
-    // can no longer be behind that value, so it's an ordinary external
-    // change (e.g. someone reverted the theme) and replaces the draft.
-    sync = draftBroadcast(sync, t(1));
-    expect(sync).toEqual({ draft: t(1), pending: [], base: t(1) });
+  test("sending the same value as the current draft is a no-op", () => {
+    const sync = initialDraftSync(t(0.4));
+    expect(syncSent(sync, t(0.4))).toBe(sync);
   });
 
-  test("an unchanged broadcast with nothing pending keeps the same object", () => {
+  test("a broadcast while idle replaces the draft (outside change)", () => {
+    const sync = initialDraftSync(t(0.4));
+    expect(syncBroadcast(sync, t(0.9))).toEqual({ draft: t(0.9), inFlight: 0 });
+    expect(syncBroadcast(sync, null)).toEqual({ draft: null, inFlight: 0 });
+  });
+
+  test("an unchanged broadcast while idle keeps the same object", () => {
     const sync = initialDraftSync(t(1));
-    expect(draftBroadcast(sync, t(1))).toBe(sync);
+    expect(syncBroadcast(sync, t(1))).toBe(sync);
     const empty = initialDraftSync(null);
-    expect(draftBroadcast(empty, null)).toBe(empty);
+    expect(syncBroadcast(empty, null)).toBe(empty);
   });
 });

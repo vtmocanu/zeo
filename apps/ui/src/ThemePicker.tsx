@@ -30,71 +30,89 @@ export interface ThemePickerProps {
   space: Space;
   /** `state.chrome.sidebarWidth`: the picker spans the sidebar minus 8px each side. */
   sidebarWidth: number;
-  onChange(theme: SpaceTheme): void;
+  /**
+   * May return a promise (as the real IPC call does); the picker awaits it to
+   * know when a send has settled. A plain `void` return is also accepted and
+   * is treated as settling immediately.
+   */
+  onChange(theme: SpaceTheme): void | Promise<unknown>;
   onClose(): void;
 }
 
 /**
- * The picker's local draft plus the values it sent that main has not echoed
- * back yet. Live apply means a slider drag sends many values in a row; each
- * broadcast carries one of them, lagging the pointer. A broadcast equal to any
- * pending value is our own echo and must not move the draft back.
+ * The picker's local draft, tracked by in-flight acknowledgement rather than
+ * by matching broadcast values. Live apply means a slider drag sends many
+ * values in a row; matching each broadcast against the values we sent is
+ * fragile (a stale broadcast can be mistaken for the echo of a later send,
+ * or a duplicate/rejected send that main never echoes can leave state
+ * stuck). Instead we just count sends that haven't settled yet:
  *
- * `base` is the theme that was in effect just before the first pending send:
- * a broadcast still carrying it while sends are pending is a stale broadcast
- * that main queued before it saw our send (not yet processed), not an outside
- * change, and must be ignored too. Once every pending send has been echoed,
- * `base` stops mattering: a later broadcast equal to it is a real outside
- * change (e.g. someone edited the theme back to what it was) and replaces the
- * draft like any other.
+ * - `draftSent` bumps `inFlight` and adopts `next` as the draft immediately
+ *   (so the UI feels live).
+ * - While `inFlight > 0`, incoming broadcasts are ignored outright: we don't
+ *   know yet whether they're stale, our own echo, or real.
+ * - `draftSettled` fires when a send's promise resolves or rejects. While
+ *   sends are still outstanding it only decrements the counter. Once it
+ *   reaches zero, the draft is resynced to `latestProp` — the most recently
+ *   seen `space.theme` — which by then equals main's actual stored value:
+ *   after a run of successful sequential sends this is the last value sent
+ *   (Electron delivers main's broadcast before the invoke reply, and main
+ *   handles invokes in order), and it also heals a rejected send or picks up
+ *   an external change that happened mid-flight, since either way it's
+ *   exactly what main is holding.
+ * - `draftBroadcast`, when idle (`inFlight === 0`), simply replaces the
+ *   draft with any differing incoming value: the PRD rule for an outside
+ *   change.
  */
 export interface DraftSync {
   draft: SpaceTheme | null;
-  pending: SpaceTheme[];
-  base: SpaceTheme | null;
+  inFlight: number;
 }
 
 export function initialDraftSync(theme: SpaceTheme | null): DraftSync {
-  return { draft: theme, pending: [], base: theme };
-}
-
-/** The picker sent `next`: it becomes the draft and waits for its echo. */
-export function draftSent(sync: DraftSync, next: SpaceTheme): DraftSync {
-  const base = sync.pending.length === 0 ? sync.draft : sync.base;
-  return { draft: next, pending: [...sync.pending, next], base };
+  return { draft: theme, inFlight: 0 };
 }
 
 /**
- * A broadcast carried `incoming` for the edited space. Our own echo is
- * ignored; entries sent before it are dropped, but the echoed value itself
- * stays pending, since every later unrelated broadcast (a tab change) repeats
- * it until main processes the next send. While sends are pending, a broadcast
- * equal to `base` is stale (queued before our first send landed) and is
- * ignored the same way. A broadcast that confirms a send moves `base` up to
- * that value, since main cannot go on to re-send anything older; once every
- * send has been confirmed this way, an old-`base` broadcast is no longer
- * possible from main and a later one equal to it is a genuine outside change.
- * Anything else is an outside change and replaces the draft.
+ * The picker sent `next`: it becomes the draft and a send is now in flight.
+ * A `next` equal to the current draft (e.g. clicking the already-pressed
+ * swatch) is a no-op and isn't worth a round trip, so nothing changes.
  */
-export function draftBroadcast(sync: DraftSync, incoming: SpaceTheme | null): DraftSync {
-  const index =
-    incoming === null ? -1 : sync.pending.findIndex((sent) => themesEqual(sent, incoming));
-  if (index > 0) {
-    return { draft: sync.draft, pending: sync.pending.slice(index), base: incoming };
-  }
-  if (index === 0) {
-    if (sync.pending.length === 1 && !themesEqual(sync.base, incoming)) {
-      return { draft: sync.draft, pending: sync.pending, base: incoming };
-    }
+export function syncSent(sync: DraftSync, next: SpaceTheme): DraftSync {
+  if (themesEqual(sync.draft, next)) {
     return sync;
   }
-  if (sync.pending.length > 0 && themesEqual(sync.base, incoming)) {
+  return { draft: next, inFlight: sync.inFlight + 1 };
+}
+
+/**
+ * A send's promise settled (resolved or rejected — both mean main is done
+ * with it). While other sends remain outstanding, only the counter moves.
+ * Once none remain, the draft resyncs to `latestProp`, the newest
+ * `space.theme` value seen, which is what main is actually holding by now.
+ */
+export function syncSettled(sync: DraftSync, latestProp: SpaceTheme | null): DraftSync {
+  const inFlight = Math.max(0, sync.inFlight - 1);
+  if (inFlight > 0) {
+    return { draft: sync.draft, inFlight };
+  }
+  return { draft: latestProp, inFlight: 0 };
+}
+
+/**
+ * A broadcast carried `incoming` for the edited space. While a send is in
+ * flight it's ignored (we can't yet tell stale from real; `syncSettled`
+ * resolves it once the counter drains). When idle, a value that differs from
+ * the draft is an outside change and replaces it.
+ */
+export function syncBroadcast(sync: DraftSync, incoming: SpaceTheme | null): DraftSync {
+  if (sync.inFlight > 0) {
     return sync;
   }
-  if (sync.pending.length === 0 && themesEqual(sync.draft, incoming)) {
+  if (themesEqual(sync.draft, incoming)) {
     return sync;
   }
-  return { draft: incoming, pending: [], base: incoming };
+  return { draft: incoming, inFlight: 0 };
 }
 
 /** Background for a contrast chip: the window ground, or both grounds as a gradient. */
@@ -190,15 +208,20 @@ export function ThemePicker({
   const swatchRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const onCloseRef = useRef(onClose);
   const intensityId = useId();
+  // The latest space.theme seen, for syncSettled to resync to once every
+  // in-flight send has settled. Updated on every render (not in an effect)
+  // so it's current before a same-tick settle reads it.
+  const latestThemeRef = useRef(space.theme);
+  latestThemeRef.current = space.theme;
 
   useEffect(() => {
     onCloseRef.current = onClose;
   }, [onClose]);
 
-  // Follow the space's theme on every broadcast (echoes filtered out).
+  // Follow the space's theme on every broadcast, unless a send is in flight.
   const incoming = space.theme;
   useEffect(() => {
-    setSync((current) => draftBroadcast(current, incoming));
+    setSync((current) => syncBroadcast(current, incoming));
   }, [incoming]);
 
   // Open: focus the pressed kind button.
@@ -233,8 +256,21 @@ export function ThemePicker({
   const focusableHueIndex = selectedHue === null ? 0 : Math.max(0, SPACE_HUES.indexOf(selectedHue));
 
   const send = (next: SpaceTheme): void => {
-    setSync((current) => draftSent(current, next));
-    onChange(next);
+    // A no-op send (e.g. clicking the already-pressed swatch) isn't worth
+    // an in-flight round trip.
+    if (themesEqual(draft, next)) {
+      return;
+    }
+    setSync((current) => syncSent(current, next));
+    const settle = (): void => {
+      setSync((current) => syncSettled(current, latestThemeRef.current));
+    };
+    const result = onChange(next);
+    if (result instanceof Promise) {
+      result.then(settle, settle);
+    } else {
+      settle();
+    }
   };
 
   const setKind = (next: ThemeKind): void => {
