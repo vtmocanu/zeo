@@ -29,7 +29,13 @@ import type { Suggestion } from "./suggest.js";
  *   download over the bridge).
  */
 export type CommandBarMode =
-  "navigate" | "new-tab" | "commands" | "history" | "promote" | "split" | "downloads";
+  | "navigate"
+  | "new-tab"
+  | "commands"
+  | "history"
+  | "promote"
+  | "split"
+  | "downloads";
 
 /**
  * The command bar's serializable state, broadcast from main to the renderer.
@@ -118,27 +124,37 @@ export interface RevisionedSuggestions {
 }
 
 /**
+ * How many background-superseded suggestion lists main keeps for
+ * {@link resolveAcceptIndex}. One slow page load re-ranks the open bar more than
+ * once (url commit, title, favicon, finish), so a click rendered just before the
+ * load must survive several background revisions.
+ */
+export const MAX_PREVIOUS_SUGGESTION_LISTS = 8;
+
+/**
  * Resolves a clicked row (`index` rendered against `revision`) to an index into
  * the `current` list, or `null` when the click must be rejected. A current
- * revision uses `index` as-is (range-checked). A click rendered against the one
- * `previous` list — superseded by a background re-rank — is remapped by
- * {@link suggestionKey} to where that row now sits, and rejected when the row
- * is gone. Any older revision, or an index out of range for the list it was
+ * revision uses `index` as-is (range-checked). A click rendered against one of
+ * the `previous` lists — each superseded by a BACKGROUND re-rank only; main
+ * clears them on any user-driven change (query, mode, open, close) — is remapped
+ * by {@link suggestionKey} to where that row now sits, and rejected when the row
+ * is gone. Any other revision, or an index out of range for the list it was
  * rendered against, is rejected.
  */
 export function resolveAcceptIndex(
   index: number,
   revision: number,
   current: RevisionedSuggestions,
-  previous: RevisionedSuggestions | null,
+  previous: readonly RevisionedSuggestions[],
 ): number | null {
   if (revision === current.revision) {
     return index >= 0 && index < current.suggestions.length ? index : null;
   }
-  if (previous === null || revision !== previous.revision) {
+  const rendered = previous.find((p) => p.revision === revision);
+  if (rendered === undefined) {
     return null;
   }
-  const clicked = previous.suggestions[index];
+  const clicked = rendered.suggestions[index];
   if (clicked === undefined) {
     return null;
   }

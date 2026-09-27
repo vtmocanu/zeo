@@ -18,6 +18,10 @@ const search: Suggestion = { kind: "search", url: "https://s.test/?q=a", label: 
 describe("suggestionKey", () => {
   test("ignores titles and labels", () => {
     expect(suggestionKey(tab("a", "Loading"))).toBe(suggestionKey(tab("a", "Loaded")));
+    const navigate: Suggestion = { kind: "navigate", url: "https://a.test/", label: "a.test" };
+    expect(suggestionKey(navigate)).toBe(
+      suggestionKey({ ...navigate, url: "https://b.test/", label: "b.test" }),
+    );
     expect(suggestionKey(search)).toBe(
       suggestionKey({ ...search, label: "b", url: "https://s.test/?q=b" }),
     );
@@ -69,7 +73,7 @@ describe("reselectIndex", () => {
 
 describe("resolveAcceptIndex", () => {
   const current = { revision: 5, suggestions: [tab("c"), tab("a"), tab("b")] };
-  const previous = { revision: 4, suggestions: [tab("a"), tab("b")] };
+  const previous = [{ revision: 4, suggestions: [tab("a"), tab("b")] }];
 
   test("uses the index as-is against the current revision", () => {
     expect(resolveAcceptIndex(2, 5, current, previous)).toBe(2);
@@ -88,12 +92,22 @@ describe("resolveAcceptIndex", () => {
     expect(resolveAcceptIndex(0, 4, { revision: 5, suggestions: [tab("b")] }, previous)).toBeNull();
   });
 
+  test("remaps a click on an older background list, not only the latest", () => {
+    const older = [{ revision: 3, suggestions: [tab("b"), tab("a")] }, ...previous];
+    expect(resolveAcceptIndex(0, 3, current, older)).toBe(2);
+  });
+
+  test("remaps a click on the text-action row", () => {
+    const next = { revision: 5, suggestions: [{ ...search, label: "b" }, tab("a")] };
+    expect(resolveAcceptIndex(0, 4, next, [{ revision: 4, suggestions: [search] }])).toBe(0);
+  });
+
   test("rejects a previous-list click with an out-of-range index", () => {
     expect(resolveAcceptIndex(2, 4, current, previous)).toBeNull();
   });
 
   test("rejects any older revision, or a stale click with no previous list", () => {
     expect(resolveAcceptIndex(0, 3, current, previous)).toBeNull();
-    expect(resolveAcceptIndex(0, 4, current, null)).toBeNull();
+    expect(resolveAcceptIndex(0, 4, current, [])).toBeNull();
   });
 });
