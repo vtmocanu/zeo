@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { createServer } from "node:http";
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
+import { waitForViewsIdle } from "./helpers/view";
 
 // Absolute path to the built Electron main entry, resolved from this test file
 // (e2e is ESM, so no __dirname). Layout mirrors persistence.spec.ts / app.spec.ts:
@@ -657,13 +658,17 @@ test.describe("PRD 5.1 §5 content blocking (offline)", () => {
   });
 
   // Case F: the command bar exposes a "Toggle Content Blocking" command that
-  // flips the enabled flag. Driven entirely over the bridge (not the keyboard) to
-  // avoid the overlay blur-close race noted in repo memory.
+  // flips the enabled flag. Driven entirely over the bridge (not the keyboard),
+  // and settled with waitForViewsIdle before opening the bar so the seeded tab's
+  // load can't finish while the bar is open and close/re-rank it out from under
+  // the assertions below.
   test("the command bar can toggle content blocking", async () => {
     const userDataDir = mkdtempSync(join(tmpdir(), "zeo-block-"));
     const filters = writeFilterFile();
     const { app, sidebar } = await launch(userDataDir, filters.file);
     try {
+      await waitForViewsIdle(app);
+
       // Open the bar and search for the command by a keyword ("ads").
       const barState = await sidebar.evaluate(async () => {
         const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;

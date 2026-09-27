@@ -23,6 +23,7 @@ import {
   waitForViewGone,
   waitForViewOnPartition,
   waitForViewUrl,
+  waitForViewsIdle,
 } from "./helpers/view";
 
 // Absolute path to the built Electron main entry, resolved from this test file
@@ -447,6 +448,9 @@ async function waitForCommandHostReady(app: ElectronApplication, page: Page): Pr
       await zeo.tabs.create(url);
     }, pageUrl);
     await waitForViewUrl(app, token);
+    // Settle the newly created tab's load before the caller opens the command
+    // bar against it (see waitForViewsIdle for the blur-close/re-rank race).
+    await waitForViewsIdle(app);
   } finally {
     await server.close();
   }
@@ -487,6 +491,10 @@ test.describe("zeo desktop app", () => {
       env: { ...process.env, ELECTRON_RENDERER_URL: "", ZEO_E2E: "1" },
     });
     sidebar = await sidebarWindow(app);
+    // The seeded startup tab's example.com load starts synchronously in
+    // createWindow, so it can still be in flight here; settle it before any
+    // test drives the command bar (see waitForViewsIdle for the race).
+    await waitForViewsIdle(app);
   });
 
   test.afterEach(async () => {
@@ -2377,6 +2385,9 @@ test.describe("zeo desktop app", () => {
       return { personalId, researchId: research.id, tabId: tab.id };
     });
 
+    // Settle the new tab's load before opening the bar (see waitForViewsIdle).
+    await waitForViewsIdle(app);
+
     // Open in new-tab mode and type part of the cross-space tab's title.
     await sidebar.evaluate(async () => {
       const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
@@ -2468,6 +2479,9 @@ test.describe("zeo desktop app", () => {
     });
     expect(setup.archivedContains).toBe(true);
     expect(setup.openContains).toBe(false);
+
+    // Settle the archived tab's load before opening the bar (see waitForViewsIdle).
+    await waitForViewsIdle(app);
 
     await sidebar.evaluate(async () => {
       const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
@@ -2598,6 +2612,9 @@ test.describe("zeo desktop app", () => {
       return { matchId: match.id, tabCount: s.tabs.length };
     });
 
+    // Settle both new tabs' loads before opening the bar (see waitForViewsIdle).
+    await waitForViewsIdle(app);
+
     // "zebra" resolves to a SEARCH (no dot), so row 0 is a `search` action; it
     // also substring-matches the zebra.example tab, so there is a tab row below.
     const shape = await sidebar.evaluate(async () => {
@@ -2649,6 +2666,13 @@ test.describe("zeo desktop app", () => {
       // Two matches so the list is [row0, tab, tab] — at least one row past row 0.
       await zeo.tabs.create("zebra.example");
       await zeo.tabs.create("zebrafish.example");
+    });
+
+    // Settle both new tabs' loads before opening the bar (see waitForViewsIdle).
+    await waitForViewsIdle(app);
+
+    await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
       await zeo.commandBar.open("new-tab");
       await zeo.commandBar.setQuery("zebra");
     });
@@ -2712,6 +2736,11 @@ test.describe("zeo desktop app", () => {
       };
     });
 
+    // Settle all three new tabs' loads before opening the bar (see
+    // waitForViewsIdle). This only adds a settle point after the creates
+    // above; it does not reorder them, so the lastActiveAt gaps still hold.
+    await waitForViewsIdle(app);
+
     // charlie was created last, so it is active and must be EXCLUDED.
     await sidebar.evaluate(async () => {
       const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
@@ -2750,6 +2779,13 @@ test.describe("zeo desktop app", () => {
       // active tab is excluded from suggestions), letting "orchid" surface row 0
       // plus the orchid tab row.
       await zeo.tabs.create("daffodil.example");
+    });
+
+    // Settle both new tabs' loads before opening the bar (see waitForViewsIdle).
+    await waitForViewsIdle(app);
+
+    await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
       await zeo.commandBar.open("new-tab");
     });
 
@@ -2808,13 +2844,20 @@ test.describe("zeo desktop app", () => {
   // points at a DIFFERENT tab, so only the revision guard — not the range check —
   // can prevent the wrong activation.
   test("a row-click accept with a stale revision is rejected and performs no action", async () => {
-    const setup = await sidebar.evaluate(async () => {
+    await sidebar.evaluate(async () => {
       const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
       await zeo.tabs.create("tulip.example");
       await zeo.tabs.create("rose.example");
       // A third, non-matching tab so BOTH tulip and rose are non-active and thus
       // eligible as suggestion rows.
       await zeo.tabs.create("fern.example");
+    });
+
+    // Settle all three new tabs' loads before opening the bar (see waitForViewsIdle).
+    await waitForViewsIdle(app);
+
+    const setup = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
       await zeo.commandBar.open("new-tab");
       await zeo.commandBar.setQuery("tulip"); // list revision R: [search, tulip]
       const st = await zeo.commandBar.state();
@@ -3537,6 +3580,9 @@ test.describe("zeo desktop app", () => {
     });
     expect(pb.seededId).not.toBeNull();
 
+    // Settle the new tab's load before opening the bar (see waitForViewsIdle).
+    await waitForViewsIdle(app);
+
     // commands mode: querying "pin" surfaces command rows only — never a tab row,
     // even though the "pinboard" tab title matches.
     const commandsKinds = await sidebar.evaluate(async () => {
@@ -3755,6 +3801,9 @@ test.describe("zeo desktop app", () => {
       // is by URL token in the main process (network-free); on a loopback origin the
       // commit is effectively immediate.
       await waitForViewUrl(app, token);
+      // Settle the fresh tab's load before opening the bar (see waitForViewsIdle);
+      // the later in-place hash navigation is deliberate and left untouched.
+      await waitForViewsIdle(app);
 
       // Open commands mode. Anchor the setup BEFORE the negative assertion so the
       // latter cannot pass vacuously: the empty-query commands list is every enabled

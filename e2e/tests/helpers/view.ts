@@ -100,6 +100,38 @@ export async function waitForViewGone(
 }
 
 /**
+ * Poll until every live WebContents is either destroyed or not loading.
+ *
+ * Driving the command bar while a tab view is still loading is flaky: when
+ * that load finishes, the tab view's `did-finish-load` handler calls
+ * `onStateApplied` and re-ranks the (still open) command bar, resetting
+ * `selectedIndex` and bumping `revision` out from under an in-flight test
+ * step; separately, the load can also steal native focus from the overlay,
+ * which fires the overlay's `blur` handler and closes the bar entirely. Both
+ * races start from the same trigger — a view transitioning out of
+ * `isLoading()` — so settling on that signal before opening or driving the
+ * bar avoids them. `isLoading()` is a deterministic gate here because a view
+ * starts loading synchronously on creation/navigation (so it's never
+ * momentarily "not loading yet" right after `tabs.create`), and it also goes
+ * false on a failed load, not just a successful one, so this can't hang on a
+ * broken URL.
+ */
+export async function waitForViewsIdle(app: ElectronApplication): Promise<void> {
+  await expect
+    .poll(
+      () =>
+        app.evaluate(({ webContents }) =>
+          webContents.getAllWebContents().every((w) => w.isDestroyed() || !w.isLoading()),
+        ),
+      {
+        timeout: VIEW_POLL_TIMEOUT_MS,
+        message: "expected all live views to finish loading",
+      },
+    )
+    .toBe(true);
+}
+
+/**
  * Find the live view whose URL contains `currentUrlSubstring`, navigate it to
  * `url`, then wait until `getURL()` observably reports `url` so the caller's next
  * step runs only once the navigation is visible in the main process. A `data:`
