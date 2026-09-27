@@ -104,11 +104,11 @@ const MOTION_PROPERTIES = new Set([
 // A bare time literal, e.g. `0.1s`, `.5s` or `200ms` (matched
 // case-insensitively, so `200MS` counts too), matched as a whole token so
 // `0.1s` is not reported as just `1s` and `var(--dur-2s)` is not reported as
-// `2s`: the lookbehinds bar a preceding word character or dot, and a hyphen
-// that follows a word character (so a custom-property or identifier tail never
-// matches, while a negative delay such as `-200ms` is reported whole), and the
-// trailing `\b` bars a following word character.
-const TIME_LITERAL = /(?<![\w.])(?<!\w-)-?\d*\.?\d+m?s\b/gi;
+// `2s`: the lookbehind, placed before the optional sign, bars a preceding word
+// character, dot or hyphen (so a custom-property or identifier tail such as
+// `--2s` or `a--2s` never matches, while a negative delay such as `-200ms` is
+// reported whole), and the trailing `\b` bars a following word character.
+const TIME_LITERAL = /(?<![\w.-])-?\d*\.?\d+m?s\b/gi;
 const CUBIC_BEZIER = /cubic-bezier\(/gi;
 // The bare easing keywords, longest alternative first so `ease-in-out` wins
 // over `ease-in` at the same position. Word-bounded on hyphens too, so

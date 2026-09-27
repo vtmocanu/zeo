@@ -114,7 +114,10 @@ export interface ContrastGrounds {
   accentSoft: Rgb[];
 }
 
-/** Builds the §8 grounds for a theme/appearance pair; `contrastAudit` reads them. */
+/**
+ * Builds the §8 grounds for a theme/appearance pair; `contrastAudit` reads them.
+ * Exported for the audit's own tests, not from the package barrel.
+ */
 export function contrastGrounds(theme: SpaceTheme | null, appearance: Appearance): ContrastGrounds {
   const tokens = themeTokens(theme, appearance);
   const report = themeReport(theme, appearance);

@@ -196,10 +196,7 @@ describe("check-css-tokens.mjs", () => {
 
   test("exits 1 on a literal duration and easing in a transition", () => {
     const dir = makeTempDir();
-    writeFileSync(
-      join(dir, "bad-motion.css"),
-      ".a { transition: opacity 0.1s ease-in-out; }\n",
-    );
+    writeFileSync(join(dir, "bad-motion.css"), ".a { transition: opacity 0.1s ease-in-out; }\n");
 
     const { status, stderr } = run(dir);
     expect(status).toBe(1);
@@ -218,7 +215,10 @@ describe("check-css-tokens.mjs", () => {
 
   test("exits 0 on a transition that reads a token", () => {
     const dir = makeTempDir();
-    writeFileSync(join(dir, "ok-transition.css"), ".a { transition: var(--transition-control); }\n");
+    writeFileSync(
+      join(dir, "ok-transition.css"),
+      ".a { transition: var(--transition-control); }\n",
+    );
 
     const { status, stderr } = run(dir);
     expect(stderr).toBe("");
@@ -282,7 +282,10 @@ describe("check-css-tokens.mjs", () => {
 
   test("does not flag a duration-shaped custom property name", () => {
     const dir = makeTempDir();
-    writeFileSync(join(dir, "ok-var-name.css"), ".a { transition: var(--dur-2s); }\n");
+    writeFileSync(
+      join(dir, "ok-var-name.css"),
+      ".a { transition: var(--dur-2s); }\n.b { transition: var(--2s); }\n.c { animation: a--2s var(--motion-base); }\n",
+    );
 
     const { status, stderr } = run(dir);
     expect(stderr).toBe("");
