@@ -1,5 +1,10 @@
 import { describe, expect, test } from "vitest";
-import { contrastAudit, parseCssColor, type ContrastCheckId } from "./contrast-audit.js";
+import {
+  contrastAudit,
+  contrastGrounds,
+  parseCssColor,
+  type ContrastCheckId,
+} from "./contrast-audit.js";
 import {
   SPACE_HUES,
   contrastRatio,
@@ -137,6 +142,13 @@ describe("ink-popover-secondary/popover (hand-computed)", () => {
       ...popoverGrounds.map((g) => compositeManual(hoverLayer, g)),
       ...popoverGrounds.map((g) => compositeManual(controlRaisedLayer, g)),
     ];
+
+    // Every one of the four sets is part of the audited grounds, in order.
+    const audited = contrastGrounds(theme, appearance).popoverSecondary;
+    expect(audited).toHaveLength(allGrounds.length);
+    audited.forEach((ground, i) => {
+      ground.forEach((channel, c) => expect(channel).toBeCloseTo(allGrounds[i]![c]!, 9));
+    });
 
     const fg = requireParsed(tokens["--ink-popover-secondary"]).rgb;
     const ratios = allGrounds.map((g) => contrastRatio(fg, g));

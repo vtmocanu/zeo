@@ -103,12 +103,19 @@ function requireOpaque(value: string): Rgb {
   return parsed.rgb;
 }
 
-/**
- * Runs the §8 contrast audit for a theme/appearance pair. Every ratio is the
- * worst case across the check's grounds; the floor is 3:1 for `accent/*` and
- * `focus-ring/*` checks, 4.5:1 for every other check.
- */
-export function contrastAudit(theme: SpaceTheme | null, appearance: Appearance): ContrastCheck[] {
+/** The composited ground sets the audit measures against (§8 table). */
+export interface ContrastGrounds {
+  window: Rgb[];
+  raised: Rgb[];
+  hover: Rgb[];
+  fillSubtle: Rgb[];
+  popover: Rgb[];
+  popoverSecondary: Rgb[];
+  accentSoft: Rgb[];
+}
+
+/** Builds the §8 grounds for a theme/appearance pair; `contrastAudit` reads them. */
+export function contrastGrounds(theme: SpaceTheme | null, appearance: Appearance): ContrastGrounds {
   const tokens = themeTokens(theme, appearance);
   const report = themeReport(theme, appearance);
 
@@ -127,6 +134,34 @@ export function contrastAudit(theme: SpaceTheme | null, appearance: Appearance):
     ...layerOverGrounds(tokens["--control-raised"], popoverGrounds),
   ];
   const accentSoftGrounds = layerOverGrounds(tokens["--accent-soft"], popoverGrounds);
+
+  return {
+    window: windowGrounds,
+    raised: raisedGrounds,
+    hover: hoverGrounds,
+    fillSubtle: fillSubtleGrounds,
+    popover: popoverGrounds,
+    popoverSecondary: popoverSecondaryGrounds,
+    accentSoft: accentSoftGrounds,
+  };
+}
+
+/**
+ * Runs the §8 contrast audit for a theme/appearance pair. Every ratio is the
+ * worst case across the check's grounds; the floor is 3:1 for `accent/*` and
+ * `focus-ring/*` checks, 4.5:1 for every other check.
+ */
+export function contrastAudit(theme: SpaceTheme | null, appearance: Appearance): ContrastCheck[] {
+  const tokens = themeTokens(theme, appearance);
+  const {
+    window: windowGrounds,
+    raised: raisedGrounds,
+    hover: hoverGrounds,
+    fillSubtle: fillSubtleGrounds,
+    popover: popoverGrounds,
+    popoverSecondary: popoverSecondaryGrounds,
+    accentSoft: accentSoftGrounds,
+  } = contrastGrounds(theme, appearance);
 
   const cardGround = requireOpaque(tokens["--surface-card"]);
   const accentGround = requireOpaque(tokens["--accent"]);
