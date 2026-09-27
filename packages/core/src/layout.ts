@@ -1,4 +1,4 @@
-import { clampRatio } from "./split-view.js";
+import { clampRatio, type PaneSide, type WindowLayout } from "./split-view.js";
 import { contentRect, type ChromeState, type Rect } from "./chrome.js";
 
 /** Delay before a single click on a space row activates it, so a double-click can cancel it. */
@@ -7,14 +7,26 @@ export const SPACE_ACTIVATE_DELAY_MS = 250;
 /** Fixed width of the find bar overlay, before clamping to the page region. */
 export const FIND_BAR_WIDTH = 360;
 
-/** Fixed height of the find bar overlay. */
-export const FIND_BAR_HEIGHT = 44;
+/** Fixed height of the find pill. */
+export const FIND_BAR_HEIGHT = 38;
 
-/** Horizontal inset the find bar keeps from each edge of the page region. */
-export const FIND_BAR_INSET = 12;
+/** Inset the find pill keeps from the top and right (and, when clamped, left) edges of its card. */
+export const FIND_BAR_INSET = 8;
 
-/** Fixed distance from the top of the PAGE region (the card) to the find bar. */
-export const FIND_BAR_TOP = 12;
+/**
+ * Margin the find overlay view extends past the pill on every side, so the
+ * pill's `--shadow-popover` is not clipped by the view's bounds.
+ */
+export const FIND_BAR_SHADOW_MARGIN = 16;
+
+/** Maximum width of the settings sheet. */
+export const SETTINGS_SHEET_WIDTH = 760;
+
+/** Maximum height of the settings sheet. */
+export const SETTINGS_SHEET_HEIGHT = 500;
+
+/** Minimum margin the settings sheet keeps from every edge of the window. */
+export const SHEET_MARGIN = 24;
 
 /** Fixed width of the command bar overlay's panel, before clamping to the window. */
 export const COMMAND_BAR_WIDTH = 680;
@@ -91,21 +103,37 @@ export function commandBarPanelRect(
 
 /**
  * The settings view's on-screen rectangle within the window's content area:
- * it covers the whole PAGE region ({@link contentRect}), the inset card to
- * the right of the sidebar.
+ * the whole content area, sidebar included. The view is transparent; its
+ * renderer paints the scrim and centers the sheet with {@link settingsSheetRect}.
  */
-export function settingsBounds(
-  contentWidth: number,
-  contentHeight: number,
-  chrome: ChromeState,
-): Rect {
-  return contentRect(contentWidth, contentHeight, chrome);
+export function settingsBounds(contentWidth: number, contentHeight: number): Rect {
+  return { x: 0, y: 0, width: contentWidth, height: contentHeight };
+}
+
+/**
+ * The settings sheet's rectangle within the settings view's viewport: at most
+ * {@link SETTINGS_SHEET_WIDTH} × {@link SETTINGS_SHEET_HEIGHT}, keeping
+ * {@link SHEET_MARGIN} from every edge, centered. Each dimension is floored at
+ * 0; an all-zero rect is returned when either is 0.
+ */
+export function settingsSheetRect(viewportWidth: number, viewportHeight: number): Rect {
+  const width = Math.max(0, Math.min(SETTINGS_SHEET_WIDTH, viewportWidth - 2 * SHEET_MARGIN));
+  const height = Math.max(0, Math.min(SETTINGS_SHEET_HEIGHT, viewportHeight - 2 * SHEET_MARGIN));
+  if (width === 0 || height === 0) {
+    return { x: 0, y: 0, width: 0, height: 0 };
+  }
+  return {
+    x: Math.round((viewportWidth - width) / 2),
+    y: Math.round((viewportHeight - height) / 2),
+    width,
+    height,
+  };
 }
 
 export const QUICK_BROWSE_WIDTH = 480;
 export const QUICK_BROWSE_HEIGHT = 640;
 /** Height of the quick-browse chrome bar above the page view. */
-export const QUICK_BROWSE_CHROME_HEIGHT = 44;
+export const QUICK_BROWSE_CHROME_HEIGHT = 48;
 /**
  * The quick-browse page WebContentsView's rectangle WITHIN the quick-browse
  * window's content area: full width, starting below the chrome bar, filling the
@@ -174,28 +202,87 @@ export function splitPaneBounds(
 }
 
 /**
- * Computes the find bar overlay's on-screen rectangle within the window's
- * content area. The bar is anchored to the top-right of the PAGE region
- * ({@link contentRect}, the inset card to the right of the sidebar), insetting
- * {@link FIND_BAR_INSET} from both the right and left edges and sitting
- * {@link FIND_BAR_TOP} below the top.
- *
- * The width is {@link FIND_BAR_WIDTH}, clamped down to `r.width - 2 *
- * FIND_BAR_INSET` when the page region is too narrow to seat the full bar with
- * its insets, and floored at 0. When the page region cannot fit any bar
- * (`r.width - 2 * FIND_BAR_INSET <= 0`), an all-zero rect is returned so no
- * negative or off-screen dimensions ever reach the caller.
+ * The card a find session belongs to: in split mode, when `tabId` is one of
+ * the two panes, that pane's rect from {@link splitPaneBounds}; otherwise the
+ * single PAGE region ({@link contentRect}).
  */
-export function findBarBounds(
+export function findAnchorRect(
   contentWidth: number,
   contentHeight: number,
   chrome: ChromeState,
+  layout: WindowLayout,
+  tabId: string | null,
 ): Rect {
-  const r = contentRect(contentWidth, contentHeight, chrome);
-  const width = Math.max(0, Math.min(FIND_BAR_WIDTH, r.width - 2 * FIND_BAR_INSET));
-  if (width === 0) {
+  if (layout.mode === "split" && tabId !== null) {
+    if (tabId === layout.left || tabId === layout.right) {
+      const panes = splitPaneBounds(contentWidth, contentHeight, chrome, layout.ratio);
+      return tabId === layout.left ? panes.left : panes.right;
+    }
+  }
+  return contentRect(contentWidth, contentHeight, chrome);
+}
+
+/**
+ * The find pill's rectangle: {@link FIND_BAR_WIDTH} wide (clamped to
+ * `anchor.width - 2 * FIND_BAR_INSET`), {@link FIND_BAR_HEIGHT} tall, inset
+ * {@link FIND_BAR_INSET} from the anchor card's top-right corner. All-zero when
+ * the anchor cannot seat any pill.
+ */
+export function findPillRect(anchor: Rect): Rect {
+  const width = Math.min(FIND_BAR_WIDTH, anchor.width - 2 * FIND_BAR_INSET);
+  if (width <= 0) {
     return { x: 0, y: 0, width: 0, height: 0 };
   }
-  const x = r.x + r.width - width - FIND_BAR_INSET;
-  return { x, y: r.y + FIND_BAR_TOP, width, height: FIND_BAR_HEIGHT };
+  return {
+    x: anchor.x + anchor.width - width - FIND_BAR_INSET,
+    y: anchor.y + FIND_BAR_INSET,
+    width,
+    height: FIND_BAR_HEIGHT,
+  };
+}
+
+/**
+ * The find overlay view's rectangle: the {@link findPillRect} grown by
+ * {@link FIND_BAR_SHADOW_MARGIN} on every side so the pill's shadow is not
+ * clipped. All-zero when the pill is.
+ */
+export function findBarBounds(anchor: Rect): Rect {
+  const pill = findPillRect(anchor);
+  if (pill.width === 0) {
+    return { x: 0, y: 0, width: 0, height: 0 };
+  }
+  return {
+    x: pill.x - FIND_BAR_SHADOW_MARGIN,
+    y: pill.y - FIND_BAR_SHADOW_MARGIN,
+    width: pill.width + 2 * FIND_BAR_SHADOW_MARGIN,
+    height: pill.height + 2 * FIND_BAR_SHADOW_MARGIN,
+  };
+}
+
+/** One card drawn beneath the native views; `focused` marks the focused split pane. */
+export interface WindowCardRect {
+  pane: "single" | PaneSide;
+  rect: Rect;
+  focused: boolean;
+}
+
+/**
+ * The window cards: one unfocused `"single"` card at {@link contentRect} in
+ * single mode, or the `left` and `right` panes of {@link splitPaneBounds} in
+ * split mode with `focused` true on `layout.focused`.
+ */
+export function windowCardRects(
+  contentWidth: number,
+  contentHeight: number,
+  chrome: ChromeState,
+  layout: WindowLayout,
+): WindowCardRect[] {
+  if (layout.mode === "split") {
+    const { left, right } = splitPaneBounds(contentWidth, contentHeight, chrome, layout.ratio);
+    return [
+      { pane: "left", rect: left, focused: layout.focused === "left" },
+      { pane: "right", rect: right, focused: layout.focused === "right" },
+    ];
+  }
+  return [{ pane: "single", rect: contentRect(contentWidth, contentHeight, chrome), focused: false }];
 }

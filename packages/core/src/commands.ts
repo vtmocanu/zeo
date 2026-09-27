@@ -202,7 +202,8 @@ export const COMMANDS: readonly CommandDescriptor[] = [
  * `zoom.out` need an active tab with a non-null http(s) `siteHost`; `zoom.reset`
  * needs that too AND a current `zoomFactor` other than the default `1.0` (there
  * is nothing to reset when the host is already at actual size). `find.open`
- * needs an active tab; `find.next` and `find.previous` need the find session
+ * needs an active tab and the settings view closed (`!context.settingsOpen`, so
+ * no find pill floats over the settings scrim); `find.next` and `find.previous` need the find session
  * open with a non-empty query (`context.find.open && context.find.hasQuery`).
  * The four `quickBrowse.*` commands need the quick-browse window open
  * (`context.quickBrowseOpen`); `browser.setDefault` is always enabled.
@@ -289,7 +290,7 @@ export function isCommandEnabled(id: CommandId, context: CommandContext): boolea
         context.activeTab.zoomFactor !== DEFAULT_ZOOM_FACTOR
       );
     case "find.open":
-      return context.activeTab !== null;
+      return context.activeTab !== null && !context.settingsOpen;
     case "find.next":
     case "find.previous":
       return context.find.open && context.find.hasQuery;

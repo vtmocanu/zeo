@@ -2,15 +2,22 @@ import { describe, expect, it } from "vitest";
 import {
   commandBarPanelRect,
   settingsBounds,
+  settingsSheetRect,
+  findAnchorRect,
+  findPillRect,
   findBarBounds,
+  windowCardRects,
   quickBrowsePageBounds,
   splitPaneBounds,
   DIVIDER_WIDTH,
-  FIND_BAR_HEIGHT,
-  FIND_BAR_INSET,
   QUICK_BROWSE_CHROME_HEIGHT,
 } from "./layout.js";
 import { contentRect, DEFAULT_CHROME_STATE, type ChromeState } from "./chrome.js";
+import type { WindowLayout } from "./split-view.js";
+
+const SINGLE: WindowLayout = { mode: "single" };
+const SPLIT_RIGHT: WindowLayout = { mode: "split", left: "a", right: "b", ratio: 0.4, focused: "right" };
+const ZERO = { x: 0, y: 0, width: 0, height: 0 };
 
 const COLLAPSED: ChromeState = { sidebarWidth: 240, sidebarCollapsed: true, sidebarRevealed: false };
 
@@ -53,57 +60,73 @@ describe("commandBarPanelRect", () => {
   });
 });
 
-describe("findBarBounds", () => {
-  it("right-aligns a full-width bar within the page region at the top inset", () => {
-    expect(findBarBounds(1280, 800, DEFAULT_CHROME_STATE)).toEqual({
-      x: 900,
-      y: 20,
-      width: 360,
-      height: 44,
-    });
+describe("findPillRect / findBarBounds", () => {
+  it("seats the pill 8 px inside the top-right of the default card and grows the view by 16", () => {
+    const anchor = findAnchorRect(1280, 800, DEFAULT_CHROME_STATE, SINGLE, null);
+    expect(anchor).toEqual({ x: 240, y: 8, width: 1032, height: 784 });
+    expect(findPillRect(anchor)).toEqual({ x: 904, y: 16, width: 360, height: 38 });
+    expect(findBarBounds(anchor)).toEqual({ x: 888, y: 0, width: 392, height: 70 });
   });
 
-  it("insets the bar by FIND_BAR_INSET on the right edge of the page region", () => {
+  it("keeps the pill at the same spot when the sidebar is collapsed and not revealed", () => {
+    const anchor = findAnchorRect(1280, 800, COLLAPSED, SINGLE, null);
+    expect(anchor.x).toBe(8);
+    expect(findPillRect(anchor)).toEqual({ x: 904, y: 16, width: 360, height: 38 });
+  });
+
+  it("clamps the pill width to the anchor minus both insets", () => {
+    const anchor = { x: 0, y: 0, width: 200, height: 400 };
+    expect(findPillRect(anchor).width).toBe(184);
+  });
+
+  it("returns all-zero pill and bounds when the anchor cannot seat a pill", () => {
+    const anchor = { x: 0, y: 0, width: 16, height: 400 };
+    expect(findPillRect(anchor)).toEqual(ZERO);
+    expect(findBarBounds(anchor)).toEqual(ZERO);
+  });
+});
+
+describe("findAnchorRect", () => {
+  it("is contentRect in single mode", () => {
+    expect(findAnchorRect(1280, 800, DEFAULT_CHROME_STATE, SINGLE, "a")).toEqual(
+      contentRect(1280, 800, DEFAULT_CHROME_STATE),
+    );
+  });
+
+  it("is the matching split pane when the tab is a pane", () => {
+    const panes = splitPaneBounds(1280, 800, DEFAULT_CHROME_STATE, 0.4);
+    expect(findAnchorRect(1280, 800, DEFAULT_CHROME_STATE, SPLIT_RIGHT, "a")).toEqual(panes.left);
+    expect(findAnchorRect(1280, 800, DEFAULT_CHROME_STATE, SPLIT_RIGHT, "b")).toEqual(panes.right);
+  });
+
+  it("falls back to contentRect in split for a null or unrelated tab", () => {
     const r = contentRect(1280, 800, DEFAULT_CHROME_STATE);
-    const bounds = findBarBounds(1280, 800, DEFAULT_CHROME_STATE);
-    expect(bounds.x + bounds.width).toBe(r.x + r.width - FIND_BAR_INSET);
+    expect(findAnchorRect(1280, 800, DEFAULT_CHROME_STATE, SPLIT_RIGHT, null)).toEqual(r);
+    expect(findAnchorRect(1280, 800, DEFAULT_CHROME_STATE, SPLIT_RIGHT, "z")).toEqual(r);
+  });
+});
+
+describe("windowCardRects", () => {
+  it("draws one unfocused single card at contentRect", () => {
+    expect(windowCardRects(1280, 800, DEFAULT_CHROME_STATE, SINGLE)).toEqual([
+      { pane: "single", rect: contentRect(1280, 800, DEFAULT_CHROME_STATE), focused: false },
+    ]);
   });
 
-  it("clamps the width in a narrow page region, inset both sides", () => {
-    // contentRect(500, 800, default) → x 240, width max(0, 500-240-8)=252.
-    // bar width = min(360, 252-24) = 228; x = 240+252-228-12 = 252.
-    const bounds = findBarBounds(500, 800, DEFAULT_CHROME_STATE);
-    expect(bounds.width).toBe(228);
-    expect(bounds.x).toBe(252);
-    expect(bounds.x + bounds.width).toBe(480);
-    expect(bounds.y).toBe(20);
-    expect(bounds.height).toBe(FIND_BAR_HEIGHT);
-  });
-
-  it("collapses to an all-zero rect when the page region is too narrow", () => {
-    expect(findBarBounds(260, 800, DEFAULT_CHROME_STATE)).toEqual({ x: 0, y: 0, width: 0, height: 0 });
-  });
-
-  it("starts the bar at the card inset when the sidebar is collapsed", () => {
-    // contentRect(1280, 800, COLLAPSED) → x 8, width 1264.
-    // bar width = min(360, 1264-24) = 360; x = 8+1264-360-12 = 900.
-    expect(findBarBounds(1280, 800, COLLAPSED)).toEqual({
-      x: 900,
-      y: 20,
-      width: 360,
-      height: 44,
-    });
-  });
-
-  it("yields no negative dimensions when the content is too small", () => {
-    const bounds = findBarBounds(100, 800, DEFAULT_CHROME_STATE);
-    expect(bounds).toEqual({ x: 0, y: 0, width: 0, height: 0 });
-    expect(bounds.width).toBeGreaterThanOrEqual(0);
-    expect(bounds.height).toBeGreaterThanOrEqual(0);
+  it("draws the two split panes with the focused one marked", () => {
+    const panes = splitPaneBounds(1280, 800, DEFAULT_CHROME_STATE, 0.4);
+    expect(windowCardRects(1280, 800, DEFAULT_CHROME_STATE, SPLIT_RIGHT)).toEqual([
+      { pane: "left", rect: panes.left, focused: false },
+      { pane: "right", rect: panes.right, focused: true },
+    ]);
   });
 });
 
 describe("quickBrowsePageBounds", () => {
+  it("starts the page view at y 48 in the default window", () => {
+    expect(quickBrowsePageBounds(480, 640)).toEqual({ x: 0, y: 48, width: 480, height: 592 });
+  });
+
   it("fills the width below the chrome bar for a normal window", () => {
     expect(quickBrowsePageBounds(480, 640)).toEqual({
       x: 0,
@@ -165,24 +188,25 @@ describe("splitPaneBounds", () => {
 });
 
 describe("settingsBounds", () => {
-  it("equals contentRect for the default chrome state", () => {
-    expect(settingsBounds(1280, 800, DEFAULT_CHROME_STATE)).toEqual(
-      contentRect(1280, 800, DEFAULT_CHROME_STATE),
-    );
+  it("covers the whole content area", () => {
+    expect(settingsBounds(1280, 800)).toEqual({ x: 0, y: 0, width: 1280, height: 800 });
+  });
+});
+
+describe("settingsSheetRect", () => {
+  it("centers the full-size sheet in a large viewport", () => {
+    expect(settingsSheetRect(1280, 800)).toEqual({ x: 260, y: 150, width: 760, height: 500 });
   });
 
-  it("equals contentRect when the sidebar is collapsed", () => {
-    expect(settingsBounds(1280, 800, COLLAPSED)).toEqual(contentRect(1280, 800, COLLAPSED));
+  it("keeps the 24 px margin at the minimum window size", () => {
+    expect(settingsSheetRect(640, 400)).toEqual({ x: 24, y: 24, width: 592, height: 352 });
   });
 
-  it("equals contentRect when the sidebar is collapsed but revealed", () => {
-    const revealed: ChromeState = { sidebarWidth: 300, sidebarCollapsed: true, sidebarRevealed: true };
-    expect(settingsBounds(1280, 800, revealed)).toEqual(contentRect(1280, 800, revealed));
+  it("clamps only the dimension that does not fit", () => {
+    expect(settingsSheetRect(900, 520)).toEqual({ x: 70, y: 24, width: 760, height: 472 });
   });
 
-  it("tracks a resized content area", () => {
-    expect(settingsBounds(1000, 600, DEFAULT_CHROME_STATE)).toEqual(
-      contentRect(1000, 600, DEFAULT_CHROME_STATE),
-    );
+  it("is all-zero when a dimension collapses", () => {
+    expect(settingsSheetRect(48, 800)).toEqual(ZERO);
   });
 });
