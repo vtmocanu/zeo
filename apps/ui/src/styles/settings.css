@@ -1,12 +1,14 @@
 /* Settings view --------------------------------------------------------------
    Mounted in its own WebContentsView (?view=settings) covering the content area.
    Two columns: a left section list and the panel of controls, on the same window
-   surface tokens as the sidebar. */
+   surface tokens as the sidebar. The document is transparent (base.css) and this
+   view covers the content card until 10.6 makes it a sheet, so the root paints
+   opaquely: the translucent `--surface-window` layered over `--surface-card`. */
 .settings {
   display: flex;
   height: 100vh;
   color: var(--ink-primary);
-  background: var(--surface-window);
+  background: linear-gradient(var(--surface-window), var(--surface-window)), var(--surface-card);
   font-size: 13px;
 }
 

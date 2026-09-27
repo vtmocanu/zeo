@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type MouseEventHandler,
@@ -10,7 +11,7 @@ import {
 } from "react";
 import type { PaneSide, Space, Tab, TabsState } from "@zeo/core";
 import {
-  SIDEBAR_WIDTH,
+  DEFAULT_CHROME_STATE,
   DEFAULT_SEARCH_ENGINE_ID,
   SINGLE_LAYOUT,
   SPACE_ACTIVATE_DELAY_MS,
@@ -20,8 +21,15 @@ import {
   hostMatchesAllowlist,
   paneOf,
   siteKeyForUrl,
+  sidebarVisible,
 } from "@zeo/core";
 import { Favicon } from "./Favicon.js";
+import {
+  SidebarResizeHandle,
+  WindowBackdrop,
+  WindowRow,
+  useSidebarReveal,
+} from "./WindowChrome.js";
 import { useThemeTokens } from "./theme.js";
 
 // Pointer travel (px) required before a press turns into a drag. Below this a
@@ -596,6 +604,7 @@ export function App() {
     isDefaultBrowser: false,
     appVersion: "",
     layout: SINGLE_LAYOUT,
+    chrome: DEFAULT_CHROME_STATE,
     update: {
       enabled: true,
       origin: "direct",
@@ -607,6 +616,14 @@ export function App() {
   });
   const [showArchived, setShowArchived] = useState(false);
   const [now, setNow] = useState(() => Date.now());
+
+  // Frameless chrome (PRD 10.2): mirror the live sidebar width into a token so
+  // CSS can read it, and drive the collapsed sidebar's edge reveal.
+  const sidebarWidth = state.chrome.sidebarWidth;
+  useLayoutEffect(() => {
+    document.documentElement.style.setProperty("--sidebar-width", `${sidebarWidth}px`);
+  }, [sidebarWidth]);
+  useSidebarReveal(state.chrome);
 
   // Ephemeral inline-edit buffer for the space switcher (create / rename /
   // new-profile). `editRef` mirrors `edit` so a stray blur firing after an
@@ -830,12 +847,13 @@ export function App() {
       ? Math.min(100, Math.round((downloadsReceived / downloadsTotal) * 100))
       : 0;
 
-  return (
-    <aside
-      className={`sidebar${isDragging ? " sidebar--dragging" : ""}`}
-      data-testid="sidebar"
-      style={{ width: SIDEBAR_WIDTH }}
-    >
+  const sidebarClassName = `sidebar${isDragging ? " sidebar--dragging" : ""}${
+    sidebarVisible(state.chrome) ? "" : " sidebar--hidden"
+  }`;
+
+  const sidebar = (
+    <aside className={sidebarClassName} data-testid="sidebar" style={{ width: sidebarWidth }}>
+      <WindowRow />
       <header className="sidebar__header">
         <h1 className="sidebar__title">Tabs</h1>
         <button
@@ -1000,6 +1018,16 @@ export function App() {
           </div>
         )}
       </footer>
+      <SidebarResizeHandle width={sidebarWidth} />
     </aside>
+  );
+
+  // The backdrop (window ground, card, drag strip) belongs only to this main
+  // sidebar surface; the other ?view= surfaces mount different roots.
+  return (
+    <>
+      <WindowBackdrop chrome={state.chrome} layout={state.layout} />
+      {sidebar}
+    </>
   );
 }
