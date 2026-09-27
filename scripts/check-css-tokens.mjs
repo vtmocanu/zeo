@@ -16,11 +16,12 @@
 //
 // Every duration and easing must also read a semantic token. The same files
 // have their `transition`, `transition-duration`, `transition-delay`,
-// `animation`, `animation-duration` and `animation-delay` declarations (and
-// their `-webkit-` prefixed forms) checked for a literal time (`0.1s`,
-// `200ms`), a `cubic-bezier(` call, or a bare `ease`, `ease-in`, `ease-out`,
-// `ease-in-out` or `linear` keyword (matched whole-word, so `--ease-standard`
-// and a name such as `zeo-fade-in` are not flagged).
+// `transition-timing-function`, `animation`, `animation-duration`,
+// `animation-delay` and `animation-timing-function` declarations (and their
+// `-webkit-` prefixed forms) checked for a literal time (`0.1s`, `200ms`,
+// case-insensitively), a `cubic-bezier(` call, or a bare `ease`, `ease-in`,
+// `ease-out`, `ease-in-out` or `linear` keyword (matched whole-word, so
+// `--ease-standard` and a name such as `zeo-fade-in` are not flagged).
 //
 // Usage: node scripts/check-css-tokens.mjs [dir]
 // Exit code 1 on any finding, 0 otherwise, 2 when the target is not a directory.
@@ -86,19 +87,27 @@ const MOTION_PROPERTIES = new Set([
   "transition",
   "transition-duration",
   "transition-delay",
+  "transition-timing-function",
   "animation",
   "animation-duration",
   "animation-delay",
+  "animation-timing-function",
   "-webkit-transition",
   "-webkit-transition-duration",
   "-webkit-transition-delay",
+  "-webkit-transition-timing-function",
   "-webkit-animation",
   "-webkit-animation-duration",
   "-webkit-animation-delay",
+  "-webkit-animation-timing-function",
 ]);
-// A bare time literal, e.g. `0.1s` or `200ms`, matched as a whole token so
-// `0.1s` is not reported as just `1s`.
-const TIME_LITERAL = /\b\d*\.?\d+m?s\b/g;
+// A bare time literal, e.g. `0.1s`, `.5s` or `200ms` (matched
+// case-insensitively, so `200MS` counts too), matched as a whole token so
+// `0.1s` is not reported as just `1s` and `var(--dur-2s)` is not reported as
+// `2s`: a lookbehind bars a preceding word character, dot or hyphen (so a
+// custom-property or identifier tail never matches) and the trailing `\b`
+// bars a following word character.
+const TIME_LITERAL = /(?<![\w.-])\d*\.?\d+m?s\b/gi;
 const CUBIC_BEZIER = /cubic-bezier\(/gi;
 // The bare easing keywords, longest alternative first so `ease-in-out` wins
 // over `ease-in` at the same position. Word-bounded on hyphens too, so
@@ -239,12 +248,21 @@ function declarationValues(source) {
   return values;
 }
 
+// The column (0-based) of `index` within its own source line, given the
+// per-character `lines` array a `declarationValues` entry carries: the
+// offset back to where the run of that same line number began.
+function columnOf(lines, index) {
+  let start = index;
+  while (start > 0 && lines[start - 1] === lines[index]) start -= 1;
+  return index - start;
+}
+
 function findings(file) {
   const source = stripComments(readFileSync(file, "utf8"));
   const found = [];
   source.split("\n").forEach((line, index) => {
-    for (const m of line.matchAll(HEX)) found.push({ line: index + 1, match: m[0] });
-    for (const m of line.matchAll(FUNC)) found.push({ line: index + 1, match: m[0] });
+    for (const m of line.matchAll(HEX)) found.push({ line: index + 1, column: m.index, match: m[0] });
+    for (const m of line.matchAll(FUNC)) found.push({ line: index + 1, column: m.index, match: m[0] });
   });
   // Named colors only count in declaration values, so selectors such as
   // `.tab-item` or `:hover` and property names never trip the check.
@@ -255,11 +273,11 @@ function findings(file) {
       .replace(/\burl\([^)]*\)/gi, (s) => " ".repeat(s.length));
     for (const m of scanned.matchAll(IDENT)) {
       if (NAMED_COLORS.has(m[0].toLowerCase())) {
-        found.push({ line: value.lines[m.index], match: m[0] });
+        found.push({ line: value.lines[m.index], column: columnOf(value.lines, m.index), match: m[0] });
       }
     }
   }
-  return found.sort((a, b) => a.line - b.line);
+  return found.sort((a, b) => a.line - b.line || a.column - b.column);
 }
 
 /** Literal motion (durations, easings) in `transition`/`animation` family declarations. */
@@ -270,16 +288,16 @@ function motionFindings(file) {
     if (!MOTION_PROPERTIES.has(value.property)) continue;
     const scanned = value.text.replace(STRING, (s) => " ".repeat(s.length));
     for (const m of scanned.matchAll(TIME_LITERAL)) {
-      found.push({ line: value.lines[m.index], match: m[0] });
+      found.push({ line: value.lines[m.index], column: columnOf(value.lines, m.index), match: m[0] });
     }
     for (const m of scanned.matchAll(CUBIC_BEZIER)) {
-      found.push({ line: value.lines[m.index], match: m[0] });
+      found.push({ line: value.lines[m.index], column: columnOf(value.lines, m.index), match: m[0] });
     }
     for (const m of scanned.matchAll(MOTION_KEYWORD)) {
-      found.push({ line: value.lines[m.index], match: m[0] });
+      found.push({ line: value.lines[m.index], column: columnOf(value.lines, m.index), match: m[0] });
     }
   }
-  return found.sort((a, b) => a.line - b.line);
+  return found.sort((a, b) => a.line - b.line || a.column - b.column);
 }
 
 let isDirectory = false;

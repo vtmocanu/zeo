@@ -245,4 +245,55 @@ describe("check-css-tokens.mjs", () => {
     expect(stderr).toBe("");
     expect(status).toBe(0);
   });
+
+  test("pins the exact file:line for a literal on a continuation line", () => {
+    const dir = makeTempDir();
+    writeFileSync(
+      join(dir, "bad-motion-multiline.css"),
+      ".a {\n  transition:\n    opacity\n    120ms\n    var(--ease-standard);\n}\n",
+    );
+
+    const { status, stderr } = run(dir);
+    expect(status).toBe(1);
+    expect(stderr).toMatch(/bad-motion-multiline\.css:4: literal motion "120ms"/);
+  });
+
+  test("exits 1 on a leading-dot duration", () => {
+    const dir = makeTempDir();
+    writeFileSync(join(dir, "bad-dot.css"), ".a { transition: opacity .5s; }\n");
+
+    const { status, stderr } = run(dir);
+    expect(status).toBe(1);
+    expect(stderr).toContain('literal motion ".5s"');
+  });
+
+  test("does not flag a duration-shaped custom property name", () => {
+    const dir = makeTempDir();
+    writeFileSync(join(dir, "ok-var-name.css"), ".a { transition: var(--dur-2s); }\n");
+
+    const { status, stderr } = run(dir);
+    expect(stderr).toBe("");
+    expect(status).toBe(0);
+  });
+
+  test("exits 1 on an uppercase duration unit", () => {
+    const dir = makeTempDir();
+    writeFileSync(join(dir, "bad-upper.css"), ".a { transition: opacity 200MS; }\n");
+
+    const { status, stderr } = run(dir);
+    expect(status).toBe(1);
+    expect(stderr).toContain('literal motion "200MS"');
+  });
+
+  test("exits 1 on a literal transition-timing-function", () => {
+    const dir = makeTempDir();
+    writeFileSync(
+      join(dir, "bad-timing-function.css"),
+      ".a { transition-timing-function: ease-in; }\n",
+    );
+
+    const { status, stderr } = run(dir);
+    expect(status).toBe(1);
+    expect(stderr).toContain('literal motion "ease-in"');
+  });
 });
