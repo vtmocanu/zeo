@@ -11,12 +11,14 @@
  * representation is the desktop layer's job, not this module's.
  */
 
+import type { Favorite } from "./favorites.js";
+
 /**
  * The version stamped into every persisted state this build writes, and the
  * highest version it can read back. A stored version ABOVE this is from a newer
  * build and cannot be understood ({@link UnsupportedSchemaVersionError}).
  */
-export const SCHEMA_VERSION = 14;
+export const SCHEMA_VERSION = 15;
 
 /**
  * The single meta row: the schema version the state was written with and the
@@ -70,11 +72,20 @@ export interface TabRow {
   lastActiveAt: number;
   archivedAt: number | null;
   position: number;
+  /** The id of the favorite this tab is the open instance of, or `null`. */
+  favoriteId: string | null;
 }
 
 /**
- * The complete persisted snapshot: one meta row plus the profile, space, and
- * tab rows. This is the value {@link serializeStore} produces and
+ * A persisted favorite. Identical shape to the runtime {@link Favorite} — the
+ * codec adds no extra fields since `position` and `createdAt` already ride the
+ * public type.
+ */
+export type FavoriteRow = Favorite;
+
+/**
+ * The complete persisted snapshot: one meta row plus the profile, space, tab
+ * and favorite rows. This is the value {@link serializeStore} produces and
  * {@link deserializeStore} consumes.
  */
 export interface PersistedState {
@@ -82,6 +93,7 @@ export interface PersistedState {
   profiles: ProfileRow[];
   spaces: SpaceRow[];
   tabs: TabRow[];
+  favorites: FavoriteRow[];
 }
 
 /**

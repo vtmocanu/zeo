@@ -79,6 +79,7 @@ export class TabStore {
       pinned: tab.pinned,
       lastActiveAt: tab.lastActiveAt,
       archivedAt: tab.archivedAt,
+      favoriteId: tab.favoriteId,
       activationSeq: ++seq,
       archivalSeq: 0,
     }));
@@ -110,6 +111,7 @@ export class TabStore {
       pinned: record.pinned,
       lastActiveAt: record.lastActiveAt,
       archivedAt: record.archivedAt,
+      favoriteId: record.favoriteId,
     };
   }
 
@@ -136,6 +138,19 @@ export class TabStore {
   /** Open (non-archived) records in their current array order. */
   private openTabs(): TabRecord[] {
     return this.tabs.filter((tab) => tab.archivedAt === null);
+  }
+
+  /**
+   * The three-way sidebar-section key a tab belongs to: `"pinned"`, `"today"`
+   * (unpinned, `favoriteId === null`) or `"favorite"` (unpinned,
+   * `favoriteId !== null`). Used by {@link reorder} to compute the group a
+   * dropped row moves within, and mirrors `sidebarSections`.
+   */
+  private groupKey(tab: TabRecord): "pinned" | "today" | "favorite" {
+    if (tab.pinned) {
+      return "pinned";
+    }
+    return tab.favoriteId !== null ? "favorite" : "today";
   }
 
   /**
@@ -177,7 +192,7 @@ export class TabStore {
    * derivation) is intentionally NOT done here — that belongs to the desktop
    * main process.
    */
-  create(input: { url: string; title?: string }): Tab {
+  create(input: { url: string; title?: string; favoriteId?: string | null }): Tab {
     const createdAt = this.now();
     const record: TabRecord = {
       id: this.idFactory(),
@@ -188,6 +203,7 @@ export class TabStore {
       pinned: false,
       lastActiveAt: createdAt,
       archivedAt: null,
+      favoriteId: input.favoriteId ?? null,
       activationSeq: ++this.seq,
       archivalSeq: 0,
     };
@@ -369,6 +385,9 @@ export class TabStore {
     if (record.archivedAt !== null) {
       throw new Error(`Cannot pin an archived tab: ${id}`);
     }
+    if (record.favoriteId !== null) {
+      throw new Error(`Cannot pin a favorite tab: ${id}`);
+    }
     if (record.pinned) {
       return;
     }
@@ -413,11 +432,14 @@ export class TabStore {
     }
 
     // The ordered group (among OPEN tabs) the target belongs to, and the array
-    // indices those group members currently occupy.
+    // indices those group members currently occupy. Groups are three-way:
+    // pinned, today (unpinned, no favoriteId) and favorite (unpinned,
+    // favoriteId set) — matching the rendered sidebar sections.
+    const targetGroup = this.groupKey(target);
     const positions: number[] = [];
     const group: TabRecord[] = [];
     this.tabs.forEach((tab, index) => {
-      if (tab.archivedAt === null && tab.pinned === target.pinned) {
+      if (tab.archivedAt === null && this.groupKey(tab) === targetGroup) {
         positions.push(index);
         group.push(tab);
       }
@@ -472,6 +494,9 @@ export class TabStore {
     if (record.pinned) {
       throw new Error(`Cannot archive a pinned tab: ${id}`);
     }
+    if (record.favoriteId !== null) {
+      throw new Error(`Cannot archive a favorite tab: ${id}`);
+    }
     if (record.archivedAt !== null) {
       throw new Error(`Cannot archive an archived tab: ${id}`);
     }
@@ -481,6 +506,52 @@ export class TabStore {
     if (this.activeId === id) {
       this.activateMru();
     }
+  }
+
+  /**
+   * Sets or clears `id`'s `favoriteId`. Throws on an unknown or archived id. A
+   * non-null value unpins the tab (`pinned = false`); either direction moves
+   * the record to the end of the array, so it lands last in its new group
+   * (favorite or today).
+   */
+  setFavorite(id: string, favoriteId: string | null): void {
+    const record = this.findRecord(id, "set favorite on");
+    if (record.archivedAt !== null) {
+      throw new Error(`Cannot set favorite on an archived tab: ${id}`);
+    }
+    record.favoriteId = favoriteId;
+    if (favoriteId !== null) {
+      record.pinned = false;
+    }
+    this.tabs.splice(this.tabs.indexOf(record), 1);
+    this.tabs.push(record);
+  }
+
+  /**
+   * Archives every OPEN today tab (unpinned, `favoriteId === null`), including
+   * the active one if it qualifies, all stamped with ONE `now()` value and a
+   * fresh `archivalSeq` per tab in {@link list} order. If the active tab was
+   * archived, {@link activateMru} re-points active among the remaining pinned
+   * and favorite tabs (or `null`). Returns the archived ids, `[]` when there
+   * were none.
+   */
+  archiveToday(): string[] {
+    const now = this.now();
+    const targets = this.list().filter(
+      (tab) => !tab.pinned && tab.favoriteId === null,
+    );
+    const archivedIds: string[] = [];
+    for (const target of targets) {
+      // Non-null asserted: `target.id` was just produced by `list()`, which
+      // reads from `this.tabs`.
+      const record = this.tabs.find((tab) => tab.id === target.id)!;
+      this.stampArchived(record, now);
+      archivedIds.push(record.id);
+    }
+    if (this.activeId !== null && archivedIds.includes(this.activeId)) {
+      this.activateMru();
+    }
+    return archivedIds;
   }
 
   /**
@@ -502,6 +573,7 @@ export class TabStore {
       if (
         record.archivedAt !== null ||
         record.pinned ||
+        record.favoriteId !== null ||
         record.id === this.activeId ||
         now - record.lastActiveAt <= maxIdleMs
       ) {
@@ -536,13 +608,16 @@ export class TabStore {
 
   /**
    * Returns the OPEN (non-archived) tabs as new shallow copies: the pinned
-   * group first, then the unpinned group, each STABLE in its internal order.
+   * group first, then the today group (unpinned, `favoriteId === null`), then
+   * the favorite group (unpinned, `favoriteId !== null`), each STABLE in its
+   * internal order.
    */
   list(): Tab[] {
     const open = this.openTabs();
     const pinned = open.filter((tab) => tab.pinned);
-    const unpinned = open.filter((tab) => !tab.pinned);
-    return [...pinned, ...unpinned].map((tab) => this.toTab(tab));
+    const today = open.filter((tab) => !tab.pinned && tab.favoriteId === null);
+    const favorite = open.filter((tab) => !tab.pinned && tab.favoriteId !== null);
+    return [...pinned, ...today, ...favorite].map((tab) => this.toTab(tab));
   }
 
   /**
