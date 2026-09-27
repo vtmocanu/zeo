@@ -1,9 +1,21 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, test } from "vitest";
 import type { Download, Favorite, Space } from "@zeo/core";
-import { BottomBar, SpaceItem, spaceEditLabel, summarizeDownloads } from "./BottomBar.js";
+import {
+  ARCHIVED_VIEW_ID,
+  BottomBar,
+  nearestScrollLeft,
+  SpaceItem,
+  spaceEditLabel,
+  summarizeDownloads,
+} from "./BottomBar.js";
 import { Favicon, faviconLetter } from "./Favicon.js";
-import { FavoritesGrid, tileDropEdge } from "./FavoritesGrid.js";
+import {
+  FavoritesGrid,
+  GRID_DROP_MARGIN,
+  isWithinDropArea,
+  tileDropEdge,
+} from "./FavoritesGrid.js";
 import { Icon } from "./icons.js";
 import { URL_PILL_PLACEHOLDER, UrlPill } from "./UrlPill.js";
 
@@ -116,9 +128,33 @@ describe("FavoritesGrid", () => {
     expect(tileDropEdge(2, 3, 3)).toBe("after");
     expect(tileDropEdge(1, 3, 3)).toBeNull();
   });
+
+  test("isWithinDropArea has no target outside the grid plus its margin", () => {
+    const grid = { left: 10, top: 20, right: 210, bottom: 100 };
+    expect(isWithinDropArea(grid, 50, 50)).toBe(true);
+    // The margin keeps a release on the grid's outer edge a valid drop.
+    expect(isWithinDropArea(grid, 10 - GRID_DROP_MARGIN, 20 - GRID_DROP_MARGIN)).toBe(true);
+    expect(isWithinDropArea(grid, 210 + GRID_DROP_MARGIN, 100 + GRID_DROP_MARGIN)).toBe(true);
+    // Released over the tab list below, or beside the grid: no reorder.
+    expect(isWithinDropArea(grid, 50, 100 + GRID_DROP_MARGIN + 1)).toBe(false);
+    expect(isWithinDropArea(grid, 50, 400)).toBe(false);
+    expect(isWithinDropArea(grid, 210 + GRID_DROP_MARGIN + 1, 50)).toBe(false);
+    expect(isWithinDropArea(grid, 50, 20 - GRID_DROP_MARGIN - 1)).toBe(false);
+  });
 });
 
 describe("BottomBar", () => {
+  test("nearestScrollLeft reveals the active dot without over-scrolling", () => {
+    // Already visible: unchanged.
+    expect(nearestScrollLeft(0, 100, 20, 40)).toBe(0);
+    // Off the right edge: align its trailing edge.
+    expect(nearestScrollLeft(0, 100, 120, 140)).toBe(40);
+    // Off the left edge: align its leading edge.
+    expect(nearestScrollLeft(80, 100, 20, 40)).toBe(20);
+    // Wider than the strip: leading edge wins.
+    expect(nearestScrollLeft(0, 100, 50, 200)).toBe(50);
+  });
+
   test("summarizeDownloads keeps the indicator's wording", () => {
     expect(summarizeDownloads([]).label).toBe("Downloads");
     expect(summarizeDownloads([download("completed", 5, 5)]).label).toBe("Downloads (1)");
@@ -146,11 +182,30 @@ describe("BottomBar", () => {
     expect(html).toContain('data-testid="downloads-indicator"');
     expect(html).toContain('title="Downloads"');
     expect(html).toMatch(/data-testid="archived-toggle" aria-expanded="false" title="Archived \(3\)"/);
+    expect(html).not.toContain("aria-controls");
     expect(html).toContain('<span class="visually-hidden">Archived (3)</span>');
     expect(html.match(/data-space-id=/g)).toHaveLength(2);
     expect(html).toMatch(/data-space-id="s2" aria-current="true"/);
     expect(html).toContain('aria-label="New space"');
     expect(html).not.toContain("progress-ring");
+  });
+
+  test("the open archived toggle names the panel it controls", () => {
+    const html = renderToStaticMarkup(
+      <BottomBar
+        spaces={[]}
+        activeSpaceId=""
+        downloads={[]}
+        archivedCount={0}
+        archivedOpen={true}
+        onToggleArchived={() => {}}
+        onRenameSpace={() => {}}
+        onNewSpace={() => {}}
+      />,
+    );
+    expect(html).toContain(
+      `data-testid="archived-toggle" aria-expanded="true" aria-controls="${ARCHIVED_VIEW_ID}"`,
+    );
   });
 
   test("an active download adds the ring", () => {

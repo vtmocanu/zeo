@@ -223,6 +223,30 @@ function ProgressRing({ percent, indeterminate }: { percent: number; indetermina
   );
 }
 
+/** The id of the archived panel the archived toggle controls. */
+export const ARCHIVED_VIEW_ID = "archived-view";
+
+/**
+ * The strip `scrollLeft` that brings `[itemStart, itemEnd)` (content
+ * coordinates) fully into a `viewport`-wide window with "nearest" semantics:
+ * unchanged when already visible, otherwise the smallest scroll that reveals
+ * it, aligning the leading edge when the item is wider than the viewport.
+ */
+export function nearestScrollLeft(
+  scrollLeft: number,
+  viewport: number,
+  itemStart: number,
+  itemEnd: number,
+): number {
+  if (itemStart < scrollLeft || itemEnd - itemStart > viewport) {
+    return itemStart;
+  }
+  if (itemEnd > scrollLeft + viewport) {
+    return itemEnd - viewport;
+  }
+  return scrollLeft;
+}
+
 /**
  * The sidebar's bottom bar (PRD 10.4 §7.8): downloads and archived on the
  * left, one dot per space in the centre, new space on the right. Every button
@@ -250,9 +274,28 @@ export function BottomBar({
   const summary = summarizeDownloads(downloads);
   const archivedLabel = `Archived (${archivedCount})`;
 
-  // Keep the active dot in view when the strip overflows.
+  // Keep the active dot in view when the strip overflows. Only the strip
+  // scrolls: `scrollIntoView` would also nudge overflow-hidden ancestors such
+  // as `.sidebar`.
+  const switcherRef = useRef<HTMLElement | null>(null);
   useEffect(() => {
-    findSpaceItem(activeSpaceId)?.scrollIntoView({ inline: "nearest", block: "nearest" });
+    const strip = switcherRef.current;
+    const item = findSpaceItem(activeSpaceId);
+    if (strip === null || item === null || !strip.contains(item)) {
+      return;
+    }
+    const stripRect = strip.getBoundingClientRect();
+    const itemRect = item.getBoundingClientRect();
+    const origin = stripRect.left + strip.clientLeft - strip.scrollLeft;
+    const next = nearestScrollLeft(
+      strip.scrollLeft,
+      strip.clientWidth,
+      itemRect.left - origin,
+      itemRect.right - origin,
+    );
+    if (next !== strip.scrollLeft) {
+      strip.scrollLeft = next;
+    }
   }, [activeSpaceId]);
 
   return (
@@ -278,6 +321,7 @@ export function BottomBar({
           className="icon-button bottom-bar__button"
           data-testid="archived-toggle"
           aria-expanded={archivedOpen}
+          aria-controls={archivedOpen ? ARCHIVED_VIEW_ID : undefined}
           title={archivedLabel}
           onClick={onToggleArchived}
         >
@@ -286,7 +330,7 @@ export function BottomBar({
         </button>
       </div>
 
-      <nav className="space-switcher" data-testid="space-switcher" aria-label="Spaces">
+      <nav ref={switcherRef} className="space-switcher" data-testid="space-switcher" aria-label="Spaces">
         {spaces.map((space) => (
           <SpaceItem
             key={space.id}

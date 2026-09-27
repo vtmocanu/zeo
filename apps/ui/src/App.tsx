@@ -27,7 +27,7 @@ import {
   sidebarVisible,
   toReorderIndex,
 } from "@zeo/core";
-import { BottomBar, SpaceNameEditor, type SpaceEdit } from "./BottomBar.js";
+import { ARCHIVED_VIEW_ID, BottomBar, SpaceNameEditor, type SpaceEdit } from "./BottomBar.js";
 import { findSpaceItem } from "./dom.js";
 import { Favicon } from "./Favicon.js";
 import { DRAG_THRESHOLD, suppressNextClick } from "./drag.js";
@@ -308,7 +308,6 @@ function TabRow({
   const paned = paneSide !== null;
   const className = [
     "tab-item",
-    pinned ? "tab-item--pinned" : "",
     isActive ? "tab-item--active" : "",
     dragging ? "tab-item--dragging" : "",
     paned ? "tab-item--paned" : "",
@@ -782,8 +781,6 @@ export function App() {
   ): ReactNode => {
     const isTarget = dropTarget?.section === section;
     const insertBefore = isTarget ? dropTarget.insertBefore : -1;
-    const listClassName =
-      section === "pinned" ? "sidebar__list sidebar__list--pinned" : "sidebar__list";
 
     const children: ReactNode[] = [];
     if (rows.length === 0) {
@@ -839,7 +836,7 @@ export function App() {
     }
 
     return (
-      <ul ref={listRef} className={listClassName} data-section={section}>
+      <ul ref={listRef} className="sidebar__list" data-section={section}>
         {children}
       </ul>
     );
@@ -952,6 +949,7 @@ export function App() {
       )}
       {showArchived && (
         <div
+          id={ARCHIVED_VIEW_ID}
           className="archived-view"
           data-testid="archived-view"
           role="region"

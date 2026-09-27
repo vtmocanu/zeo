@@ -12,6 +12,28 @@ import { favoriteGridColumns, favoriteInsertIndex, toReorderIndex } from "@zeo/c
 import { DRAG_THRESHOLD, suppressNextClick } from "./drag.js";
 import { Favicon } from "./Favicon.js";
 
+/**
+ * How far past the grid's bounding rect (px) a pointer still counts as over
+ * the grid: half the 6px `--tile-gap` plus a little slack, so a drop on the
+ * outer edge of a tile still lands but a release over the tab list does not.
+ */
+export const GRID_DROP_MARGIN = 4;
+
+/** Whether `(x, y)` is inside `rect` grown by `margin` on every side. */
+export function isWithinDropArea(
+  rect: { left: number; top: number; right: number; bottom: number },
+  x: number,
+  y: number,
+  margin: number = GRID_DROP_MARGIN,
+): boolean {
+  return (
+    x >= rect.left - margin &&
+    x <= rect.right + margin &&
+    y >= rect.top - margin &&
+    y <= rect.bottom + margin
+  );
+}
+
 interface FavoriteDragSession {
   id: string;
   fromIndex: number;
@@ -24,7 +46,9 @@ interface FavoriteDragSession {
  * Pointer-drag reorder for the favorites grid, modelled on the sidebar's
  * `useTabDrag`: a 5px threshold, document-level `pointermove`/`pointerup`
  * listeners attached on press and removed on release (and on unmount), and
- * click suppression after a real drag. The insertion slot is
+ * click suppression after a real drag. A pointer outside the grid (beyond
+ * `GRID_DROP_MARGIN`) has no slot: no drop bar, no reorder, click still
+ * suppressed. Inside, the insertion slot is
  * `favoriteInsertIndex` over the tiles' boxes in reading order; the drop calls
  * `favorites.reorder(id, toReorderIndex(fromIndex, slot))`, skipped when it
  * resolves to a no-op. Tiles and tab rows never drag into each other: each has
@@ -43,6 +67,11 @@ export function useFavoriteDrag(favorites: readonly Favorite[]) {
   const computeSlot = useCallback((x: number, y: number): number | null => {
     const grid = gridRef.current;
     if (grid === null) {
+      return null;
+    }
+    // Outside the grid there is no target: releasing over the tab list must
+    // not silently move the tile to the end.
+    if (!isWithinDropArea(grid.getBoundingClientRect(), x, y)) {
       return null;
     }
     const boxes: TileBox[] = Array.from(
