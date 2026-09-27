@@ -2480,7 +2480,8 @@ test.describe("zeo desktop app", () => {
     expect(setup.archivedContains).toBe(true);
     expect(setup.openContains).toBe(false);
 
-    // Settle the archived tab's load before opening the bar (see waitForViewsIdle).
+    // Archiving tore the archived tab's view down; settle the re-activated
+    // seeded view before opening the bar (see waitForViewsIdle).
     await waitForViewsIdle(app);
 
     await sidebar.evaluate(async () => {
