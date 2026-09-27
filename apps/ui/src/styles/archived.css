@@ -1,0 +1,117 @@
+/* Archived tabs ----------------------------------------------------------- */
+
+/* Pinned to the bottom of the flex-column sidebar. `margin-top: auto` pushes it
+   down whether or not a `flex: 1` sibling is present — when every tab is
+   archived (idle sweep), the empty-state `.sidebar__empty` replaces the
+   `flex: 1` `.sidebar__sections`, so the auto margin is what keeps the footer at
+   the bottom in that case. */
+.sidebar__footer {
+  flex: 0 0 auto;
+  margin-top: auto;
+  border-top: 1px solid var(--hairline);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.sidebar__footer-button {
+  appearance: none;
+  border: none;
+  background: none;
+  color: var(--ink-secondary);
+  text-align: left;
+  padding: 10px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.sidebar__footer-button:hover {
+  background: var(--surface-hover);
+  color: var(--ink-primary);
+}
+
+.sidebar__footer-button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+/*
+ * Downloads footer indicator. Reuses the footer-button base; the --active
+ * modifier (at least one progressing/paused download) brightens the label and
+ * tints it with the accent so live progress stands out from the idle count.
+ */
+.downloads-indicator {
+  color: var(--ink-secondary);
+}
+
+.downloads-indicator--active {
+  color: var(--ink-primary);
+}
+
+.downloads-indicator--active:hover {
+  color: var(--accent);
+}
+
+/* Its own scroll so a long archive never pushes the toggle off-screen. */
+.archived-view {
+  max-height: 40vh;
+  overflow-y: auto;
+  border-top: 1px solid var(--hairline);
+}
+
+.archived-empty {
+  margin: 0;
+  padding: 12px;
+  font-size: 12px;
+  color: var(--ink-secondary);
+}
+
+.archived-list {
+  list-style: none;
+  margin: 0;
+  padding: 4px;
+}
+
+.archived-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: 6px;
+}
+
+.archived-item:hover {
+  background: var(--surface-hover);
+}
+
+.archived-item__title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border: none;
+  background: none;
+  color: inherit;
+  font-size: 13px;
+  text-align: left;
+  padding: 0;
+  cursor: pointer;
+}
+
+.archived-item__time {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--ink-secondary);
+  white-space: nowrap;
+}
+
+/* Match the tab-row convention: reveal on hover / focus, keep keyboard-reachable.
+   The button's own :focus/:hover styling is shared via .icon-button above. */
+.archived-item:hover .archived-item__delete,
+.archived-item:focus-within .archived-item__delete {
+  opacity: 1;
+}

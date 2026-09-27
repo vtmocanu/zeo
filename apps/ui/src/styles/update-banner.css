@@ -1,0 +1,65 @@
+/* In-app update banner (PRD 9.6). Sits between the tab list and the footer;
+   present only while an update is available, so `margin-top: auto` on the
+   footer still keeps the footer pinned to the bottom either way. */
+.update-banner {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--hairline);
+  background: var(--surface-raised);
+  font-size: 12px;
+  color: var(--ink-primary);
+}
+
+.update-banner__text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.update-banner__action {
+  appearance: none;
+  border: none;
+  border-radius: 4px;
+  background: var(--accent);
+  color: var(--ink-on-accent);
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+
+.update-banner__action:hover {
+  background: color-mix(in srgb, var(--accent) 88%, var(--ink-primary));
+}
+
+.update-banner__action:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.update-banner__dismiss {
+  appearance: none;
+  border: none;
+  background: none;
+  color: var(--ink-secondary);
+  font-size: 14px;
+  line-height: 1;
+  padding: 2px 4px;
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+
+.update-banner__dismiss:hover {
+  color: var(--ink-primary);
+}
+
+.update-banner__dismiss:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}

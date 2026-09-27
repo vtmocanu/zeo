@@ -1,0 +1,116 @@
+/*
+ * Design tokens (PRD 10.1). The only stylesheet allowed to hold literal colors;
+ * every component file reads the semantic tokens below.
+ *
+ * Static tier: spacing, radius, type and motion. Semantic tier: the null-theme
+ * values of themeTokens(null, "light" | "dark") from @zeo/core, so the first
+ * paint is correct before any script runs. A unit test keeps them in sync.
+ */
+
+:root {
+  /* Spacing: 4px grid with half steps. */
+  --space-1: 2px;
+  --space-2: 4px;
+  --space-3: 6px;
+  --space-4: 8px;
+  --space-5: 12px;
+  --space-6: 16px;
+  --space-7: 20px;
+  --space-8: 24px;
+  --space-9: 32px;
+
+  /* Radius. */
+  --radius-control: 6px;
+  --radius-tab: 8px;
+  --radius-pill: 10px;
+  --radius-card: 10px;
+  --radius-tile: 12px;
+  --radius-palette: 14px;
+
+  /* Type. */
+  --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+  --text-xs: 11px;
+  --text-sm: 12px;
+  --text-base: 13px;
+  --text-md: 15px;
+  --text-lg: 17px;
+  --text-xl: 22px;
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --tracking-label: 0.06em;
+
+  /* Motion. */
+  --motion-fast: 120ms;
+  --motion-base: 200ms;
+  --motion-space: 320ms;
+  --ease-standard: cubic-bezier(.2, .8, .2, 1);
+}
+
+/* Semantic tokens, null theme, light appearance: themeTokens(null, "light"). */
+:root {
+  --surface-window: rgb(234 234 238 / 0.88);
+  --tint: transparent;
+  --tint-opacity: 0.000;
+  --surface-card: #ffffff;
+  --surface-raised: rgb(255 255 255 / 0.8);
+  --surface-hover: rgb(26 26 31 / 0.08);
+  --fill-subtle: rgb(26 26 31 / 0.06);
+  --hairline: rgb(26 26 31 / 0.12);
+  --ink-primary: #1a1a1f;
+  --ink-secondary: #5d5d61;
+  --accent: #585dd4;
+  --accent-soft: rgb(88 93 212 / 0.16);
+  --ink-on-accent: #ffffff;
+  --focus-ring: #585dd4;
+  --danger: #cc2827;
+  --ink-on-danger: #ffffff;
+  --surface-popover: rgb(250 250 252 / 0.94);
+  --ink-popover: #1a1a1f;
+  --ink-popover-secondary: #66666a;
+  --popover-hairline: rgb(26 26 31 / 0.1);
+  --popover-hairline-strong: rgb(26 26 31 / 0.28);
+  --popover-hover: rgb(26 26 31 / 0.07);
+  --popover-well: rgb(26 26 31 / 0.035);
+  --control-raised: #ffffff;
+  --scrim: rgb(24 24 32 / 0.14);
+  --shadow-raised: 0 1px 2px rgb(0 0 0 / .08), 0 0 0 .5px rgb(0 0 0 / .06);
+  --shadow-card: 0 0 0 1px rgb(0 0 0 / .07), 0 1px 2px rgb(0 0 0 / .06), 0 6px 18px rgb(0 0 0 / .06);
+  --shadow-popover: 0 0 0 1px rgb(0 0 0 / .06), 0 10px 30px rgb(0 0 0 / .14), 0 2px 6px rgb(0 0 0 / .06);
+  --shadow-palette: 0 0 0 1px rgb(0 0 0 / .06), 0 28px 70px rgb(0 0 0 / .22), 0 6px 18px rgb(0 0 0 / .08);
+}
+
+/* Semantic tokens, null theme, dark appearance: themeTokens(null, "dark"). */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --surface-window: rgb(32 32 36 / 0.88);
+    --tint: transparent;
+    --tint-opacity: 0.000;
+    --surface-card: #1b1b1f;
+    --surface-raised: rgb(255 255 255 / 0.15);
+    --surface-hover: rgb(245 245 247 / 0.1);
+    --fill-subtle: rgb(245 245 247 / 0.09);
+    --hairline: rgb(245 245 247 / 0.12);
+    --ink-primary: #f5f5f7;
+    --ink-secondary: #adadaf;
+    --accent: #96a2ff;
+    --accent-soft: rgb(150 162 255 / 0.3);
+    --ink-on-accent: #1a1a1f;
+    --focus-ring: #96a2ff;
+    --danger: #f66d67;
+    --ink-on-danger: #1a1a1f;
+    --surface-popover: rgb(44 44 49 / 0.94);
+    --ink-popover: #f5f5f7;
+    --ink-popover-secondary: #b9b9bc;
+    --popover-hairline: rgb(245 245 247 / 0.1);
+    --popover-hairline-strong: rgb(245 245 247 / 0.28);
+    --popover-hover: rgb(245 245 247 / 0.07);
+    --popover-well: rgb(245 245 247 / 0.035);
+    --control-raised: rgb(255 255 255 / 0.14);
+    --scrim: rgb(0 0 0 / 0.34);
+    --shadow-raised: 0 1px 2px rgb(0 0 0 / .3);
+    --shadow-card: 0 0 0 1px rgb(255 255 255 / .07), 0 1px 3px rgb(0 0 0 / .4), 0 8px 24px rgb(0 0 0 / .28);
+    --shadow-popover: 0 0 0 1px rgb(255 255 255 / .09), 0 10px 30px rgb(0 0 0 / .45);
+    --shadow-palette: 0 0 0 1px rgb(255 255 255 / .1), 0 28px 70px rgb(0 0 0 / .6);
+  }
+}

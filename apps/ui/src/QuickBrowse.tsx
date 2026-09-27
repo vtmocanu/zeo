@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import type { CSSProperties } from "react";
 import { QUICK_BROWSE_CHROME_HEIGHT } from "@zeo/core";
 import type { TabsState } from "@zeo/core";
-import "./App.css";
+import { useThemeTokens } from "./theme.js";
 
 /**
  * The quick-browse chrome bar, rendered in the quick-browse window's own
@@ -27,6 +27,7 @@ import "./App.css";
  * other URL-executing sink.
  */
 export function QuickBrowse() {
+  useThemeTokens(null);
   // The mirrored application state; null until the first snapshot/broadcast lands.
   const [state, setState] = useState<TabsState | null>(null);
 
@@ -80,8 +81,9 @@ export function QuickBrowse() {
       className="quick-browse"
       data-testid="quick-browse"
       // The bar's height comes from core's layout constant (the page view starts
-      // exactly there), exposed to App.css as a custom property. The cast is only
-      // because React's CSSProperties does not declare custom properties.
+      // exactly there), exposed to styles/quick-browse.css as a custom property.
+      // The cast is only because React's CSSProperties does not declare custom
+      // properties.
       style={{ "--quick-browse-chrome-height": `${QUICK_BROWSE_CHROME_HEIGHT}px` } as CSSProperties}
     >
       <div className="quick-browse__meta">

@@ -6,7 +6,6 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import type { FindState } from "@zeo/core";
-import "./App.css";
 
 /**
  * The find-in-page surface of the single overlay WebContentsView, mounted by

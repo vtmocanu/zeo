@@ -5,6 +5,7 @@ import { Overlay } from "./Overlay.js";
 import { QuickBrowse } from "./QuickBrowse.js";
 import { Settings } from "./Settings.js";
 import { Divider } from "./Divider.js";
+import "./styles/index.css";
 
 const container = document.getElementById("root");
 if (!container) {

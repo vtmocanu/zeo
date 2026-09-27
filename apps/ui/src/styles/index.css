@@ -1,0 +1,14 @@
+/* Stylesheet entry point: tokens and base first, then one file per component
+   in the order their rules appeared in the former single stylesheet. */
+@import "./tokens.css";
+@import "./base.css";
+@import "./sidebar.css";
+@import "./space-switcher.css";
+@import "./tab-item.css";
+@import "./update-banner.css";
+@import "./archived.css";
+@import "./command-bar.css";
+@import "./settings.css";
+@import "./find-bar.css";
+@import "./quick-browse.css";
+@import "./divider.css";
