@@ -7,8 +7,9 @@ import { join } from "node:path";
 import { createServer } from "node:http";
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
-// PRD 9.1 — shared view-URL poll helper (VIEW_POLL_TIMEOUT_MS-bounded).
-import { waitForViewUrl } from "./helpers/view";
+// PRD 9.1 — shared view-URL poll helper (VIEW_POLL_TIMEOUT_MS-bounded). PRD
+// 10.5 — plus the shared command-bar overlay window lookup.
+import { commandBarWindow, waitForViewsIdle, waitForViewUrl } from "./helpers/view";
 
 // Absolute path to the built Electron main entry, resolved from this test file
 // (e2e is ESM, so no __dirname). Layout mirrors persistence.spec.ts / app.spec.ts:
@@ -173,33 +174,6 @@ async function sidebarWindow(app: ElectronApplication): Promise<Page> {
   }
 
   throw new Error('No renderer window exposing data-testid="sidebar" was found within 15s');
-}
-
-/**
- * The renderer window that hosts the command-bar overlay. Mirrors app.spec.ts:
- * poll every open window for the one exposing data-testid="command-bar". The
- * overlay page always renders (main drives visibility by showing/hiding its
- * hosting view), so its DOM is queryable whether or not the bar is open — which is
- * what lets us drive `Cmd+Backspace` as a real DOM key event into its input.
- */
-async function commandBarWindow(app: ElectronApplication): Promise<Page> {
-  await app.firstWindow();
-
-  const deadline = Date.now() + 15_000;
-  while (Date.now() < deadline) {
-    for (const w of app.windows()) {
-      try {
-        if ((await w.getByTestId("command-bar").count()) > 0) {
-          return w;
-        }
-      } catch {
-        // A navigating WebContentsView can momentarily lose its execution context.
-      }
-    }
-    await new Promise((resolve) => setTimeout(resolve, 200));
-  }
-
-  throw new Error('No renderer window exposing data-testid="command-bar" was found within 15s');
 }
 
 /**
@@ -493,6 +467,9 @@ test.describe("PRD 6.1 history", () => {
       const tabId = await freshHistory(app, sidebar);
       await navigateAndRecord(sidebar, tabId, `${server.base}/a.html`, 1);
       await navigateAndRecord(sidebar, tabId, `${server.base}/b.html`, 2);
+      // Settle the tab's load before driving the bar (#175): a late
+      // did-finish-load re-ranks or blur-closes an open bar.
+      await waitForViewsIdle(app);
 
       // Open history mode by RUNNING the command (Cmd+Y is a native accelerator
       // Playwright cannot fire); read back the pushed state.
@@ -525,6 +502,16 @@ test.describe("PRD 6.1 history", () => {
       // selected by default (main set selectedIndex to 0).
       const cmd = await commandBarWindow(app);
       await expect(cmd.locator('[data-kind="history"]')).toHaveCount(2);
+      // PRD 10.5 — history mode renders as ONE group headed "History", and the
+      // selected row carries the mode's action hint.
+      const groups = cmd.getByTestId("command-bar-group");
+      await expect(groups).toHaveCount(1);
+      await expect(groups).toHaveText("History");
+      await expect(
+        cmd.locator(
+          '[data-testid="command-bar-suggestion"][aria-selected="true"] .command-bar__row-accel',
+        ),
+      ).toHaveText("⌘⌫ Delete");
       await cmd.getByTestId("command-bar-input").focus();
       await cmd.keyboard.press("Meta+Backspace");
 

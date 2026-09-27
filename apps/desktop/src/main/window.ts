@@ -163,6 +163,8 @@ export function createWindow(seed: boolean): void {
       nodeIntegration: false,
     },
   });
+  // Transparent so the renderer's scrim dims the window and the find bar floats.
+  runtime.overlay.setBackgroundColor("#00000000");
   runtime.win!.contentView.addChildView(runtime.overlay);
   runtime.overlay!.setVisible(false);
   if (rendererUrl !== undefined && rendererUrl !== "") {

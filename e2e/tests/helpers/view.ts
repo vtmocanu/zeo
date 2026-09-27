@@ -1,5 +1,5 @@
 import { expect } from "@playwright/test";
-import type { ElectronApplication } from "@playwright/test";
+import type { ElectronApplication, Page } from "@playwright/test";
 
 // PRD 9.1 — shared helpers that poll the LIVE view URL in the main process
 // before a spec snapshots or asserts on it. Every helper takes the
@@ -157,4 +157,36 @@ export async function loadViewUrl(
     { sub: currentUrlSubstring, url },
   );
   await waitForViewUrl(app, url);
+}
+
+/**
+ * The renderer window that hosts the command-bar overlay (the WebContentsView
+ * loading `?view=command-bar`). Polls every open window for the one exposing
+ * data-testid="command-bar", up to 15 s: `firstWindow()` cannot be trusted
+ * because each tab view also surfaces as a window, and a navigating view can
+ * momentarily lose its execution context. The overlay page always renders the
+ * bar surface (main drives visibility by showing/hiding the hosting view), so
+ * its DOM is queryable whether or not the bar is open. While the find surface is
+ * active the overlay carries no `command-bar` element, so resolve it before
+ * opening find.
+ */
+export async function commandBarWindow(app: ElectronApplication): Promise<Page> {
+  await app.firstWindow();
+
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
+    for (const w of app.windows()) {
+      try {
+        if ((await w.getByTestId("command-bar").count()) > 0) {
+          return w;
+        }
+      } catch {
+        // A navigating WebContentsView can momentarily lose its execution
+        // context; skip any window we can't query this pass.
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+
+  throw new Error('No renderer window exposing data-testid="command-bar" was found within 15s');
 }

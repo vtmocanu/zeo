@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useState } from "react";
 import type { CommandBarState } from "@zeo/core";
 import { CommandBar } from "./CommandBar.js";
 import { FindBar } from "./FindBar.js";
@@ -18,6 +18,14 @@ import { useActiveSpaceTheme, useThemeTokens } from "./theme.js";
 export function Overlay() {
   useThemeTokens(useActiveSpaceTheme());
   const [surface, setSurface] = useState<CommandBarState["surface"]>("bar");
+
+  // Mark the document with the active surface before paint so the overlay's
+  // root and body go transparent (`:root[data-surface]` in command-bar.css):
+  // the view covers the whole window and only the scrim and panel may paint.
+  // The initial "bar" also covers the no-bridge dev-open fallback.
+  useLayoutEffect(() => {
+    document.documentElement.dataset.surface = surface;
+  }, [surface]);
 
   useEffect(() => {
     // Guard so a bare browser dev-open (no bridge) doesn't throw. In Electron

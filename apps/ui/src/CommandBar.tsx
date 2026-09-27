@@ -2,91 +2,73 @@ import {
   useEffect,
   useRef,
   useState,
+  type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
 } from "react";
-import { formatAccelerator } from "@zeo/core";
+import {
+  COMMAND_BAR_GROUP_HEIGHT,
+  COMMAND_BAR_INPUT_HEIGHT,
+  COMMAND_BAR_LIST_PADDING_BOTTOM,
+  COMMAND_BAR_LIST_PADDING_TOP,
+  COMMAND_BAR_ROW_HEIGHT,
+  commandBarPanelRect,
+  suggestionGroups,
+  suggestionRowView,
+} from "@zeo/core";
 import type { CommandBarMode, CommandBarState, Suggestion } from "@zeo/core";
+import { Icon } from "./icons.js";
+
+/** The slice of `window` that {@link subscribeViewportSize} reads. */
+export interface ViewportTarget {
+  readonly innerWidth: number;
+  readonly innerHeight: number;
+  addEventListener(type: "resize", listener: () => void): void;
+  removeEventListener(type: "resize", listener: () => void): void;
+}
 
 /**
- * A per-kind glyph placeholder for a suggestion row. The {@link Suggestion} type
- * carries no favicon url, so every kind (tabs included) uses a text/emoji glyph
- * rather than a fetched favicon.
+ * Reports `target`'s current size, then every size after a `resize`. Reading
+ * the size at subscribe time catches a resize that fired between the first
+ * render and the effect that subscribes (the overlay grows from the find
+ * region to the full window as the bar opens). Returns the unsubscribe.
  */
-function iconFor(suggestion: Suggestion): string {
-  switch (suggestion.kind) {
-    case "tab":
-      return "🌐";
-    case "archived-tab":
-      return "🗄";
-    case "space":
-      return "▦";
-    case "navigate":
-      return "→";
-    case "search":
-      return "🔍";
-    case "command":
-      return "⚡";
-    case "history":
-      return "🕘";
-    case "download":
-      return "⬇";
-  }
+export function subscribeViewportSize(
+  target: ViewportTarget,
+  onSize: (size: { width: number; height: number }) => void,
+): () => void {
+  const report = (): void => {
+    onSize({ width: target.innerWidth, height: target.innerHeight });
+  };
+  report();
+  target.addEventListener("resize", report);
+  return () => target.removeEventListener("resize", report);
 }
 
-/** The primary (main) text for a suggestion row, by kind. */
-function primaryText(suggestion: Suggestion): string {
-  switch (suggestion.kind) {
-    case "tab":
-    case "archived-tab":
-      return suggestion.title;
-    case "space":
-      return suggestion.name;
-    case "navigate":
-    case "search":
-      return suggestion.label;
-    case "command":
-      return suggestion.title;
-    case "history":
-      return suggestion.title;
-    case "download":
-      return suggestion.filename;
-  }
+/** Tracks `window.innerWidth` and `innerHeight`, updating on `resize`. */
+function useViewportSize(): { width: number; height: number } {
+  const [size, setSize] = useState(() => ({
+    width: window.innerWidth,
+    height: window.innerHeight,
+  }));
+  useEffect(
+    () =>
+      subscribeViewportSize(window, (next) => {
+        setSize((prev) =>
+          prev.width === next.width && prev.height === next.height ? prev : next,
+        );
+      }),
+    [],
+  );
+  return size;
 }
 
 /**
- * The muted secondary text for a suggestion row, or `""` when the kind has none.
- * For `tab` and `history` this is the host of its url (raw url when it does not
- * parse).
- */
-function secondaryText(suggestion: Suggestion): string {
-  switch (suggestion.kind) {
-    case "tab":
-    case "history":
-      try {
-        return new URL(suggestion.url).host;
-      } catch {
-        return suggestion.url;
-      }
-    case "archived-tab":
-      return `Archived · ${suggestion.spaceName}`;
-    case "space":
-      return "Space";
-    case "navigate":
-    case "search":
-      return "";
-    case "command":
-      return "Command";
-    case "download":
-      // The core already formats a human-readable `detail` (sizes, percentage,
-      // or terminal-state label); surface it verbatim — do NOT reparse as a url.
-      return suggestion.detail;
-  }
-}
-
-/**
- * The command-bar overlay: a single-input panel mounted in its own
- * WebContentsView (selected by `?view=command-bar` in {@link "./main.js"}).
+ * The command-bar overlay: a floating panel over a window-sized scrim, mounted
+ * in its own WebContentsView (selected by `?view=command-bar` in
+ * {@link "./main.js"}). The view covers the window; the panel's rect comes
+ * from `commandBarPanelRect`, so it matches the core formula exactly, and a
+ * mousedown on the scrim closes the bar.
  *
  * This is a thin renderer with no business logic — it holds only the input's
  * text plus the pushed suggestion list/selection, and reaches main exclusively
@@ -117,6 +99,8 @@ export function CommandBar() {
   // input placeholder re-renders when an already-open bar switches modes.
   const [mode, setMode] = useState<CommandBarMode>("navigate");
   const inputRef = useRef<HTMLInputElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  const viewport = useViewportSize();
   // Tracks the previous `open` so we re-seed on each closed→open transition
   // rather than on every broadcast.
   const prevOpenRef = useRef(false);
@@ -179,6 +163,36 @@ export function CommandBar() {
       input.select();
     }
   }, [openSeed]);
+
+  // Esc closes even when focus has left the input (the input's own onKeyDown
+  // handles it while focused, so skip that case to avoid a double close).
+  useEffect(() => {
+    const onDocumentKeyDown = (event: KeyboardEvent): void => {
+      if (event.key !== "Escape" || document.activeElement === inputRef.current) {
+        return;
+      }
+      event.preventDefault();
+      void window.zeo?.commandBar.close().catch(() => {});
+    };
+    document.addEventListener("keydown", onDocumentKeyDown);
+    return () => document.removeEventListener("keydown", onDocumentKeyDown);
+  }, []);
+
+  // Keep the selected row visible in a clamped, scrolling list. At index 0 the
+  // list returns to the top so the first group's heading shows too.
+  useEffect(() => {
+    const list = listRef.current;
+    if (!list) {
+      return;
+    }
+    if (selectedIndex <= 0) {
+      list.scrollTop = 0;
+      return;
+    }
+    list
+      .querySelector<HTMLElement>(".command-bar__row--selected")
+      ?.scrollIntoView({ block: "nearest" });
+  }, [selectedIndex, revision]);
 
   /**
    * Routes the input's keys to main and guards each call so a missing bridge or
@@ -261,75 +275,155 @@ export function CommandBar() {
     void window.zeo?.commandBar.accept(index, revision).catch(() => {});
   };
 
+  /**
+   * A mousedown on the scrim closes the bar. `preventDefault` keeps focus on
+   * the input so the blur-close in main does not race this explicit close.
+   */
+  const onScrimMouseDown = (event: ReactMouseEvent<HTMLDivElement>): void => {
+    event.preventDefault();
+    void window.zeo?.commandBar.close().catch(() => {});
+  };
+
+  /**
+   * Clicks on the panel's padding, group headings or the field icon never take
+   * focus from the input; the input itself keeps normal caret/selection clicks.
+   */
+  const keepInputFocus = (event: ReactMouseEvent<HTMLDivElement>): void => {
+    if (event.target !== inputRef.current) {
+      event.preventDefault();
+    }
+  };
+
+  const groups = suggestionGroups(suggestions);
+  const rect = commandBarPanelRect(
+    viewport.width,
+    viewport.height,
+    suggestions.length,
+    groups.length,
+  );
+  // The panel's box plus the row metrics the CSS reads, all from core, so the
+  // rendered layout and `commandBarPanelRect` cannot drift.
+  const panelStyle = {
+    left: `${rect.x}px`,
+    top: `${rect.y}px`,
+    width: `${rect.width}px`,
+    height: `${rect.height}px`,
+    "--command-bar-input-height": `${COMMAND_BAR_INPUT_HEIGHT}px`,
+    "--command-bar-row-height": `${COMMAND_BAR_ROW_HEIGHT}px`,
+    "--command-bar-group-height": `${COMMAND_BAR_GROUP_HEIGHT}px`,
+    "--command-bar-list-padding-top": `${COMMAND_BAR_LIST_PADDING_TOP}px`,
+    "--command-bar-list-padding-bottom": `${COMMAND_BAR_LIST_PADDING_BOTTOM}px`,
+  } as CSSProperties;
+  const hasList = suggestions.length > 0;
+
   return (
-    <div className="command-bar" data-testid="command-bar">
-      <input
-        ref={inputRef}
-        className="command-bar__input"
-        data-testid="command-bar-input"
-        type="text"
-        value={value}
-        placeholder={
-          mode === "commands"
-            ? "Run a command"
-            : mode === "history"
-              ? "Search history"
-              : mode === "split"
-                ? "Split with tab…"
-                : mode === "downloads"
-                  ? "Filter downloads"
-                  : "Search or enter address"
-        }
-        spellCheck={false}
-        autoComplete="off"
-        onChange={(event) => {
-          setValue(event.target.value);
-          // Ask main to recompute suggestions on every change.
-          void window.zeo?.commandBar.setQuery(event.target.value).catch(() => {});
-        }}
-        onKeyDown={onKeyDown}
+    <div className="command-bar-overlay">
+      <div
+        className="command-bar-scrim"
+        data-testid="command-bar-scrim"
+        aria-hidden="true"
+        onMouseDown={onScrimMouseDown}
       />
-      {suggestions.length > 0 && (
-        <div className="command-bar__list" role="listbox">
-          {suggestions.map((suggestion, index) => {
-            const selected = index === selectedIndex;
-            const secondary = secondaryText(suggestion);
-            return (
-              <div
-                key={index}
-                className={
-                  selected
-                    ? "command-bar__row command-bar__row--selected"
-                    : "command-bar__row"
-                }
-                data-testid="command-bar-suggestion"
-                data-kind={suggestion.kind}
-                role="option"
-                aria-selected={selected}
-                onMouseDown={(event) => onRowMouseDown(event, index)}
-              >
-                <span className="command-bar__row-icon" aria-hidden="true">
-                  {iconFor(suggestion)}
-                </span>
-                <span className="command-bar__row-text">
-                  <span className="command-bar__row-primary">
-                    {primaryText(suggestion)}
-                  </span>
-                  {secondary !== "" && (
-                    <span className="command-bar__row-secondary">{secondary}</span>
-                  )}
-                </span>
-                {suggestion.kind === "command" &&
-                  suggestion.accelerator !== null && (
-                    <span className="command-bar__row-accel">
-                      {formatAccelerator(suggestion.accelerator)}
-                    </span>
-                  )}
-              </div>
-            );
-          })}
+      <div
+        className={hasList ? "command-bar command-bar--has-list" : "command-bar"}
+        data-testid="command-bar"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Command bar"
+        style={panelStyle}
+        onMouseDown={keepInputFocus}
+      >
+        <div className="command-bar__field">
+          <Icon name="search" size={20} />
+          <input
+            ref={inputRef}
+            className="command-bar__input"
+            data-testid="command-bar-input"
+            type="text"
+            value={value}
+            placeholder={
+              mode === "commands"
+                ? "Run a command"
+                : mode === "history"
+                  ? "Search history"
+                  : mode === "split"
+                    ? "Split with tab…"
+                    : mode === "downloads"
+                      ? "Filter downloads"
+                      : "Search or enter address"
+            }
+            spellCheck={false}
+            autoComplete="off"
+            onChange={(event) => {
+              setValue(event.target.value);
+              // Ask main to recompute suggestions on every change.
+              void window.zeo?.commandBar.setQuery(event.target.value).catch(() => {});
+            }}
+            onKeyDown={onKeyDown}
+          />
         </div>
-      )}
+        {hasList && (
+          <div className="command-bar__list" role="listbox" ref={listRef}>
+            {groups.map((group) => {
+              const labelId = `command-bar-group-${group.id}`;
+              return (
+                <div
+                  key={group.id}
+                  className="command-bar__group"
+                  role="group"
+                  aria-labelledby={labelId}
+                >
+                  <div
+                    className="command-bar__group-label"
+                    id={labelId}
+                    data-testid="command-bar-group"
+                    data-group={group.id}
+                  >
+                    {group.label}
+                  </div>
+                  {group.suggestions.map((suggestion, offset) => {
+                    const index = group.start + offset;
+                    const selected = index === selectedIndex;
+                    const view = suggestionRowView(suggestion, mode, selected);
+                    let className = "command-bar__row";
+                    if (selected) {
+                      className += " command-bar__row--selected";
+                    }
+                    if (view.tone === "danger") {
+                      className += " command-bar__row--danger";
+                    }
+                    return (
+                      <div
+                        key={index}
+                        className={className}
+                        data-testid="command-bar-suggestion"
+                        data-kind={suggestion.kind}
+                        data-state={
+                          suggestion.kind === "download" ? suggestion.state : undefined
+                        }
+                        role="option"
+                        aria-selected={selected}
+                        onMouseDown={(event) => onRowMouseDown(event, index)}
+                      >
+                        <Icon name={view.icon} />
+                        <span className="command-bar__row-primary">{view.primary}</span>
+                        {view.secondary !== "" && (
+                          <span className="command-bar__row-secondary">
+                            {view.secondary}
+                          </span>
+                        )}
+                        {view.hint !== "" && (
+                          <span className="command-bar__row-accel">{view.hint}</span>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

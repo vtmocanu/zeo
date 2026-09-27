@@ -8,21 +8,21 @@ import { createServer } from "node:http";
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 // PRD 4.2 / CodeRabbit 2c — the @zeo/core value imports in this otherwise
-// import-free spec. `commandBarBounds` is the exact bounds math main applies to
-// the overlay, so the native-bounds assertion checks against the real formula
-// (not a magic number) and can never drift from the source of truth. PRD 4.3 §5
+// import-free spec. PRD 10.5: `commandBarPanelRect` is the exact panel math the
+// overlay renderer applies, so the panel-rect assertion checks against the real
+// formula (not a magic number) and can never drift from the source of truth, and
+// `formatAccelerator` is the glyph formatter the shortcut hints render. PRD 4.3 §5
 // adds `COMMANDS`: the accelerator/menu assertions derive their expectations from
 // the registry itself rather than hard-coded literals, so a registry edit that
 // changes a shortcut or a command's menu is caught here without touching the test.
 // #171 adds `VIEW_UNLOAD_AFTER_MS`: the idle-unload test injects a clock just past
 // the real threshold instead of shortening it.
-import { commandBarBounds, COMMANDS, VIEW_UNLOAD_AFTER_MS } from "@zeo/core";
-// PRD 10.2 — the chrome shape commandBarBounds takes; a type-only import.
-import type { ChromeState } from "@zeo/core";
+import { commandBarPanelRect, COMMANDS, formatAccelerator, VIEW_UNLOAD_AFTER_MS } from "@zeo/core";
 // PRD 9.1 — shared view-URL poll helpers (VIEW_POLL_TIMEOUT_MS-bounded), so
 // every WebContentsView URL/partition/existence/absence wait in this spec goes
 // through one module rather than an inline `getAllWebContents()` poll.
 import {
+  commandBarWindow,
   loadViewUrl,
   waitForViewGone,
   waitForViewOnPartition,
@@ -138,8 +138,8 @@ interface ZeoBridge {
   // `setQuery` re-ranks `suggestions` from a fresh catalog, `moveSelection` wraps
   // the highlight, and `accept` performs the selected (or indexed) row's action
   // and closes the bar. Redeclared structurally (like the rest of this bridge) so
-  // the bridge types stay decoupled from @zeo/core (the file imports only the
-  // pure `commandBarBounds` helper, nothing type-bearing across the IPC seam);
+  // the bridge types stay decoupled from @zeo/core (the file imports only pure
+  // helpers and the registry, nothing type-bearing across the IPC seam);
   // `CommandBarStateShape`/`BridgeSuggestion` mirror @zeo/core's widened
   // `CommandBarState` and `Suggestion` union.
   commandBar: {
@@ -162,17 +162,18 @@ interface ZeoBridge {
     >;
     run(id: string): Promise<void>;
   };
+  // PRD 6.3 — the in-page find bridge, redeclared structurally like the rest
+  // of this file (mirrors @zeo/core's FindState). Only the slice this spec
+  // touches — closing an open find session and reading back `open` — is typed.
+  find: {
+    close(): Promise<void>;
+    state(): Promise<{ open: boolean }>;
+  };
   // PRD 9.3 — the main-pushed state broadcast subscription. Registers `listener`
   // for every stateChange main sends and returns an unsubscribe function.
   // Mirrors @zeo/core's ZeoApi.onStateChange; the view-lifecycle re-sync test
   // counts invocations to prove a REJECTED command still re-syncs the renderer.
   onStateChange(listener: (state: BridgeState) => void): () => void;
-  // PRD 10.2 — the frameless-chrome bridge. Only `state()` is read here: the
-  // overlay-bounds assertions pass it to commandBarBounds as its third argument
-  // (the sidebar width and collapsed state move the card the bar centres in).
-  chrome: {
-    state(): Promise<ChromeState>;
-  };
 }
 // PRD 4.2 — one command-bar suggestion row, structurally the @zeo/core
 // `Suggestion` union (redeclared import-free like the rest of this file). Row 0
@@ -277,36 +278,6 @@ async function tabViewWindow(app: ElectronApplication, sidebar: Page): Promise<P
 }
 
 /**
- * Return the renderer window that hosts the command-bar overlay (PRD 4.1).
- *
- * Like {@link sidebarWindow}, `firstWindow()` cannot be trusted: the overlay is
- * one of several WebContentsViews that surface as windows. Poll every open
- * window for the one exposing data-testid="command-bar", up to a deadline. The
- * overlay page always renders (main drives visibility by showing/hiding the
- * hosting view), so its DOM is queryable whether or not the bar is open.
- */
-async function commandBarWindow(app: ElectronApplication): Promise<Page> {
-  await app.firstWindow();
-
-  const deadline = Date.now() + 15_000;
-  while (Date.now() < deadline) {
-    for (const w of app.windows()) {
-      try {
-        if ((await w.getByTestId("command-bar").count()) > 0) {
-          return w;
-        }
-      } catch {
-        // A navigating WebContentsView can momentarily lose its execution
-        // context; skip any window we can't query this pass.
-      }
-    }
-    await new Promise((resolve) => setTimeout(resolve, 200));
-  }
-
-  throw new Error('No renderer window exposing data-testid="command-bar" was found within 15s');
-}
-
-/**
  * Canonicalize a stored tab url for equality comparison so a pre-normalization
  * snapshot (e.g. "https://example.com", captured before the view's did-navigate
  * mirrors the live "https://example.com/" into the store) compares equal to the
@@ -318,32 +289,84 @@ async function commandBarWindow(app: ElectronApplication): Promise<Page> {
 const canonicalTabUrl = (u: string | null): string | null =>
   u === null ? null : new URL(u).href;
 
+/** A native or DOM rectangle, in the shape `commandBarPanelRect` returns. */
+interface PlainRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
 /**
  * Read the NATIVE geometry the main process gave the command-bar overlay: the
- * window's content size plus the overlay `WebContentsView`'s own bounds height.
- * Runs in the MAIN process via `app.evaluate` (the renderer cannot read its own
- * hosting view's bounds), locating the overlay among the window's child views by
- * its `?view=command-bar` url. Returns `null` if the window or overlay is not
- * found. Callers compare `overlayHeight` against `commandBarBounds(width, height,
- * chrome, rowCount).height` from @zeo/core — the exact math main applies.
+ * window's content size, the overlay `WebContentsView`'s own bounds, and whether
+ * it is `topmost` (the LAST of `win.contentView.children`, so it paints over and
+ * hit-tests above every tab, divider and settings view). Runs in the MAIN process
+ * via `app.evaluate` (the renderer cannot read its own hosting view's bounds),
+ * locating the overlay among the window's child views by its `?view=command-bar`
+ * url. Returns `null` if the window or overlay is not found. PRD 10.5: with the
+ * bar surface the overlay covers the whole content area; the find surface keeps
+ * a region-sized rect.
  */
 async function overlayNativeBounds(
   app: ElectronApplication,
-): Promise<{ width: number; height: number; overlayHeight: number } | null> {
+): Promise<{ width: number; height: number; overlay: PlainRect; topmost: boolean } | null> {
   return app.evaluate(({ BrowserWindow }) => {
     const win = BrowserWindow.getAllWindows()[0];
     if (win == null) {
       return null;
     }
     const [width, height] = win.getContentSize();
-    for (const child of win.contentView.children) {
+    const children = win.contentView.children;
+    for (let i = 0; i < children.length; i++) {
+      const child = children[i];
       const wc = (child as { webContents?: { getURL(): string } }).webContents;
       if (wc != null && wc.getURL().includes("view=command-bar")) {
-        return { width, height, overlayHeight: child.getBounds().height };
+        const b = child.getBounds();
+        return {
+          width,
+          height,
+          overlay: { x: b.x, y: b.y, width: b.width, height: b.height },
+          topmost: i === children.length - 1,
+        };
       }
     }
     return null;
   });
+}
+
+/**
+ * Compare the RENDERED command-bar panel (`getBoundingClientRect()` of
+ * `[data-testid=command-bar]` in the overlay renderer) against
+ * `commandBarPanelRect(innerWidth, innerHeight, rows, groups)` from @zeo/core —
+ * the exact math the renderer applies. Returns `"match"` when they are equal and
+ * the expected rect is non-empty, otherwise a description of both rects, so a
+ * polled `.toBe("match")` failure shows what was rendered.
+ */
+async function panelVersusFormula(overlay: Page, rows: number, groups: number): Promise<string> {
+  const r = await overlay.evaluate(() => {
+    const rect = document.querySelector('[data-testid="command-bar"]')?.getBoundingClientRect();
+    return {
+      innerWidth: window.innerWidth,
+      innerHeight: window.innerHeight,
+      panel:
+        rect === undefined
+          ? null
+          : { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+    };
+  });
+  const e = commandBarPanelRect(r.innerWidth, r.innerHeight, rows, groups);
+  const expected: PlainRect = { x: e.x, y: e.y, width: e.width, height: e.height };
+  const same =
+    r.panel !== null &&
+    expected.height > 0 &&
+    r.panel.x === expected.x &&
+    r.panel.y === expected.y &&
+    r.panel.width === expected.width &&
+    r.panel.height === expected.height;
+  return same
+    ? "match"
+    : `panel ${JSON.stringify(r.panel)} != commandBarPanelRect(${r.innerWidth}, ${r.innerHeight}, ${rows}, ${groups}) ${JSON.stringify(expected)}`;
 }
 
 // --- SEAM: invoking the New Tab / Close Tab commands. ---------------------------
@@ -2783,12 +2806,13 @@ test.describe("zeo desktop app", () => {
     expect(list.tabIds).toEqual([setup.bravoId, setup.alphaId, setup.seededId]);
   });
 
-  // §5 bullet 7 — the overlay panel grows with the list and shrinks back when the
-  // query stops matching. We assert BOTH the rendered DOM row count (one row per
-  // suggestion, row 0 included) AND the NATIVE overlay WebContentsView bounds
-  // height read from the main process, checked against commandBarBounds() from
-  // @zeo/core so the panel geometry — not just the DOM — actually tracks the list.
-  test("overlay row count and native bounds grow when the query matches and shrink back to row 0 when it does not", async () => {
+  // PRD 10.5 §6 — the overlay view covers the whole window content area (and is
+  // the topmost child) while the bar is open, and the RENDERED panel inside it
+  // tracks the grouped rows: its rect equals commandBarPanelRect(innerWidth,
+  // innerHeight, rows, groups) from @zeo/core as the query matches and stops
+  // matching. The DOM row count is asserted too, so the panel geometry and the
+  // list both follow the query.
+  test("the overlay covers the window and the panel tracks the grouped rows", async () => {
     await sidebar.evaluate(async () => {
       const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
       await zeo.tabs.create("orchid.example");
@@ -2809,58 +2833,366 @@ test.describe("zeo desktop app", () => {
     const overlay = await commandBarWindow(app);
     const rows = overlay.getByTestId("command-bar-suggestion");
 
-    // A query that matches the orchid tab: row 0 (search) + the tab row = 2 rows.
+    // A query that matches the orchid tab: row 0 (search, "Go to") + the tab row
+    // ("Tabs") = 2 rows in 2 groups.
     await sidebar.evaluate(async () => {
       const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
       await zeo.commandBar.setQuery("orchid");
     });
     await expect(rows).toHaveCount(2);
-    // Native overlay height matches the 2-row geometry main computes. Polled
-    // because the DOM row count and the native setBounds settle independently.
+    await expect(overlay.getByTestId("command-bar-group")).toHaveCount(2);
+
+    // The native overlay covers the full content area and is the topmost child.
+    // Polled: the native setBounds settles independently of the DOM.
     await expect
       .poll(async () => {
         const b = await overlayNativeBounds(app);
-        return b === null ? null : b.overlayHeight;
+        return b === null
+          ? null
+          : {
+              covers:
+                b.overlay.x === 0 &&
+                b.overlay.y === 0 &&
+                b.overlay.width === b.width &&
+                b.overlay.height === b.height,
+              topmost: b.topmost,
+            };
       })
-      .toBe(
-        await Promise.all([
-          overlayNativeBounds(app),
-          sidebar.evaluate(() =>
-            (globalThis as unknown as { zeo: ZeoBridge }).zeo.chrome.state(),
-          ),
-        ]).then(([b, chrome]) =>
-          b === null ? null : commandBarBounds(b.width, b.height, chrome, 2).height,
-        ),
-      );
+      .toEqual({ covers: true, topmost: true });
 
-    // A resolvable-but-unmatched query: only row 0 (the text action) remains.
+    // The rendered panel equals the 2-row / 2-group geometry. Polled because the
+    // viewport size and the pushed rows settle independently.
+    await expect.poll(() => panelVersusFormula(overlay, 2, 2)).toBe("match");
+
+    // A resolvable-but-unmatched query: only row 0 (the text action) remains,
+    // under one group.
     await sidebar.evaluate(async () => {
       const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
       await zeo.commandBar.setQuery("qzxvwmklunlikely");
     });
     await expect(rows).toHaveCount(1);
-    // Native overlay height shrinks back to the single-row (row 0 only) geometry.
-    await expect
-      .poll(async () => {
-        const b = await overlayNativeBounds(app);
-        return b === null ? null : b.overlayHeight;
-      })
-      .toBe(
-        await Promise.all([
-          overlayNativeBounds(app),
-          sidebar.evaluate(() =>
-            (globalThis as unknown as { zeo: ZeoBridge }).zeo.chrome.state(),
-          ),
-        ]).then(([b, chrome]) =>
-          b === null ? null : commandBarBounds(b.width, b.height, chrome, 1).height,
-        ),
-      );
+    await expect(overlay.getByTestId("command-bar-group")).toHaveCount(1);
+    // The panel shrinks back to the single-row, single-group geometry.
+    await expect.poll(() => panelVersusFormula(overlay, 1, 1)).toBe("match");
+    // Row count never moves the native bounds: still the full content area.
+    const after = await overlayNativeBounds(app);
+    expect(after?.overlay).toEqual({ x: 0, y: 0, width: after?.width, height: after?.height });
 
     // Hygiene: close the bar like the neighbouring tests do.
     await sidebar.evaluate(async () => {
       const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
       await zeo.commandBar.close();
     });
+  });
+
+  // PRD 10.5 §6 — mixed results render under their headings in the canonical
+  // group order (Go to, Tabs, Spaces, History, Commands, Downloads; empty groups
+  // hidden), the broadcast `suggestions` follow the DOM order, and ArrowDown
+  // walks rows in that display order.
+  test("grouped results in canonical order", async () => {
+    await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      // A space whose name matches the query (spaces.create does not activate).
+      await zeo.spaces.create("Settings Lab");
+      await zeo.tabs.create("settings.example");
+      // A second matching tab whose host does NOT start with the term, so it
+      // ranks BELOW the space in suggest()'s score order: ungrouped, the rows
+      // would read Tabs, Spaces, Tabs and the heading list below would repeat
+      // Tabs. Only the stable grouping keeps both tabs under one heading.
+      await zeo.tabs.create("my.settings.example");
+      // A non-matching tab created last so neither matching tab is ACTIVE.
+      await zeo.tabs.create("other.example");
+    });
+    await waitForViewsIdle(app);
+
+    await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.commandBar.open("new-tab");
+      await zeo.commandBar.setQuery("settings");
+    });
+
+    const overlay = await commandBarWindow(app);
+    const groups = overlay.getByTestId("command-bar-group");
+    // textContent (not innerText): the heading is uppercased by CSS only.
+    await expect(groups).toHaveText(["Go to", "Tabs", "Spaces", "Commands"]);
+
+    const state = await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      const st = await zeo.commandBar.state();
+      return { kinds: st.suggestions.map((s) => s.kind), selectedIndex: st.selectedIndex };
+    });
+    const rows = overlay.getByTestId("command-bar-suggestion");
+    await expect(rows).toHaveCount(state.kinds.length);
+    const domKinds = await rows.evaluateAll((els) => els.map((el) => el.getAttribute("data-kind")));
+    expect(domKinds).toEqual(state.kinds);
+    expect(state.selectedIndex).toBe(0);
+    expect(state.kinds[0]).toBe("search");
+    await expect(rows.nth(0)).toHaveAttribute("aria-selected", "true");
+    expect(state.kinds[1]).toBe("tab");
+    // Both matching tabs sit together under Tabs, ahead of the space.
+    expect(state.kinds.slice(0, 4)).toEqual(["search", "tab", "tab", "space"]);
+
+    // ArrowDown in the overlay input moves the selection to the second row: the
+    // Tabs group's row, since grouping put it right after Go to.
+    await overlay.getByTestId("command-bar-input").press("ArrowDown");
+    await expect(rows.nth(1)).toHaveAttribute("aria-selected", "true");
+    await expect(rows.nth(1)).toHaveAttribute("data-kind", "tab");
+    await expect(rows.nth(0)).toHaveAttribute("aria-selected", "false");
+    await expect(
+      overlay.locator('[data-testid="command-bar-suggestion"][aria-selected="true"]'),
+    ).toHaveCount(1);
+
+    await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.commandBar.close();
+    });
+  });
+
+  // PRD 10.5 §6 — a command row's hint is its accelerator rendered through
+  // formatAccelerator (derived from the registry, not a literal); a command with
+  // no accelerator renders no accel element at all.
+  test("shortcut hints", async () => {
+    const accelerator = COMMANDS.find((c) => c.id === "settings.open")?.accelerator;
+    expect(accelerator, "settings.open must carry an accelerator").toBeTruthy();
+    const expectedHint = formatAccelerator(accelerator as string);
+
+    await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.commandBar.open("commands");
+      await zeo.commandBar.setQuery("open settings");
+    });
+
+    const overlay = await commandBarWindow(app);
+    const commandRow = (title: string) =>
+      overlay.locator('[data-testid="command-bar-suggestion"][data-kind="command"]').filter({
+        has: overlay.locator(".command-bar__row-primary", { hasText: new RegExp(`^${title}$`) }),
+      });
+    const openSettings = commandRow("Open Settings");
+    const openGeneral = commandRow("Open General Settings");
+    await expect(openSettings).toHaveCount(1);
+    await expect(openGeneral).toHaveCount(1);
+    await expect(openSettings.locator(".command-bar__row-accel")).toHaveText(expectedHint);
+    await expect(openGeneral.locator(".command-bar__row-accel")).toHaveCount(0);
+
+    await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.commandBar.close();
+    });
+  });
+
+  // PRD 10.5 §6 — the overlay page is transparent, the scrim spans the whole
+  // viewport and dims it, and a click on the scrim over the sidebar's bottom bar
+  // closes the bar WITHOUT reaching the sidebar: tabs, spaces and the active url
+  // are unchanged, and focus leaves the overlay.
+  test("scrim closes and shields the window", async () => {
+    const snapshot = () =>
+      sidebar.evaluate(async () => {
+        const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+        const s = await zeo.tabs.list();
+        return {
+          tabs: s.tabs.length,
+          spaces: s.spaces.length,
+          url: s.tabs.find((t) => t.id === s.activeTabId)?.url ?? null,
+        };
+      });
+    const before = await snapshot();
+
+    await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.commandBar.open("navigate");
+    });
+    const overlay = await commandBarWindow(app);
+    const scrim = overlay.getByTestId("command-bar-scrim");
+    await expect(scrim).toHaveCount(1);
+    // The overlay covers the window before we click into it.
+    await expect
+      .poll(async () => {
+        const b = await overlayNativeBounds(app);
+        return b !== null && b.overlay.width === b.width && b.overlay.height === b.height;
+      })
+      .toBe(true);
+
+    const look = await overlay.evaluate(() => {
+      const scrimEl = document.querySelector('[data-testid="command-bar-scrim"]');
+      const r = scrimEl?.getBoundingClientRect();
+      return {
+        html: getComputedStyle(document.documentElement).backgroundColor,
+        body: getComputedStyle(document.body).backgroundColor,
+        scrim: r === undefined ? null : { x: r.x, y: r.y, width: r.width, height: r.height },
+        scrimBg: scrimEl === null ? null : getComputedStyle(scrimEl).backgroundColor,
+        innerWidth: window.innerWidth,
+        innerHeight: window.innerHeight,
+      };
+    });
+    expect(look.html).toBe("rgba(0, 0, 0, 0)");
+    expect(look.body).toBe("rgba(0, 0, 0, 0)");
+    expect(look.scrim).toEqual({ x: 0, y: 0, width: look.innerWidth, height: look.innerHeight });
+    expect(look.scrimBg).not.toBeNull();
+    expect(look.scrimBg).not.toBe("rgba(0, 0, 0, 0)");
+    expect(look.scrimBg).not.toBe("transparent");
+
+    // This run has an active tab, so closeCommandBar's active-tab branch (not
+    // its no-active-tab sidebar fallback) is the one under test.
+    expect(before.url, "expected an active tab for this assertion to be meaningful").not.toBeNull();
+
+    // Instrument the focus handoff BEFORE the scrim click: wrapping .focus() on
+    // the sidebar and the active tab's webContents and recording which one
+    // fires proves closeCommandBar actually invoked .focus(), and on which
+    // target, even where the native focused-webContents check below can only
+    // prove focus left the overlay. The tab's webContents is resolved once
+    // here, restricted to the window's own content-view children (excluding
+    // the overlay), and reused below rather than re-matched by URL.
+    const { tabId, sidebarId } = await app.evaluate(
+      ({ BrowserWindow }, activeTabUrl) => {
+        const marker = globalThis as unknown as { __zeoFocusTargetId?: number };
+        marker.__zeoFocusTargetId = undefined;
+        const win = BrowserWindow.getAllWindows()[0];
+        const sidebarWc = win?.webContents;
+        if (sidebarWc != null && !sidebarWc.isDestroyed()) {
+          const original = sidebarWc.focus.bind(sidebarWc);
+          sidebarWc.focus = () => {
+            marker.__zeoFocusTargetId = sidebarWc.id;
+            original();
+          };
+        }
+        const tabView = (win?.contentView.children ?? []).find((child) => {
+          const wc = (child as { webContents?: { getURL(): string } }).webContents;
+          return (
+            wc != null &&
+            (wc as unknown) !== (sidebarWc as unknown) &&
+            !wc.getURL().includes("view=command-bar") &&
+            wc.getURL() === activeTabUrl
+          );
+        });
+        const tabWc = (
+          tabView as { webContents?: typeof sidebarWc } | undefined
+        )?.webContents;
+        if (tabWc != null && !tabWc.isDestroyed()) {
+          const original = tabWc.focus.bind(tabWc);
+          tabWc.focus = () => {
+            marker.__zeoFocusTargetId = tabWc.id;
+            original();
+          };
+        }
+        return { tabId: tabWc?.id ?? null, sidebarId: sidebarWc?.id ?? null };
+      },
+      before.url,
+    );
+
+    try {
+      // Bottom-left corner: over the sidebar's bottom bar, outside the panel.
+      await overlay.mouse.click(4, look.innerHeight - 4);
+      await expect
+        .poll(async () =>
+          sidebar.evaluate(async () => {
+            const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+            return (await zeo.commandBar.state()).open;
+          }),
+        )
+        .toBe(false);
+
+      const after = await snapshot();
+      expect(after.tabs).toBe(before.tabs);
+      expect(after.spaces).toBe(before.spaces);
+      expect(canonicalTabUrl(after.url)).toBe(canonicalTabUrl(before.url));
+
+      // Closing hands focus back to the active tab (or the sidebar): the overlay
+      // is no longer the focused webContents. No focused webContents at all (the
+      // window lost OS focus) also means "not the overlay". This native check is
+      // necessarily weak (see the instrumentation comment above): it can only
+      // fail closed, it can never confirm the handoff landed on the right target.
+      await expect
+        .poll(() =>
+          app.evaluate(({ webContents }) => {
+            const focused = webContents.getFocusedWebContents();
+            return focused === null ? "" : focused.getURL();
+          }),
+        )
+        .not.toContain("view=command-bar");
+
+      // The strong assertion: with an active tab, closeCommandBar's .focus()
+      // call must land on that tab's webContents specifically — not merely on
+      // "the sidebar or the tab" — so a wrong handoff to the sidebar is caught
+      // here rather than silently accepted.
+      const targetId = await app.evaluate(
+        () => (globalThis as unknown as { __zeoFocusTargetId?: number }).__zeoFocusTargetId ?? null,
+      );
+      expect(tabId, "expected to resolve the active tab's webContents").not.toBeNull();
+      expect(targetId, "closeCommandBar must call .focus() on a real handoff target").not.toBeNull();
+      expect(targetId, `expected the tab (sidebar was ${sidebarId})`).toBe(tabId);
+    } finally {
+      // Restore the wrapped .focus() methods (deleting the own property falls
+      // back to WebContents.prototype's) and drop the marker global, so a
+      // later test never inherits either.
+      await app.evaluate(
+        ({ webContents }, ids) => {
+          for (const id of [ids.tabId, ids.sidebarId]) {
+            if (id === null) {
+              continue;
+            }
+            const wc = webContents.fromId(id);
+            if (wc != null && !wc.isDestroyed()) {
+              delete (wc as unknown as { focus?: () => void }).focus;
+            }
+          }
+          delete (globalThis as unknown as { __zeoFocusTargetId?: number }).__zeoFocusTargetId;
+        },
+        { tabId, sidebarId },
+      );
+    }
+  });
+
+  // PRD 10.5 §6 — the find surface shares the overlay view but keeps its
+  // region-sized rect (PRD 10.6 restyles it); it renders no command-bar panel.
+  test("find keeps a region-sized overlay", async () => {
+    // Resolve the overlay page while it still renders the bar surface: under
+    // find it carries no command-bar element for commandBarWindow to match.
+    const overlay = await commandBarWindow(app);
+
+    const server = await startLocalPageServer();
+    try {
+      const token = "zeo-find-overlay";
+      await sidebar.evaluate(async (url) => {
+        const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+        await zeo.tabs.create(url);
+      }, `${server.base}/page.html?probe=${token}`);
+      await waitForViewUrl(app, token);
+      await waitForViewsIdle(app);
+
+      await sidebar.evaluate(async () => {
+        const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+        await zeo.commands.run("find.open");
+      });
+
+      await expect(overlay.getByTestId("command-bar")).toHaveCount(0);
+      await expect
+        .poll(async () => {
+          const b = await overlayNativeBounds(app);
+          return b === null
+            ? "no overlay"
+            : b.overlay.width > 0 && b.overlay.width < b.width
+              ? "region"
+              : `overlay ${JSON.stringify(b.overlay)} vs content ${b.width}x${b.height}`;
+        })
+        .toBe("region");
+    } finally {
+      // Close find so later tests do not inherit an open find surface (the
+      // overlay staying region-sized instead of the full-window bar size),
+      // even when the region poll above threw.
+      await sidebar.evaluate(async () => {
+        const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+        await zeo.find.close();
+      });
+      await expect
+        .poll(() =>
+          sidebar.evaluate(async () => {
+            const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+            return (await zeo.find.state()).open;
+          }),
+        )
+        .toBe(false);
+      await server.close();
+    }
   });
 
   // CodeRabbit 2a — a row-click accept carries the revision of the list it was

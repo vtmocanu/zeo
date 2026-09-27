@@ -3,6 +3,7 @@ import {
   IPC,
   COMMANDS,
   isCommandEnabled,
+  groupSuggestions,
   suggest,
   nextSelectedIndex,
   resolveInput,
@@ -104,11 +105,15 @@ export function historyCandidates(): HistoryEntry[] {
  */
 export function recomputeSuggestions(): void {
   const previous = runtime.commandBar.suggestions;
-  runtime.commandBar.suggestions = suggest(runtime.commandBar.query, buildCatalog(), {
-    mode: runtime.commandBar.mode,
-    activeTabId: runtime.store.activeTabId,
-    searchEngine: runtime.settings.searchEngine,
-  });
+  // Grouped into display order (Go to, Tabs, Spaces, …), so selectedIndex and
+  // accept(index) keep meaning "the n-th visible row".
+  runtime.commandBar.suggestions = groupSuggestions(
+    suggest(runtime.commandBar.query, buildCatalog(), {
+      mode: runtime.commandBar.mode,
+      activeTabId: runtime.store.activeTabId,
+      searchEngine: runtime.settings.searchEngine,
+    }),
+  );
   runtime.commandBar.selectedIndex = runtime.commandBar.suggestions.length > 0 ? 0 : -1;
   // A CHANGED list gets a fresh revision so a click bound to a prior list is
   // recognized as stale by acceptCommandBar. An identical list keeps its
@@ -153,9 +158,9 @@ export function openCommandBar(mode: CommandBarMode): void {
     revision: runtime.commandBar.revision,
     surface: "bar",
   };
-  // Rank the initial suggestions BEFORE laying out so the overlay is sized to the
-  // row count on open — a `Cmd+T` with empty text already shows the recent-tabs
-  // list at its full height.
+  // Rank the initial suggestions before showing the overlay so the first pushed
+  // state already carries them — a `Cmd+T` with empty text opens on the
+  // recent-tabs list.
   recomputeSuggestions();
   const shown = layoutOverlay();
   if (shown) {
@@ -238,8 +243,8 @@ export function submitCommandBar(text: string, mode?: CommandBarMode): void {
 
 /**
  * Sets the query, re-ranks the suggestion list from a fresh catalog, re-lays-out
- * the overlay to the new row count, and pushes the state. The renderer drives
- * this on every keystroke.
+ * the overlay, and pushes the state. The renderer drives this on every
+ * keystroke.
  */
 export function setQueryCommandBar(text: string): void {
   runtime.commandBar.query = text;

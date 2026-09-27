@@ -106,6 +106,19 @@ export type { FindState } from "./page-search.js";
 export { suggest, nextSelectedIndex } from "./suggest.js";
 export type { Suggestion, SuggestCatalog, SuggestOptions } from "./suggest.js";
 export {
+  SUGGESTION_GROUPS,
+  groupOf,
+  groupSuggestions,
+  suggestionGroups,
+  suggestionRowView,
+} from "./command-bar-groups.js";
+export type {
+  SuggestionGroupId,
+  SuggestionGroup,
+  SuggestionIcon,
+  SuggestionRowView,
+} from "./command-bar-groups.js";
+export {
   isHistoryUrl,
   historyKey,
   historyTerms,
@@ -156,9 +169,15 @@ export { parseChangelogSection } from "./release.js";
 export type { ChangelogSection } from "./release.js";
 export {
   SPACE_ACTIVATE_DELAY_MS,
-  COMMAND_BAR_HEIGHT,
-  SUGGESTION_ROW_HEIGHT,
-  commandBarBounds,
+  COMMAND_BAR_WIDTH,
+  COMMAND_BAR_MARGIN,
+  COMMAND_BAR_TOP_RATIO,
+  COMMAND_BAR_INPUT_HEIGHT,
+  COMMAND_BAR_ROW_HEIGHT,
+  COMMAND_BAR_GROUP_HEIGHT,
+  COMMAND_BAR_LIST_PADDING_TOP,
+  COMMAND_BAR_LIST_PADDING_BOTTOM,
+  commandBarPanelRect,
   settingsBounds,
   FIND_BAR_WIDTH,
   FIND_BAR_HEIGHT,

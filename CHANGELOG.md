@@ -9,6 +9,17 @@ milestone, a minor bump only for very large breakthroughs.
 
 ## [Unreleased]
 
+## [0.0.33] - 2026-09-27
+
+### Changed
+
+- The command bar floats over a dimmed window: a 680 px panel near the top of
+  the window with results grouped under Go to, Tabs, Spaces, History, Commands
+  and Downloads, 40 px rows with line icons, and shortcut hints on the right.
+  Clicking anywhere outside the panel closes it without acting on the page or
+  sidebar. History and downloads modes show their key hints on the selected
+  row.
+
 ## [0.0.32] - 2026-09-27
 
 ### Added
