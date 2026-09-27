@@ -108,10 +108,11 @@ export async function waitForViewGone(
  * `selectedIndex` and bumping `revision` out from under an in-flight test
  * step; separately, the load can also steal native focus from the overlay,
  * which fires the overlay's `blur` handler and closes the bar entirely. The
- * two are separate events, but both happen while the view is still loading
- * (`did-finish-load` fires before `isLoading()` turns false), so settling on
- * `!isLoading()` before opening or driving the bar lands after both.
- * `isLoading()` is a deterministic gate here because a view
+ * two are separate events: the re-rank provably precedes the settle
+ * (`did-finish-load` fires before `isLoading()` turns false), and in the
+ * observed flakes the focus steal also happened while the view was loading,
+ * so settling on `!isLoading()` before opening or driving the bar lands after
+ * both. `isLoading()` is a deterministic gate here because a view
  * starts loading synchronously on creation/navigation (so it's never
  * momentarily "not loading yet" right after `tabs.create`), and it also goes
  * false on a failed load, not just a successful one, so this can't hang on a
