@@ -39,7 +39,7 @@ vi.mock("./overlay.js", () => ({
 }));
 
 import { runtime } from "./state.js";
-import { applyLayout, doFocusPane } from "./layout.js";
+import { applyLayout, doFocusPane, reconcileAndApply } from "./layout.js";
 
 describe("applyLayout", () => {
   const originalWin = runtime.win;
@@ -121,5 +121,113 @@ describe("applyLayout", () => {
 
     expect(closeFind).toHaveBeenCalledTimes(1);
     expect(runtime.find.open).toBe(false);
+  });
+
+  describe("focus mode (passive vs. deliberate)", () => {
+    const originalCommandBar = runtime.commandBar;
+    const originalOverlay = runtime.overlay;
+    const originalCloseHook = runtime.closeCommandBarHook;
+
+    const closeCommandBarHook = vi.fn();
+
+    /** Stub pane views for `left`/`right`, tracked in `runtime.views`. */
+    function stubPaneViews(left: string, right: string): void {
+      for (const id of [left, right]) {
+        runtime.views.set(id, {
+          webContents: {
+            isDestroyed: () => false,
+            focus: vi.fn(),
+          },
+          setBounds: () => {},
+          setVisible: () => {},
+        } as unknown as ReturnType<typeof runtime.views.get> & object);
+      }
+    }
+
+    beforeEach(() => {
+      closeCommandBarHook.mockClear();
+      runtime.closeCommandBarHook = closeCommandBarHook;
+      runtime.commandBar = {
+        open: true,
+        mode: "navigate",
+        initialText: "",
+        query: "",
+        suggestions: [],
+        selectedIndex: -1,
+        revision: 0,
+        surface: "bar",
+      };
+      runtime.overlay = {
+        webContents: { isDestroyed: () => false, focus: () => {}, isFocused: () => false },
+        getVisible: () => true,
+      } as unknown as typeof runtime.overlay;
+    });
+
+    afterEach(() => {
+      runtime.commandBar = originalCommandBar;
+      runtime.overlay = originalOverlay;
+      runtime.closeCommandBarHook = originalCloseHook;
+      runtime.views.clear();
+    });
+
+    test("passive applyLayout() does not close the bar or move focus while it owns focus", () => {
+      const { left, right } = split("left");
+      stubPaneViews(left, right);
+
+      applyLayout();
+
+      expect(closeCommandBarHook).not.toHaveBeenCalled();
+      const focusedView = runtime.views.get(left)!;
+      expect(focusedView.webContents.focus).not.toHaveBeenCalled();
+    });
+
+    test("passive reconcileAndApply() does not close the bar or move focus while it owns focus", () => {
+      const { left, right } = split("left");
+      stubPaneViews(left, right);
+
+      reconcileAndApply();
+
+      expect(closeCommandBarHook).not.toHaveBeenCalled();
+      const focusedView = runtime.views.get(left)!;
+      expect(focusedView.webContents.focus).not.toHaveBeenCalled();
+    });
+
+    test("doFocusPane closes the bar (deliberate) then focuses the newly focused pane", () => {
+      const { left, right } = split("left");
+      stubPaneViews(left, right);
+
+      doFocusPane("right");
+
+      expect(closeCommandBarHook).toHaveBeenCalledTimes(1);
+      const focusedView = runtime.views.get(right)!;
+      expect(focusedView.webContents.focus).toHaveBeenCalledTimes(1);
+    });
+
+    test("passive applyLayout() leaves focus alone while the bar is open behind a hidden overlay", () => {
+      runtime.overlay = {
+        webContents: { isDestroyed: () => false, focus: () => {}, isFocused: () => false },
+        getVisible: () => false,
+      } as unknown as typeof runtime.overlay;
+      const { left, right } = split("left");
+      stubPaneViews(left, right);
+
+      applyLayout();
+
+      expect(closeCommandBarHook).not.toHaveBeenCalled();
+      const focusedView = runtime.views.get(left)!;
+      expect(focusedView.webContents.focus).not.toHaveBeenCalled();
+    });
+
+    test("a passive applyLayout() still focuses the pane once the bar is closed", () => {
+      runtime.commandBar = { ...runtime.commandBar, open: false };
+      const { left, right } = split("left");
+      stubPaneViews(left, right);
+
+      applyLayout();
+
+      expect(closeCommandBarHook).not.toHaveBeenCalled();
+      const focusedView = runtime.views.get(left)!;
+      expect(focusedView.webContents.focus).toHaveBeenCalledTimes(1);
+    });
   });
 });

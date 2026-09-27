@@ -18,7 +18,9 @@ milestone, a minor bump only for very large breakthroughs.
   same tab, space or command even if it moves), a click that raced the
   re-rank lands on the row you clicked instead of being dropped, and a loading
   tab can no longer take focus from the bar and close it. The bar now closes
-  only when the window loses focus or you dismiss it.
+  only when the window loses focus or you dismiss it, in split view too: a
+  page opening a popup or closing itself, or the window resizing, no longer
+  closes it.
 
 ## [0.0.34] - 2026-09-27
 

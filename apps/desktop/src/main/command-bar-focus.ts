@@ -111,17 +111,22 @@ export function onTabViewFocus(): void {
  * onTabViewFocus}) — or the OS finishing its focus handoff — settle first.
  *
  * In the deferred callback: a bar that is no longer open, or moved off the
- * `"bar"` surface, needs no action beyond clearing the steal flag. Otherwise the
- * bar stays open (and the overlay is refocused) when any of these holds: a
- * steal was recorded, the overlay somehow already regained focus, or any live
- * tab view's `WebContents` reports focused — a backstop against the async
- * ordering (see find.ts's own note on this), since a genuinely stolen focus can
- * still be sitting on the tab view rather than back on the overlay by the time
- * this runs. Any other case (nothing focused — a real scrim click, Escape via
- * IPC, or window blur, all of which close through their own paths anyway) closes
- * the bar. The steal flag is cleared unconditionally. A destroyed overlay or a
- * gone window closes rather than refocuses, since there is nothing left to
- * refocus.
+ * `"bar"` surface, needs no action beyond clearing the steal flag. A destroyed
+ * overlay or a gone window closes rather than refocuses, since there is
+ * nothing left to refocus. Then, when the bar no longer OWNS focus per
+ * {@link commandBarOwnsFocus} (e.g. the overlay is hidden — a collapsed window
+ * leaves the bar "open" with the overlay hidden until the next resize; see
+ * {@link openCommandBar}), this is a no-op: there is nothing to refocus and
+ * nothing to close, since a hidden overlay never held real focus to lose.
+ * Otherwise the bar stays open (and the overlay is refocused) when any of
+ * these holds: a steal was recorded, the overlay somehow already regained
+ * focus, or any live tab view's `WebContents` reports focused — a backstop
+ * against the async ordering (see find.ts's own note on this), since a
+ * genuinely stolen focus can still be sitting on the tab view rather than back
+ * on the overlay by the time this runs. Any other case (nothing focused — a
+ * real scrim click, Escape via IPC, or window blur, all of which close through
+ * their own paths anyway) closes the bar. The steal flag is cleared
+ * unconditionally.
  */
 export function onOverlayBlur(): void {
   setTimeout(() => {
@@ -136,6 +141,9 @@ export function onOverlayBlur(): void {
       runtime.overlay.webContents.isDestroyed()
     ) {
       closeCommandBar();
+      return;
+    }
+    if (!commandBarOwnsFocus()) {
       return;
     }
     const overlayFocused = runtime.overlay.webContents.isFocused();
@@ -157,16 +165,42 @@ export function onOverlayBlur(): void {
 /**
  * Focuses `wc` from the main process, closing the command bar FIRST when it
  * currently owns focus. Deliberately focusing a tab view (e.g. after
- * {@link closeSettings}-style teardown, or {@link activateTab}/{@link
- * doSplitWith}'s focus return) would otherwise blur the overlay and let
- * {@link onOverlayBlur}'s deferred check decide whether to close it — racy and
- * unnecessary when the caller already knows it means to move focus away from
- * the bar. Closing first here keeps that existing "focusing a tab view closes
- * the bar" behavior, just synchronous and deliberate instead of blur-driven.
+ * {@link closeSettings}-style teardown, or an explicit user split/focus op —
+ * {@link doSplit}, {@link doSplitWith}, {@link doSwap}, {@link doFocusPane},
+ * {@link doFocusOther}, {@link doUnsplit} — or {@link activateTab}'s focus
+ * return) would otherwise blur the overlay and let {@link onOverlayBlur}'s
+ * deferred check decide whether to close it — racy and unnecessary when the
+ * caller already knows it means to move focus away from the bar. Closing
+ * first here keeps that existing "focusing a tab view closes the bar"
+ * behavior, just synchronous and deliberate instead of blur-driven. Use ONLY
+ * for a user-initiated focus move; a non-user-initiated layout pass (a
+ * background tab closing itself, a resize, a popup opening as a tab, idle
+ * sweeping) must use {@link focusTabViewPassively} instead so it never steals
+ * focus away from an open command bar.
  */
 export function focusTabViewDeliberately(wc: Electron.WebContents): void {
   if (commandBarOwnsFocus()) {
     closeCommandBar();
+  }
+  wc.focus();
+}
+
+/**
+ * Focuses `wc` from the main process UNLESS the command bar is open on its
+ * `"bar"` surface, in which case this is a no-op — neither closing the bar nor
+ * moving focus. Deliberately broader than {@link commandBarOwnsFocus}: a bar
+ * left "open" behind a hidden overlay (collapsed window) must not have a tab
+ * view take focus either, or keystrokes would land on the page once the
+ * overlay is shown again. Used by {@link applyLayout} /
+ * {@link reconcileAndApply}'s default ("passive") focus pass, so a layout
+ * reconcile that was not triggered by a deliberate user split/focus action
+ * (a background tab closing itself, a window resize, a popup opening as a
+ * tab, idle sweeping) never closes an open command bar out from under the
+ * user.
+ */
+export function focusTabViewPassively(wc: Electron.WebContents): void {
+  if (runtime.commandBar.open && runtime.commandBar.surface === "bar") {
+    return;
   }
   wc.focus();
 }

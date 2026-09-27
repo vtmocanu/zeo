@@ -154,6 +154,18 @@ describe("command-bar-focus", () => {
     expect(closeCommandBar).toHaveBeenCalledTimes(1);
   });
 
+  test("a hidden overlay (bar 'open' but not owning focus) is left alone on blur", () => {
+    runtime.overlay = fakeOverlay({ visible: false }) as unknown as typeof runtime.overlay;
+    const view = { webContents: fakeWebContents({ focused: true }) };
+    runtime.views.set("tab-1", view as unknown as Parameters<typeof runtime.views.set>[1]);
+
+    onOverlayBlur();
+    vi.runAllTimers();
+
+    expect(runtime.overlay!.webContents.focus).not.toHaveBeenCalled();
+    expect(closeCommandBar).not.toHaveBeenCalled();
+  });
+
   test("resetCommandBarFocusSteal clears a pending steal so a later blur closes", () => {
     onTabViewFocus();
     resetCommandBarFocusSteal();
