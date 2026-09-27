@@ -132,7 +132,7 @@ export function ThemePicker({
 }: ThemePickerProps): ReactElement {
   const [draft, setDraft] = useState<SpaceTheme | null>(space.theme);
   const [stopIndex, setStopIndex] = useState<0 | 1>(0);
-  // N5: `useEnterMotion`'s RefObject also serves as the dismiss-on-outside-
+  // `useEnterMotion`'s RefObject also serves as the dismiss-on-outside-
   // press root ref below, so there is no second, inline callback ref
   // re-attaching on every render just to fan the node out to two refs.
   // PRD 10.7 §3, §5: the picker only ever mounts while open, so `open` is

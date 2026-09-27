@@ -92,10 +92,6 @@
   color: var(--ink-secondary);
 }
 
-.tab-item__zoom {
-  flex: 0 0 auto;
-}
-
 /* Blocked-request count: shield icon and number. Always visible while
    count > 0; dimmed while blocking is off globally. */
 .tab-item__shield {
@@ -129,6 +125,8 @@
   justify-content: center;
   min-width: var(--hit-target);
   min-height: var(--hit-target);
+  flex: 0 0 auto;
+  padding: 0;
   border: none;
   background: none;
   font-family: inherit;

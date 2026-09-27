@@ -251,7 +251,7 @@ export function Settings() {
 
   const scrimRef = useEnterMotion<HTMLDivElement>(state?.settingsOpen ?? false, "motion-fade");
   const sheetRef = useEnterMotion<HTMLDivElement>(state?.settingsOpen ?? false);
-  // N5: a stable callback ref (sheetRef and setSheetElement are both stable
+  // a stable callback ref (sheetRef and setSheetElement are both stable
   // across renders) so React never detaches/reattaches it on every render.
   const setSheetRef = useCallback(
     (node: HTMLDivElement | null) => {

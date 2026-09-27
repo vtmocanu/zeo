@@ -79,7 +79,7 @@ function fakeSpaceElement() {
   return { element, classes };
 }
 
-describe("replaySpaceMotion (B1: direction classes must not pile up)", () => {
+describe("replaySpaceMotion (direction classes must not pile up)", () => {
   test("forward -> backward -> forward leaves exactly the current class", () => {
     const { element, classes } = fakeSpaceElement();
 
@@ -104,7 +104,7 @@ describe("replaySpaceMotion (B1: direction classes must not pile up)", () => {
   });
 });
 
-describe("outgoingTintDecision (B2: compares the theme actually on screen)", () => {
+describe("outgoingTintDecision (compares the theme actually on screen)", () => {
   test("null -> null: no tint change, nothing to fade", () => {
     expect(outgoingTintDecision(null, null, "light")).toBeNull();
   });
@@ -114,7 +114,7 @@ describe("outgoingTintDecision (B2: compares the theme actually on screen)", () 
     expect(outgoingTintDecision(iris, irisAgain, "light")).toBeNull();
   });
 
-  test("edit-then-switch: previous theme reflects the edit, not the stale pre-edit theme", () => {
+  test("outgoingTintDecision paints the theme it is given as previous (the caller keeps it fresh)", () => {
     // The active space started iris, was edited to rose (still the active
     // space, no switch), then the user switched away. The caller is
     // responsible for refreshing "previous" to rose on the edit commit; once
