@@ -411,6 +411,7 @@ export function doFocusPane(pane: PaneSide): void {
     runtime.store.list().map((t) => t.id),
     runtime.store.activeTabId,
   );
+  closeFindOffActiveTab();
   persistLayout();
   applyLayout();
   broadcast();
@@ -430,9 +431,22 @@ export function doFocusOther(): void {
   if (focusedTabId !== null) {
     runtime.store.activate(focusedTabId);
   }
+  closeFindOffActiveTab();
   persistLayout();
   applyLayout();
   broadcast();
+}
+
+/**
+ * A find session never follows a pane-focus change: the pane-focus paths
+ * activate the other pane's tab without going through `setActive` (views.ts),
+ * so close an open session bound to a tab that is no longer active here, as
+ * `setActive` does for every other tab change.
+ */
+function closeFindOffActiveTab(): void {
+  if (runtime.find.open && runtime.find.tabId !== runtime.store.activeTabId) {
+    runtime.closeFindSession?.();
+  }
 }
 
 /**

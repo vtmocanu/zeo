@@ -72,8 +72,9 @@
   background: var(--popover-hover);
 }
 
-.settings__section-item--active,
-.settings__section-item--selected {
+/* Doubled class so the selection fill outranks :hover on the selected row. */
+.settings__section-item.settings__section-item--active,
+.settings__section-item.settings__section-item--selected {
   background: var(--accent-soft);
 }
 
