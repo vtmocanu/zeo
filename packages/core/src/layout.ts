@@ -4,12 +4,6 @@ import { contentRect, type ChromeState, type Rect } from "./chrome.js";
 /** Delay before a single click on a space row activates it, so a double-click can cancel it. */
 export const SPACE_ACTIVATE_DELAY_MS = 250;
 
-/** Fixed height of the command bar overlay's input row. */
-export const COMMAND_BAR_HEIGHT = 56;
-
-/** Height of a single suggestion row added below the input. */
-export const SUGGESTION_ROW_HEIGHT = 44;
-
 /** Fixed width of the find bar overlay, before clamping to the page region. */
 export const FIND_BAR_WIDTH = 360;
 
@@ -22,41 +16,78 @@ export const FIND_BAR_INSET = 12;
 /** Fixed distance from the top of the PAGE region (the card) to the find bar. */
 export const FIND_BAR_TOP = 12;
 
+/** Fixed width of the command bar overlay's panel, before clamping to the window. */
+export const COMMAND_BAR_WIDTH = 680;
+
+/** Horizontal margin the command bar panel keeps from each edge of the window. */
+export const COMMAND_BAR_MARGIN = 24;
+
+/** Fraction of the window's content height at which the command bar panel's top sits. */
+export const COMMAND_BAR_TOP_RATIO = 0.2;
+
+/** Fixed height of the command bar panel's input row. */
+export const COMMAND_BAR_INPUT_HEIGHT = 58;
+
+/** Height of a single suggestion row in the command bar list. */
+export const COMMAND_BAR_ROW_HEIGHT = 40;
+
+/** Height of a group heading row in the command bar list. */
+export const COMMAND_BAR_GROUP_HEIGHT = 28;
+
+/** Padding above the first row (or group heading) in the command bar list. */
+export const COMMAND_BAR_LIST_PADDING_TOP = 4;
+
+/** Padding below the last row in the command bar list. */
+export const COMMAND_BAR_LIST_PADDING_BOTTOM = 8;
+
+const ZERO_RECT: Rect = { x: 0, y: 0, width: 0, height: 0 };
+
 /**
- * Computes the command bar's on-screen rectangle within the window's content
- * area. The bar is centered horizontally over the PAGE region ({@link
- * contentRect}, the inset card to the right of the sidebar) and its top sits
- * at 12% down from the page region's top edge.
+ * Computes the command bar panel's on-screen rectangle within the window's
+ * content area. Unlike {@link splitPaneBounds} and the other overlay bounds
+ * below, the panel is centered on the whole window, not on the PAGE region
+ * ({@link contentRect}): the command bar overlay covers the entire content
+ * area, sidebar included.
  *
- * The width tracks the page region but is clamped to at most 640px and inset by
- * 48px, and floored at 0. When the page region is too narrow to show any bar
- * (`r.width - 48 <= 0`), an all-zero rect is returned so no negative or
- * off-screen dimensions ever reach the caller.
+ * The width is `min(COMMAND_BAR_WIDTH, contentWidth - 2 *
+ * COMMAND_BAR_MARGIN)`, floored at 0; when it is 0, the window is too narrow
+ * to show any bar and an all-zero rect is returned. The top sits at
+ * `round(contentHeight * COMMAND_BAR_TOP_RATIO)`.
  *
- * The height is `COMMAND_BAR_HEIGHT + rowCount * SUGGESTION_ROW_HEIGHT`, clamped
- * to `r.y + r.height - y` so the bottom edge never passes the page region's
- * bottom. When that clamp room is smaller than `COMMAND_BAR_HEIGHT` — the
- * window is too short to seat even the input row — the all-zero rect is
- * returned, as it is for the zero-width case.
+ * The remaining room to the bottom margin, `contentHeight - y -
+ * COMMAND_BAR_MARGIN`, must fit at least `COMMAND_BAR_INPUT_HEIGHT`; when it
+ * doesn't, the all-zero rect is returned, as it is for the zero-width case.
+ * Otherwise the height is the input plus the list (padding, `rows *
+ * COMMAND_BAR_ROW_HEIGHT` and `groups * COMMAND_BAR_GROUP_HEIGHT`, or 0 when
+ * there are no rows), clamped to that room. Negative `rows` or `groups` count
+ * as 0.
  */
-export function commandBarBounds(
-  contentWidth: number,
-  contentHeight: number,
-  chrome: ChromeState,
-  rowCount: number,
+export function commandBarPanelRect(
+  contentW: number,
+  contentH: number,
+  rows: number,
+  groups = 0,
 ): Rect {
-  const r = contentRect(contentWidth, contentHeight, chrome);
-  const width = Math.max(0, Math.min(640, r.width - 48));
+  const width = Math.max(0, Math.min(COMMAND_BAR_WIDTH, contentW - 2 * COMMAND_BAR_MARGIN));
   if (width === 0) {
-    return { x: 0, y: 0, width: 0, height: 0 };
+    return ZERO_RECT;
   }
-  const x = r.x + Math.round((r.width - width) / 2);
-  const y = r.y + Math.round(r.height * 0.12);
-  if (r.y + r.height - y < COMMAND_BAR_HEIGHT) {
-    return { x: 0, y: 0, width: 0, height: 0 };
+  const x = Math.round((contentW - width) / 2);
+  const y = Math.round(contentH * COMMAND_BAR_TOP_RATIO);
+  const room = contentH - y - COMMAND_BAR_MARGIN;
+  if (room < COMMAND_BAR_INPUT_HEIGHT) {
+    return ZERO_RECT;
   }
-  let height = COMMAND_BAR_HEIGHT + rowCount * SUGGESTION_ROW_HEIGHT;
-  height = Math.min(height, r.y + r.height - y);
+  const rowCount = Math.max(0, rows);
+  const groupCount = Math.max(0, groups);
+  const list =
+    rowCount === 0
+      ? 0
+      : COMMAND_BAR_LIST_PADDING_TOP +
+        COMMAND_BAR_LIST_PADDING_BOTTOM +
+        rowCount * COMMAND_BAR_ROW_HEIGHT +
+        groupCount * COMMAND_BAR_GROUP_HEIGHT;
+  const height = Math.min(COMMAND_BAR_INPUT_HEIGHT + list, room);
   return { x, y, width, height };
 }
 
@@ -104,7 +135,8 @@ export const DIVIDER_WIDTH = 8;
  * The usable page width is `r.width - DIVIDER_WIDTH`. When that is
  * non-positive (the page region cannot seat even the divider), all three
  * rects are all-zero so no negative or off-screen dimensions reach the
- * caller, mirroring the guard in {@link commandBarBounds}. Otherwise the left
+ * caller, mirroring the zero-width guard in {@link commandBarPanelRect}.
+ * Otherwise the left
  * pane takes `round(usable * r)` of the usable width (with `r` the
  * {@link clampRatio}-clamped `ratio`) and the right pane takes the remainder,
  * so the two pane widths plus the divider sum to the page region's width

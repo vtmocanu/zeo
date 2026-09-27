@@ -1,13 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
-  commandBarBounds,
+  commandBarPanelRect,
   settingsBounds,
   findBarBounds,
   quickBrowsePageBounds,
   splitPaneBounds,
   DIVIDER_WIDTH,
-  COMMAND_BAR_HEIGHT,
-  SUGGESTION_ROW_HEIGHT,
   FIND_BAR_HEIGHT,
   FIND_BAR_INSET,
   QUICK_BROWSE_CHROME_HEIGHT,
@@ -16,66 +14,42 @@ import { contentRect, DEFAULT_CHROME_STATE, type ChromeState } from "./chrome.js
 
 const COLLAPSED: ChromeState = { sidebarWidth: 240, sidebarCollapsed: true, sidebarRevealed: false };
 
-describe("commandBarBounds", () => {
-  it("centers a clamped bar over the page region", () => {
-    expect(commandBarBounds(1280, 800, DEFAULT_CHROME_STATE, 0)).toEqual({
-      x: 436,
-      y: 102,
-      width: 640,
-      height: 56,
-    });
+describe("commandBarPanelRect", () => {
+  it("centers the input-only panel under the window at the top ratio", () => {
+    expect(commandBarPanelRect(1280, 800, 0)).toEqual({ x: 300, y: 160, width: 680, height: 58 });
   });
 
-  it("clamps the width to 640 on a very wide window", () => {
-    expect(commandBarBounds(4000, 1000, DEFAULT_CHROME_STATE, 0).width).toBe(640);
+  it("grows the height by the list padding, rows and group headings", () => {
+    expect(commandBarPanelRect(1280, 800, 1, 1).height).toBe(138);
+    expect(commandBarPanelRect(1280, 800, 2, 2).height).toBe(206);
   });
 
-  it("tracks a narrow page region", () => {
-    // contentRect(340, 900, default) → x 240, width max(0, 340-240-8) = 92.
-    // bar width = max(0, min(640, 92-48)) = 44; x = 240 + round((92-44)/2) = 264.
-    const bounds = commandBarBounds(340, 900, DEFAULT_CHROME_STATE, 0);
-    expect(bounds.width).toBe(44);
-    expect(bounds.x).toBe(264);
-    expect(bounds.height).toBe(COMMAND_BAR_HEIGHT);
+  it("clamps the width to the window on a narrow window", () => {
+    const bounds = commandBarPanelRect(700, 800, 0);
+    expect(bounds.width).toBe(652);
+    expect(bounds.x).toBe(24);
   });
 
-  it("returns an all-zero rect when the page region is non-positive", () => {
-    expect(commandBarBounds(200, 800, DEFAULT_CHROME_STATE, 0)).toEqual({ x: 0, y: 0, width: 0, height: 0 });
+  it("matches the minimum window size", () => {
+    expect(commandBarPanelRect(640, 400, 0)).toEqual({ x: 24, y: 80, width: 592, height: 58 });
   });
 
-  it("grows the height by one row height per suggestion row", () => {
-    const base = commandBarBounds(1280, 2000, DEFAULT_CHROME_STATE, 0).height;
-    expect(base).toBe(COMMAND_BAR_HEIGHT);
-    expect(commandBarBounds(1280, 2000, DEFAULT_CHROME_STATE, 1).height).toBe(
-      COMMAND_BAR_HEIGHT + SUGGESTION_ROW_HEIGHT,
-    );
-    expect(commandBarBounds(1280, 2000, DEFAULT_CHROME_STATE, 5).height).toBe(
-      COMMAND_BAR_HEIGHT + 5 * SUGGESTION_ROW_HEIGHT,
-    );
+  it("returns an all-zero rect when the window is too narrow", () => {
+    expect(commandBarPanelRect(48, 800, 3, 1)).toEqual({ x: 0, y: 0, width: 0, height: 0 });
   });
 
-  it("clamps the height so the bottom edge never passes a short window", () => {
-    // r = contentRect(1280, 300, default) → y 8, height 284.
-    // bar y = 8 + round(284 * 0.12) = 8 + 34 = 42; room = 8+284-42 = 250.
-    const bounds = commandBarBounds(1280, 300, DEFAULT_CHROME_STATE, 20);
-    expect(bounds.height).toBe(250);
-    expect(42 + bounds.height).toBe(292);
+  it("returns an all-zero rect when the room below the top is too short for the input", () => {
+    // y = round(100 * 0.2) = 20; room = 100 - 20 - 24 = 56 < 58.
+    expect(commandBarPanelRect(1280, 100, 0)).toEqual({ x: 0, y: 0, width: 0, height: 0 });
   });
 
-  it("returns an all-zero rect when the window cannot seat the input row", () => {
-    expect(commandBarBounds(1280, 60, DEFAULT_CHROME_STATE, 0)).toEqual({ x: 0, y: 0, width: 0, height: 0 });
+  it("clamps the height so the bottom edge never passes the window", () => {
+    expect(commandBarPanelRect(1280, 400, 45, 1).height).toBe(296);
   });
 
-  it("starts the bar at the card inset when the sidebar is collapsed", () => {
-    // contentRect(1280, 800, COLLAPSED) → x 8, y 8, width 1264, height 784.
-    // bar width = min(640, 1264-48) = 640; x = 8 + round((1264-640)/2) = 320.
-    // y = 8 + round(784*0.12) = 102.
-    expect(commandBarBounds(1280, 800, COLLAPSED, 0)).toEqual({
-      x: 320,
-      y: 102,
-      width: 640,
-      height: 56,
-    });
+  it("ignores groups when there are no rows, and treats negative rows as 0", () => {
+    expect(commandBarPanelRect(1280, 800, 0, 3).height).toBe(58);
+    expect(commandBarPanelRect(1280, 800, -2, 0)).toEqual(commandBarPanelRect(1280, 800, 0, 0));
   });
 });
 
