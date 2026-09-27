@@ -134,7 +134,7 @@ export function pickerSetKind(theme: SpaceTheme | null, kind: ThemeKind): SpaceT
     return { stops: [draft.stops[0]], intensity };
   }
   if (draft.stops.length === 2) {
-    return { stops: draft.stops, intensity };
+    return { stops: [...draft.stops] as [SpaceHue, SpaceHue], intensity };
   }
   const firstIndex = SPACE_HUES.indexOf(draft.stops[0]);
   const secondHue = SPACE_HUES[(firstIndex + GRADIENT_SECOND_STOP_OFFSET) % SPACE_HUES.length];
@@ -159,9 +159,13 @@ export function pickerSelectHue(
   return { stops, intensity };
 }
 
-/** Sets the intensity from a 0-100 percent, snapped to the nearest 5 and clamped. */
+/**
+ * Sets the intensity from a 0-100 percent, snapped to the nearest 5 and
+ * clamped. A non-finite percent (e.g. `NaN`) maps to 0.
+ */
 export function pickerSetIntensity(theme: SpaceTheme | null, percent: number): SpaceTheme {
   const draft = draftOf(theme);
-  const snapped = clamp01((Math.round(percent / 5) * 5) / 100);
-  return { stops: draft.stops, intensity: snapped };
+  const safePercent = Number.isFinite(percent) ? percent : 0;
+  const snapped = clamp01((Math.round(safePercent / 5) * 5) / 100);
+  return { stops: [...draft.stops] as [SpaceHue] | [SpaceHue, SpaceHue], intensity: snapped };
 }

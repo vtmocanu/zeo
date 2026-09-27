@@ -572,6 +572,32 @@ function SpaceItem({
   );
 }
 
+/** Finds a `space-item` button by space id, or `null` when it isn't rendered. */
+function findSpaceItem(spaceId: string): HTMLElement | null {
+  return document.querySelector<HTMLElement>(
+    `[data-testid="space-item"][data-space-id="${CSS.escape(spaceId)}"]`,
+  );
+}
+
+/**
+ * When the theme picker closes for a reason other than Escape (its own
+ * Escape handler already moves focus itself) — sidebar collapse,
+ * active-space change, or the edited space being removed — and focus was
+ * still inside the picker, move it to the edited space's `space-item` if it
+ * still exists, else the active space's, instead of letting it fall to
+ * `<body>`. A no-op when focus was already elsewhere (e.g. an outside
+ * pointerdown, which is left where the user clicked).
+ */
+function restoreFocusFromThemePicker(preferredSpaceId: string | null, activeSpaceId: string): void {
+  const picker = document.querySelector('[data-testid="theme-picker"]');
+  const active = document.activeElement;
+  if (picker === null || !(active instanceof Node) || !picker.contains(active)) {
+    return;
+  }
+  const item = (preferredSpaceId !== null ? findSpaceItem(preferredSpaceId) : null) ?? findSpaceItem(activeSpaceId);
+  item?.focus();
+}
+
 /**
  * Keyboard-first left sidebar listing open tabs. This is the renderer: it
  * reaches the main process ONLY through the injected global `window.zeo`
@@ -666,17 +692,21 @@ export function App() {
       : undefined;
   useEffect(() => {
     if (themeEditSpaceId !== null && themeEditSpace === undefined) {
+      restoreFocusFromThemePicker(themeEditSpaceId, state.activeSpaceId);
       setThemeEditSpaceId(null);
     }
-  }, [themeEditSpaceId, themeEditSpace]);
+  }, [themeEditSpaceId, themeEditSpace, state.activeSpaceId]);
   const activeSpaceId = state.activeSpaceId;
   const lastActiveSpaceId = useRef(activeSpaceId);
   useEffect(() => {
     if (lastActiveSpaceId.current !== activeSpaceId) {
       lastActiveSpaceId.current = activeSpaceId;
+      if (themeEditSpaceId !== null) {
+        restoreFocusFromThemePicker(themeEditSpaceId, activeSpaceId);
+      }
       setThemeEditSpaceId(null);
     }
-  }, [activeSpaceId]);
+  }, [activeSpaceId, themeEditSpaceId]);
 
   useEffect(() => {
     spacesRef.current = state.spaces;

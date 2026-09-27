@@ -224,7 +224,7 @@ export interface SpacesApi {
   setProfile(spaceId: string, profileId: string): Promise<void>;
   /**
    * Sets space `id`'s theme (`null` to remove it). Validates through
-   * {@link normalizeTheme} in main and rejects invalid input without side
+   * `normalizeTheme` in main and rejects invalid input without side
    * effects; an equal theme resolves without a broadcast.
    */
   setTheme(id: string, theme: SpaceTheme | null): Promise<void>;

@@ -1008,6 +1008,51 @@ describe("migrate", () => {
     db.close();
   });
 
+  test("v13->v14 backfill breaks equal-position ties by id, not insertion order", () => {
+    const path = join(tempDir, "v13-to-v14-ties.db");
+    const db = new Database(path);
+    db.exec(V13_DDL);
+    db.prepare(
+      "INSERT INTO meta(id,schemaVersion,activeSpaceId) VALUES (0, 13, 'space-z')",
+    ).run();
+    db.prepare(
+      "INSERT INTO profiles(id,name,createdAt,position) VALUES ('p1','Personal',1,0)",
+    ).run();
+
+    // Three spaces all sharing position 0: the tie-break must rank them by id
+    // ascending ("space-a" < "space-b" < "space-z"), regardless of insertion
+    // order, which here is deliberately z, a, b.
+    const insertSpace = db.prepare(
+      "INSERT INTO spaces(id,name,profileId,createdAt,activeTabId,position) VALUES (?, ?, 'p1', 1, NULL, ?)",
+    );
+    insertSpace.run("space-z", "Z", 0);
+    insertSpace.run("space-a", "A", 0);
+    insertSpace.run("space-b", "B", 0);
+
+    migrate(db);
+
+    const rows = db
+      .prepare("SELECT id, theme FROM spaces ORDER BY id")
+      .all() as { id: string; theme: string }[];
+    // Rank 0 (space-a) -> MIGRATION_HUE_ORDER[0], rank 1 (space-b) -> [1],
+    // rank 2 (space-z) -> [2]. Reversing or removing the id tie-break would
+    // instead rank them by insertion order (z, a, b) and fail this
+    // assertion.
+    expect(JSON.parse(rows.find((r) => r.id === "space-a")!.theme)).toEqual({
+      stops: [MIGRATION_HUE_ORDER[0]],
+      intensity: 1,
+    });
+    expect(JSON.parse(rows.find((r) => r.id === "space-b")!.theme)).toEqual({
+      stops: [MIGRATION_HUE_ORDER[1]],
+      intensity: 1,
+    });
+    expect(JSON.parse(rows.find((r) => r.id === "space-z")!.theme)).toEqual({
+      stops: [MIGRATION_HUE_ORDER[2]],
+      intensity: 1,
+    });
+    db.close();
+  });
+
   test("is a no-op on a database already at the current version (v14) with non-default layout values, quickBrowseExternal, updateCheckEnabled, and a set default-session marker, leaving the site_zoom and downloads rows untouched", () => {
     const path = join(tempDir, "v14.db");
     const db = new Database(path);
@@ -2161,7 +2206,8 @@ describe("downloads helpers", () => {
     ).run();
     seed.prepare(
       "INSERT INTO spaces(id,name,profileId,createdAt,activeTabId,position,theme) " +
-        "VALUES ('space-a','A','p1',1,NULL,0,NULL), ('space-b','B','p1',2,NULL,1,NULL)",
+        "VALUES ('space-a','A','p1',1,NULL,0,NULL), " +
+        "('space-b','B','p1',2,NULL,1,'{\"stops\":[\"rose\"],\"intensity\":1}')",
     ).run();
     seed.close();
 

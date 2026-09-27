@@ -119,6 +119,12 @@ const commandHandlers: Record<CommandId, () => void> = {
       spaceId: runtime.store.activeSpaceId,
     }),
   "space.editTheme": () => {
+    // Close the command bar FIRST: acceptCommandBar's own closeCommandBar (run
+    // right after this handler) focuses the active tab's page view, which
+    // would steal focus from the sidebar right after we hand it here. Calling
+    // it here first makes acceptCommandBar's later call a no-op (already
+    // closed) instead of a focus-stealer.
+    closeCommandBar();
     runtime.win?.webContents.send(IPC.spaceMenuAction, {
       action: "edit-theme",
       spaceId: runtime.store.activeSpaceId,

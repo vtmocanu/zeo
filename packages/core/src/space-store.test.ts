@@ -136,7 +136,29 @@ describe("SpaceStore space themes", () => {
 
   test("setSpaceTheme with an unknown id throws and changes nothing", () => {
     const store = makeStore();
+    const before = store.spaces();
     expect(() => store.setSpaceTheme("ghost", null)).toThrow(/Unknown space: ghost/);
+    expect(store.spaces()).toEqual(before);
+  });
+
+  test("spaceTheme on an unknown id throws", () => {
+    const store = makeStore();
+    expect(() => store.spaceTheme("ghost")).toThrow(/Unknown space: ghost/);
+  });
+
+  test("mutating store.spaceTheme(id)!.stops leaves the store unchanged", () => {
+    const store = makeStore();
+    const id = store.activeSpaceId;
+    const theme = store.spaceTheme(id);
+    (theme as { stops: string[] }).stops[0] = "teal";
+    expect(store.spaceTheme(id)).toEqual({ stops: ["iris"], intensity: 1 });
+  });
+
+  test("mutating store.createSpace(...).theme!.stops leaves the store unchanged", () => {
+    const store = makeStore();
+    const work = store.createSpace("Work");
+    (work.theme as { stops: string[] }).stops[0] = "teal";
+    expect(store.spaceTheme(work.id)).toEqual({ stops: ["rose"], intensity: 1 });
   });
 
   test("setSpaceTheme with an invalid theme throws and changes nothing", () => {

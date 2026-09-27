@@ -153,6 +153,25 @@ describe("themeTokens sweep", () => {
           for (const bg of popoverBackgrounds) {
             expect(contrastRatio(popoverSecondary, bg)).toBeGreaterThanOrEqual(4.5);
           }
+
+          // Independent oracle for inkOnAccentContrast: recompute contrast
+          // from the emitted --ink-on-accent / --accent hex strings, not
+          // from the report's own bookkeeping.
+          const inkOnAccentHex = tokens["--ink-on-accent"];
+          const accentHex = tokens["--accent"];
+          const recomputedInkOnAccentContrast = contrastRatio(
+            hexToRgb(inkOnAccentHex),
+            hexToRgb(accentHex),
+          );
+          expect(report.inkOnAccentContrast).toBeCloseTo(recomputedInkOnAccentContrast, 6);
+
+          // Independent oracle for accentContrast: it is a minimum across the
+          // card AND every window ground, so it can never exceed the minimum
+          // contrast of the final accent against every exposed ground.
+          const groundsMinContrast = Math.min(
+            ...report.grounds.map((ground) => contrastRatio(report.accent, ground)),
+          );
+          expect(groundsMinContrast).toBeGreaterThanOrEqual(report.accentContrast);
         });
       }
     }

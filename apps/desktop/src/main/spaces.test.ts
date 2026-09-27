@@ -319,6 +319,17 @@ describe("setSpaceTheme", () => {
     expect(h.broadcast).not.toHaveBeenCalled();
   });
 
+  test("throws on an unknown string id, changes nothing and does not broadcast", () => {
+    const before = runtime.store.spaces();
+
+    expect(() => setSpaceTheme("ghost", { stops: ["teal"], intensity: 1 })).toThrow(
+      /Unknown space: ghost/,
+    );
+
+    expect(runtime.store.spaces()).toEqual(before);
+    expect(h.broadcast).not.toHaveBeenCalled();
+  });
+
   test("does not broadcast when the new theme equals the space's current theme", () => {
     const spaceId = runtime.store.activeSpaceId;
     const current = runtime.store.spaceTheme(spaceId);

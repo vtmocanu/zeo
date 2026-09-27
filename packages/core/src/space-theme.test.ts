@@ -209,6 +209,21 @@ describe("pickerSetKind", () => {
   test("intensity 0 becomes 1", () => {
     expect(pickerSetKind(null, "solid")).toEqual({ stops: ["iris"], intensity: 1 });
   });
+
+  test("returns a fresh stops array, never the input's", () => {
+    const theme = { stops: ["teal", "violet"] as ["teal", "violet"], intensity: 1 };
+    const result = pickerSetKind(theme, "gradient");
+    expect(result.stops).not.toBe(theme.stops);
+    expect(result.stops).toEqual(theme.stops);
+  });
+
+  test("does not share NULL_DRAFT's stops array across calls", () => {
+    const a = pickerSetKind(null, "solid");
+    const b = pickerSetKind(null, "solid");
+    expect(a.stops).not.toBe(b.stops);
+    a.stops[0] = "teal" as never;
+    expect(b.stops).toEqual(["iris"]);
+  });
 });
 
 describe("pickerSelectHue", () => {
@@ -244,5 +259,30 @@ describe("pickerSetIntensity", () => {
       stops: ["iris"],
       intensity: 1,
     });
+  });
+
+  test("NaN percent maps to 0 intensity", () => {
+    expect(pickerSetIntensity({ stops: ["iris"], intensity: 1 }, NaN)).toEqual({
+      stops: ["iris"],
+      intensity: 0,
+    });
+  });
+
+  test("Infinity percent maps to 0 intensity", () => {
+    expect(pickerSetIntensity({ stops: ["iris"], intensity: 1 }, Infinity)).toEqual({
+      stops: ["iris"],
+      intensity: 0,
+    });
+    expect(pickerSetIntensity({ stops: ["iris"], intensity: 1 }, -Infinity)).toEqual({
+      stops: ["iris"],
+      intensity: 0,
+    });
+  });
+
+  test("returns a fresh stops array, never the input's", () => {
+    const theme = { stops: ["teal"] as ["teal"], intensity: 1 };
+    const result = pickerSetIntensity(theme, 40);
+    expect(result.stops).not.toBe(theme.stops);
+    expect(result.stops).toEqual(theme.stops);
   });
 });

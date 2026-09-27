@@ -34,8 +34,34 @@ export interface ThemePickerProps {
 const PICKER_INSET = 8;
 // Swatch grid columns; Up/Down move focus by one row.
 const SWATCH_COLUMNS = 5;
-// Unechoed sends kept for broadcast matching; a stale tail is harmless.
+// Themes sent since the last externally-originated change kept for broadcast
+// matching; a stale tail (trimmed oldest-first past this bound) is harmless —
+// it just makes a very old resend look external sooner than ideal.
 const MAX_PENDING = 32;
+
+/**
+ * Whether an incoming broadcast theme is one WE caused (an echo of a change
+ * this picker itself sent), as opposed to an externally-originated change
+ * (another window, or a broadcast unrelated to this picker) that should
+ * rewind the draft.
+ *
+ * `incoming` is ours when it equals the current draft (nothing to do), or
+ * when it equals ANY theme sent since the last externally-originated change —
+ * not just the oldest unacknowledged one. Every theme this picker sends stays
+ * a recognized echo until an actual external change arrives and resets the
+ * record; a single broadcast can therefore match interleaved sends out of
+ * order without ever falling through to "external" and rewinding the draft.
+ */
+export function isOwnThemeEcho(
+  incoming: SpaceTheme | null,
+  draft: SpaceTheme | null,
+  sentSinceExternal: readonly SpaceTheme[],
+): boolean {
+  if (themesEqual(incoming, draft)) {
+    return true;
+  }
+  return sentSinceExternal.some((sent) => themesEqual(sent, incoming));
+}
 
 const APPEARANCES: readonly Appearance[] = ["light", "dark"];
 const APPEARANCE_LABEL: Record<Appearance, string> = { light: "Light", dark: "Dark" };
@@ -54,11 +80,7 @@ function chipStyle(
   const report = themeReport(draft, appearance);
   const [first, second] = report.grounds;
   const ground =
-    first === undefined
-      ? "transparent"
-      : second === undefined
-        ? toHex(first)
-        : `linear-gradient(160deg, ${toHex(first)}, ${toHex(second)})`;
+    second === undefined ? toHex(first) : `linear-gradient(160deg, ${toHex(first)}, ${toHex(second)})`;
   return {
     style: {
       "--chip-ground": ground,
@@ -86,9 +108,9 @@ export function ThemePicker({
   const rootRef = useRef<HTMLDivElement>(null);
   const pressedKindRef = useRef<HTMLButtonElement>(null);
   const swatchRefs = useRef<(HTMLButtonElement | null)[]>([]);
-  // Themes sent but not yet seen in a broadcast, oldest first. A broadcast
-  // matching one of them is our own echo (possibly stale while the slider is
-  // dragged) and never rewinds the draft; anything else came from elsewhere.
+  // Every theme sent since the last externally-originated change, oldest
+  // first. A broadcast matching one of them (or the current draft) is our
+  // own echo and never rewinds the draft; anything else came from elsewhere.
   const pending = useRef<SpaceTheme[]>([]);
   const draftRef = useRef(draft);
   draftRef.current = draft;
@@ -98,17 +120,13 @@ export function ThemePicker({
 
   useEffect(() => {
     const incoming = space.theme;
-    const echo = pending.current.findIndex((sent) => themesEqual(sent, incoming));
-    if (echo >= 0) {
-      pending.current.splice(0, echo + 1);
+    if (isOwnThemeEcho(incoming, draftRef.current, pending.current)) {
       return;
     }
-    if (!themesEqual(incoming, draftRef.current)) {
-      pending.current = [];
-      setDraft(incoming);
-      if (incoming === null || incoming.stops.length === 1) {
-        setStopIndex(0);
-      }
+    pending.current = [];
+    setDraft(incoming);
+    if (incoming === null || incoming.stops.length === 1) {
+      setStopIndex(0);
     }
   }, [space.theme]);
 
@@ -204,7 +222,9 @@ export function ThemePicker({
       style={{ width: sidebarWidth - 2 * PICKER_INSET }}
       onKeyDown={onKeyDown}
     >
-      <h2 className="theme-picker__title">{title}</h2>
+      <h2 className="theme-picker__title" title={title}>
+        {title}
+      </h2>
 
       <div className="theme-picker__segment" role="group" aria-label="Theme kind">
         {(["solid", "gradient"] as const).map((option) => (
@@ -245,9 +265,18 @@ export function ThemePicker({
         </div>
       )}
 
-      <div className="theme-picker__swatches">
+      <div
+        className="theme-picker__swatches"
+        role="group"
+        aria-label={kind === "solid" ? "Color" : `Color ${stopIndex + 1}`}
+      >
         {SPACE_HUES.map((hue, index) => {
           const label = HUE_DEFINITIONS[hue].label;
+          const pressed = hue === selectedHue;
+          // Roving tabindex: only the pressed swatch (or the first when none
+          // is pressed) is in the tab order; Left/Right/Up/Down move focus
+          // between the rest without changing the tab stop.
+          const tabbable = selectedHue === null ? index === 0 : pressed;
           return (
             <button
               key={hue}
@@ -260,7 +289,8 @@ export function ThemePicker({
               data-hue={hue}
               aria-label={label}
               title={label}
-              aria-pressed={hue === selectedHue}
+              aria-pressed={pressed}
+              tabIndex={tabbable ? 0 : -1}
               style={{ "--swatch": hueSwatchColor(hue) } as ThemeVars}
               onClick={() => apply(pickerSelectHue(draft, stopIndex, hue))}
               onKeyDown={(event) => onSwatchKeyDown(event, index)}
@@ -276,6 +306,7 @@ export function ThemePicker({
             className="theme-picker__intensity-value"
             htmlFor={intensityId}
             data-testid="theme-intensity-value"
+            aria-live="off"
           >
             {`${percent}%`}
           </output>

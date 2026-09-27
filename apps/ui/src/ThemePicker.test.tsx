@@ -9,7 +9,7 @@ import {
   type Space,
   type SpaceTheme,
 } from "@zeo/core";
-import { ThemePicker } from "./ThemePicker.js";
+import { ThemePicker, isOwnThemeEcho } from "./ThemePicker.js";
 
 function space(theme: SpaceTheme | null): Space {
   return { id: "s1", name: "Work", profileId: "p1", createdAt: 0, theme };
@@ -190,5 +190,73 @@ describe("ThemePicker", () => {
     );
     expect(style).toMatch(/--chip-ink:#[0-9a-f]{6}/);
     expect(style).toMatch(/--chip-ink-secondary:#[0-9a-f]{6}/);
+  });
+
+  test("the intensity value is aria-live=off so it isn't announced twice per step", () => {
+    expect(attr(one(render(TEAL), "theme-intensity-value"), "aria-live")).toBe("off");
+  });
+
+  test("the picker title carries a matching title attribute for truncated names", () => {
+    const root = one(render(TEAL), "theme-picker");
+    const title = descendants(root).find((node) => attr(node, "class") === "theme-picker__title");
+    expect(title && attr(title, "title")).toBe("Work theme");
+  });
+
+  test("the swatch grid is a labelled group: 'Color' for solid, 'Color N' for the selected gradient stop", () => {
+    const solidSwatches = one(render(TEAL), "theme-swatch").parent!;
+    expect(attr(solidSwatches, "role")).toBe("group");
+    expect(attr(solidSwatches, "aria-label")).toBe("Color");
+
+    const gradientSwatches = one(render(GRADIENT), "theme-swatch").parent!;
+    expect(attr(gradientSwatches, "role")).toBe("group");
+    // Stop 0 is selected on initial render of a two-stop theme.
+    expect(attr(gradientSwatches, "aria-label")).toBe("Color 1");
+  });
+
+  test("roving tabindex: only the pressed swatch is tabbable, the rest are -1", () => {
+    const swatches = all(render(TEAL), "theme-swatch");
+    const tabbable = swatches.filter((s) => attr(s, "tabindex") === "0");
+    expect(tabbable.map((s) => attr(s, "data-hue"))).toEqual(["teal"]);
+    for (const s of swatches) {
+      if (attr(s, "data-hue") !== "teal") {
+        expect(attr(s, "tabindex")).toBe("-1");
+      }
+    }
+  });
+
+  test("roving tabindex: with no pressed swatch (null draft), the first swatch is tabbable", () => {
+    const swatches = all(render(null), "theme-swatch");
+    expect(attr(swatches[0]!, "tabindex")).toBe("0");
+    for (const s of swatches.slice(1)) {
+      expect(attr(s, "tabindex")).toBe("-1");
+    }
+  });
+});
+
+const IRIS: SpaceTheme = { stops: ["iris"], intensity: 1 };
+const ROSE: SpaceTheme = { stops: ["rose"], intensity: 1 };
+const AMBER: SpaceTheme = { stops: ["amber"], intensity: 1 };
+
+describe("isOwnThemeEcho", () => {
+  test("a broadcast equal to the current draft is an echo", () => {
+    expect(isOwnThemeEcho(IRIS, IRIS, [])).toBe(true);
+  });
+
+  test("a broadcast equal to any theme sent since the last external change is an echo, regardless of order", () => {
+    // Sent A then B; A's own echo already consumed elsewhere, but A is STILL
+    // in the sent-since-external record, so a broadcast carrying A (e.g. an
+    // out-of-order resend) must not be treated as external and rewind the
+    // draft away from B.
+    expect(isOwnThemeEcho(ROSE, AMBER, [ROSE, AMBER])).toBe(true);
+    expect(isOwnThemeEcho(AMBER, AMBER, [ROSE, AMBER])).toBe(true);
+  });
+
+  test("a broadcast matching none of the sent themes nor the draft is external", () => {
+    expect(isOwnThemeEcho(AMBER, ROSE, [ROSE])).toBe(false);
+  });
+
+  test("a null broadcast is an echo only when the draft is already null", () => {
+    expect(isOwnThemeEcho(null, null, [])).toBe(true);
+    expect(isOwnThemeEcho(null, ROSE, [])).toBe(false);
   });
 });
