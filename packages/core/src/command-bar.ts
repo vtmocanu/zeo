@@ -29,13 +29,7 @@ import type { Suggestion } from "./suggest.js";
  *   download over the bridge).
  */
 export type CommandBarMode =
-  | "navigate"
-  | "new-tab"
-  | "commands"
-  | "history"
-  | "promote"
-  | "split"
-  | "downloads";
+  "navigate" | "new-tab" | "commands" | "history" | "promote" | "split" | "downloads";
 
 /**
  * The command bar's serializable state, broadcast from main to the renderer.
@@ -67,4 +61,88 @@ export interface CommandBarState {
    * of that one overlay; defaults to `"bar"`.
    */
   surface: "bar" | "find";
+}
+
+/**
+ * A suggestion's stable identity: the same logical row across re-ranks, even
+ * when its title, label or position changes. Row 0's text action
+ * (`navigate`/`search`) has one identity per kind, since it always stands for
+ * "act on the typed text".
+ */
+export function suggestionKey(s: Suggestion): string {
+  switch (s.kind) {
+    case "navigate":
+    case "search":
+      return s.kind;
+    case "tab":
+    case "archived-tab":
+      return `${s.kind}:${s.tabId}`;
+    case "space":
+      return `space:${s.spaceId}`;
+    case "command":
+      return `command:${s.id}`;
+    case "history":
+      return `history:${s.url}`;
+    case "download":
+      return `download:${s.id}`;
+  }
+}
+
+/**
+ * The selection to keep after a background re-rank: the index in `next` of the
+ * row `prev[prevIndex]` identified (by {@link suggestionKey}), so a row the user
+ * arrowed to stays selected even if it moved. Falls back to row 0 when that row
+ * is gone (or there was no selection), and `-1` for an empty `next`.
+ */
+export function reselectIndex(
+  prev: readonly Suggestion[],
+  prevIndex: number,
+  next: readonly Suggestion[],
+): number {
+  if (next.length === 0) {
+    return -1;
+  }
+  const selected = prev[prevIndex];
+  if (selected === undefined) {
+    return 0;
+  }
+  const key = suggestionKey(selected);
+  const found = next.findIndex((s) => suggestionKey(s) === key);
+  return found === -1 ? 0 : found;
+}
+
+/** The suggestion list a row click may have been rendered against. */
+export interface RevisionedSuggestions {
+  revision: number;
+  suggestions: readonly Suggestion[];
+}
+
+/**
+ * Resolves a clicked row (`index` rendered against `revision`) to an index into
+ * the `current` list, or `null` when the click must be rejected. A current
+ * revision uses `index` as-is (range-checked). A click rendered against the one
+ * `previous` list — superseded by a background re-rank — is remapped by
+ * {@link suggestionKey} to where that row now sits, and rejected when the row
+ * is gone. Any older revision, or an index out of range for the list it was
+ * rendered against, is rejected.
+ */
+export function resolveAcceptIndex(
+  index: number,
+  revision: number,
+  current: RevisionedSuggestions,
+  previous: RevisionedSuggestions | null,
+): number | null {
+  if (revision === current.revision) {
+    return index >= 0 && index < current.suggestions.length ? index : null;
+  }
+  if (previous === null || revision !== previous.revision) {
+    return null;
+  }
+  const clicked = previous.suggestions[index];
+  if (clicked === undefined) {
+    return null;
+  }
+  const key = suggestionKey(clicked);
+  const found = current.suggestions.findIndex((s) => suggestionKey(s) === key);
+  return found === -1 ? null : found;
 }
