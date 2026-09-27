@@ -100,29 +100,28 @@ async function launch(userDataDir: string): Promise<{ app: ElectronApplication; 
 }
 
 /**
- * On macOS, `nativeTheme.themeSource` drives Chromium's `prefers-color-scheme`
- * in every renderer. On Linux (the xvfb CI job) Electron updates
- * `nativeTheme.shouldUseDarkColors` but the renderers' media query never
- * flips, so there the same scheme is also emulated on each page under test.
- * That still exercises what zeo owns: a `prefers-color-scheme` change
- * re-coloring an open surface without a reload. It cannot show that a surface
- * created while the appearance is forced starts in it; only the macOS job
- * proves that.
+ * `nativeTheme.themeSource` does not reliably reach the renderers'
+ * `prefers-color-scheme` on headless CI: on Linux (xvfb) and on the GitHub
+ * macOS runner alike, Electron updates `nativeTheme.shouldUseDarkColors` but
+ * the renderers' media query never flips. So the same scheme is also emulated
+ * on every page under test, on every platform. That exercises what zeo owns: a
+ * `prefers-color-scheme` change re-coloring an open surface without a reload.
+ * It cannot show that a surface created while the OS appearance is dark starts
+ * in it.
  */
-const EMULATE_COLOR_SCHEME = process.platform !== "darwin";
 let emulatedScheme: "light" | "dark" | null = null;
 const surfaces = new Set<Page>();
 
 async function followAppearance(page: Page): Promise<Page> {
   surfaces.add(page);
-  if (EMULATE_COLOR_SCHEME) await page.emulateMedia({ colorScheme: emulatedScheme });
+  await page.emulateMedia({ colorScheme: emulatedScheme });
   return page;
 }
 
 /**
  * Force the process-wide appearance through Electron's `nativeTheme`, and
- * emulate the same scheme on every tracked surface where that does not reach
- * the renderers.
+ * emulate the same scheme on every tracked surface, since the former does not
+ * reliably reach the renderers.
  */
 async function setThemeSource(
   app: ElectronApplication,
@@ -132,10 +131,8 @@ async function setThemeSource(
   await app.evaluate(({ nativeTheme }, s) => {
     nativeTheme.themeSource = s;
   }, source);
-  if (EMULATE_COLOR_SCHEME) {
-    for (const page of surfaces) {
-      if (!page.isClosed()) await page.emulateMedia({ colorScheme: emulatedScheme });
-    }
+  for (const page of surfaces) {
+    if (!page.isClosed()) await page.emulateMedia({ colorScheme: emulatedScheme });
   }
 }
 
