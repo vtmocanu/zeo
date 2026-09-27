@@ -1,24 +1,28 @@
+/* Tab rows (PRD 10.4 §7.5): one 34px row style for pinned and today tabs.
+   Hover is the ink overlay; the active row is raised off the sidebar. */
 .tab-item {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 6px 8px;
-  border-radius: 6px;
+  gap: 9px;
+  height: var(--row-height);
+  padding: 0 3px 0 10px;
+  border-radius: var(--radius-tab);
+  font-size: var(--text-base);
+  font-weight: var(--weight-medium);
   cursor: pointer;
+  transition:
+    background-color var(--motion-fast) var(--ease-standard),
+    box-shadow var(--motion-fast) var(--ease-standard);
 }
 
 .tab-item:hover {
   background: var(--surface-hover);
 }
 
-.tab-item--active {
+.tab-item--active,
+.tab-item--active:hover {
   background: var(--surface-raised);
-}
-
-.tab-item--pinned {
-  padding: 3px 8px;
-  font-size: 12px;
-  gap: 5px;
+  box-shadow: var(--shadow-raised);
 }
 
 .tab-item__favicon {
@@ -26,12 +30,7 @@
   width: 16px;
   height: 16px;
   object-fit: contain;
-  border-radius: 3px;
-}
-
-.tab-item--pinned .tab-item__favicon {
-  width: 14px;
-  height: 14px;
+  border-radius: 4px;
 }
 
 .tab-item__favicon--fallback {
@@ -39,27 +38,30 @@
   align-items: center;
   justify-content: center;
   color: var(--ink-secondary);
-  font-size: 12px;
+  font-size: var(--text-sm);
   line-height: 1;
 }
 
 .tab-item__title {
   flex: 1;
   min-width: 0;
+  align-self: stretch;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   border: none;
+  border-radius: var(--radius-control);
   background: none;
   color: inherit;
-  font-size: 13px;
+  font: inherit;
   text-align: left;
   padding: 0;
   cursor: pointer;
 }
 
-.tab-item--pinned .tab-item__title {
-  font-size: 12px;
+.tab-item__title:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
 }
 
 /* An unloaded tab (no live WebContentsView) is dimmed to signal it will reload
@@ -69,56 +71,37 @@
   opacity: 0.55;
 }
 
-/* Shared base for the small icon buttons in a row (the tab close button and the
-   archived-row delete button): reset, size, hidden-by-default, plus the shared
-   focus-reveal and hover background. Each button carries this class plus its own
-   class, which keeps only the row-specific (parent-context) reveal selectors. */
-.icon-button {
-  appearance: none;
-  border: none;
-  background: none;
-  color: var(--ink-secondary);
-  font-size: 14px;
-  line-height: 1;
-  cursor: pointer;
-  padding: 2px 4px;
-  border-radius: 4px;
-  flex: 0 0 auto;
+/* Close: the shared 28px icon button, hidden until the row is hovered, active
+   or holds focus, so it stays keyboard-reachable. */
+.tab-item__close {
   opacity: 0;
-  transition: opacity 0.1s ease-in-out;
 }
 
-/* Reveal on the button's own focus; keep keyboard-reachable. */
-.icon-button:focus,
-.icon-button:focus-visible {
-  opacity: 1;
-}
-
-.icon-button:hover {
-  background: var(--surface-hover);
-  color: var(--ink-primary);
-}
-
-/* Reveal the close button on hover, when the row is active, or when any
-   control inside the row is focused (keeps it keyboard-reachable). */
 .tab-item:hover .tab-item__close,
 .tab-item--active .tab-item__close,
-.tab-item:focus-within .tab-item__close {
+.tab-item:focus-within .tab-item__close,
+.tab-item__close:focus-visible {
   opacity: 1;
 }
 
-/* Per-tab blocked-count shield. Always visible when count > 0 (unlike the
-   hover-revealed close button); small, muted, non-interactive badge. */
+/* Trailing badges share one type: 11/600 tabular figures in secondary ink. */
+.tab-item__zoom,
 .tab-item__shield {
   display: inline-flex;
   align-items: center;
-  gap: 2px;
   flex: 0 0 auto;
-  color: var(--ink-secondary);
-  font-size: 11px;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  font-variant-numeric: tabular-nums;
   line-height: 1;
-  padding: 2px 4px;
-  border-radius: 4px;
+  color: var(--ink-secondary);
+}
+
+/* Blocked-request count: shield icon and number. Always visible while
+   count > 0; dimmed while blocking is off globally. */
+.tab-item__shield {
+  gap: 3px;
+  padding: 0 2px;
 }
 
 .tab-item__shield-count {
@@ -129,30 +112,26 @@
   opacity: 0.4;
 }
 
-/* Allowlisted site: blocking is intentionally off for this host. A subtle
-   accent tint distinguishes it from the muted count shield. */
+/* Allowlisted site: blocking is off for this host. The struck shield alone,
+   in the accent, reads apart from the muted count. */
 .tab-item__shield--allowlisted {
   color: var(--accent);
-  background: var(--fill-subtle);
 }
 
-/* Per-site zoom badge on the active tab's row. Sibling of the shield, sized to
-   match it, but interactive: a click resets the host to actual size. Reset the
-   button chrome and use tabular figures so the percentage stays aligned. */
+/* Per-site zoom badge on the active tab's row: a chip that resets the host to
+   actual size on click. */
 .tab-item__zoom {
   appearance: none;
-  display: inline-flex;
-  align-items: center;
-  flex: 0 0 auto;
+  height: 18px;
+  padding: 0 5px;
   border: none;
-  background: transparent;
-  color: var(--ink-secondary);
-  font-size: 11px;
-  line-height: 1;
-  padding: 2px 4px;
-  border-radius: 4px;
-  font-variant-numeric: tabular-nums;
+  border-radius: var(--radius-control);
+  background: var(--fill-subtle);
+  font-family: inherit;
   cursor: pointer;
+  transition:
+    background-color var(--motion-fast) var(--ease-standard),
+    color var(--motion-fast) var(--ease-standard);
 }
 
 .tab-item__zoom:hover {
@@ -162,21 +141,31 @@
 
 .tab-item__zoom:focus-visible {
   outline: 2px solid var(--focus-ring);
-  outline-offset: -2px;
+  outline-offset: 1px;
 }
 
 /* Split view -------------------------------------------------------------- */
 
-/* A tab that currently occupies a split pane. A thin muted left border marks it
-   as paned; the padding is trimmed by the border width so row content stays
-   aligned with the non-paned rows. */
+/* A tab that currently occupies a split pane: a 2px inset bar on the leading
+   edge (a shadow, so the row box and its content never shift). */
 .tab-item--paned {
-  border-left: 2px solid var(--hairline);
-  padding-left: 6px;
+  box-shadow: inset 2px 0 0 var(--hairline);
 }
 
-/* The focused pane's tab: accent the left border so the focused pane reads as
+.tab-item--paned.tab-item--active {
+  box-shadow: inset 2px 0 0 var(--hairline), var(--shadow-raised);
+}
+
+/* The focused pane's tab: the bar turns accent so the focused pane reads as
    distinct from the other pane (this row is also the active tab). */
-.tab-item--pane-focused {
-  border-left-color: var(--accent);
+.tab-item--pane-focused,
+.tab-item--pane-focused.tab-item--active {
+  box-shadow: inset 2px 0 0 var(--accent), var(--shadow-raised);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tab-item,
+  .tab-item__zoom {
+    transition: none;
+  }
 }

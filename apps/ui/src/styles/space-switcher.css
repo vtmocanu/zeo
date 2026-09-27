@@ -1,93 +1,116 @@
-/* Space switcher ---------------------------------------------------------- */
+/* Space switcher (PRD 10.4 §7.8, design book `.zw-space`) ------------------
 
-/* Horizontal, wrapping strip of spaces sitting between the header and the tab
-   sections. Matches the header's 1px divider and padding tokens. */
+   The centre of the bottom bar: one dot per space in its theme color. The
+   strip scrolls sideways without a scrollbar when there are more spaces than
+   fit; the auto margins centre the dots while they fit and let the first one
+   stay reachable once they overflow (plain `justify-content: center` would
+   push the overflow off the leading edge). */
 .space-switcher {
+  flex: 1 1 auto;
+  min-width: 0;
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
-  gap: 4px;
-  padding: 8px;
-  border-bottom: 1px solid var(--hairline);
+  gap: 1px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+
+.space-switcher::-webkit-scrollbar {
+  display: none;
+}
+
+.space-switcher > :first-child {
+  margin-inline-start: auto;
+}
+
+.space-switcher > :last-child {
+  margin-inline-end: auto;
 }
 
 .space-item {
   appearance: none;
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-3);
-  border: 1px solid transparent;
-  background: none;
-  color: var(--ink-primary);
-  border-radius: 6px;
-  padding: 4px 8px;
-  font-size: 12px;
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  position: relative;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: var(--icon-button);
+  height: var(--icon-button);
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-control);
+  background: transparent;
   cursor: pointer;
-}
-
-/* The name sits in its own span so ellipsis still works in a flex row. */
-.space-item__name {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-/* Theme dot (PRD 10.3 §8): the space's swatch color or gradient, neutral
-   when the space is untinted. */
-.space-item__dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  flex: none;
-  background: var(--space-dot, var(--ink-secondary));
+  transition:
+    background-color var(--motion-fast) var(--ease-standard),
+    box-shadow var(--motion-fast) var(--ease-standard);
 }
 
 .space-item:hover {
   background: var(--surface-hover);
 }
 
-.space-item--active {
+.space-item--active,
+.space-item--active:hover {
   background: var(--surface-raised);
+  box-shadow: var(--shadow-raised);
 }
 
+/* Inside the scrolling strip an outer ring would be clipped; draw it inset. */
 .space-item:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: -2px;
 }
 
-.space-new {
-  appearance: none;
-  border: 1px solid var(--hairline);
-  background: var(--fill-subtle);
-  color: var(--ink-primary);
-  border-radius: 6px;
-  padding: 4px 8px;
-  font-size: 12px;
-  line-height: 1;
-  cursor: pointer;
+/* Theme dot (PRD 10.3 §8): the space's swatch color or gradient, neutral
+   when the space is untinted. Quiet at 8px; the active space's dot grows to
+   10px at full strength. */
+.space-item__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--space-dot, var(--ink-secondary));
+  opacity: 0.75;
+  transition:
+    width var(--motion-fast) var(--ease-standard),
+    height var(--motion-fast) var(--ease-standard),
+    opacity var(--motion-fast) var(--ease-standard);
 }
 
-.space-new:hover {
-  background: var(--surface-hover);
+.space-item:hover .space-item__dot {
+  opacity: 1;
 }
 
+.space-item--active .space-item__dot {
+  width: 10px;
+  height: 10px;
+  opacity: 1;
+}
+
+/* The space name editor above the bottom bar: create, rename, new profile. */
 .space-name-input {
   appearance: none;
-  border: 1px solid var(--hairline);
-  background: var(--surface-card);
-  color: var(--ink-primary);
-  border-radius: 6px;
-  padding: 4px 8px;
-  font-size: 12px;
+  flex: 1;
   min-width: 0;
-  flex: 1 1 80px;
+  height: var(--icon-button);
+  padding: 0 10px;
+  border: none;
+  border-radius: var(--radius-pill);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-raised), inset 0 0 0 1px var(--hairline);
+  color: var(--ink-primary);
+  font: inherit;
+  font-size: var(--text-base);
 }
 
 .space-name-input:focus {
-  outline: none;
-  border-color: var(--focus-ring);
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .space-item,
+  .space-item__dot {
+    transition: none;
+  }
 }

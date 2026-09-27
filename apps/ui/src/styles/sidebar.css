@@ -7,7 +7,10 @@
   height: 100vh;
   display: flex;
   flex-direction: column;
+  gap: 10px;
+  padding: 0 var(--space-4) var(--space-4);
   color: var(--ink-primary);
+  font-size: var(--text-base);
   overflow: hidden;
 }
 
@@ -66,45 +69,39 @@
   }
 }
 
-.sidebar__header {
+/* Space label: the active space's name above its tabs. A plain heading with
+   no handlers (e2e clicks it as a neutral target). */
+.sidebar__title {
+  flex: 0 0 auto;
+  height: var(--label-height);
+  margin: 0 0 calc(-1 * var(--space-2));
+  padding-left: 10px;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 12px;
-  border-bottom: 1px solid var(--hairline);
-}
-
-.sidebar__title {
-  margin: 0;
-  font-size: 13px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-label);
   text-transform: uppercase;
   color: var(--ink-secondary);
 }
 
-.sidebar__new-tab {
-  appearance: none;
-  border: 1px solid var(--hairline);
-  background: var(--fill-subtle);
-  color: var(--ink-primary);
-  border-radius: 6px;
-  padding: 4px 8px;
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.sidebar__new-tab:hover {
-  background: var(--surface-hover);
-}
-
+/* The only scroll container. The 4px side gutter (margin pulled back out)
+   gives the rows' focus rings room inside the scrollport. Positioned so
+   `.sidebar__below-pinned`'s offsetTop is measured against it. */
 .sidebar__sections {
+  position: relative;
   flex: 1;
   min-height: 0;
+  margin: 0 calc(-1 * var(--space-2));
+  padding: 0 var(--space-2);
+  overflow-x: hidden;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
+  scrollbar-width: thin;
 }
 
 .sidebar__section {
@@ -113,33 +110,134 @@
 }
 
 /* Stick the pinned section to the top of the `.sidebar__sections` scrollport so
-   a long unpinned list scrolls beneath it instead of carrying it off-screen. The
-   background must be opaque or scrolled unpinned rows bleed through. The sidebar
-   itself is transparent (the window ground is .window-tint: `--surface-window`
-   over the vibrancy), so the section repaints that ground opaquely: the
-   translucent `--surface-window` layered as an image over the opaque
-   `--surface-card`, the closest opaque stand-in for the vibrancy beneath (the
-   card equals the light base and sits within a few levels of the dark one).
-   `z-index` keeps it above a dragged row, which becomes its own stacking context
-   via `.tab-item--dragging`'s `opacity`. */
+   a long today list scrolls beneath it instead of carrying it off-screen. It
+   has no fill: the vibrancy and tint show through it like the rest of the
+   sidebar, and the rows scrolling under it are clipped away instead
+   (`.sidebar__below-pinned`). `z-index` keeps it above a dragged row, which
+   becomes its own stacking context via `.tab-item--dragging`'s `opacity`. */
 .sidebar__section--pinned {
   position: sticky;
   top: 0;
   z-index: 1;
-  background: linear-gradient(var(--surface-window), var(--surface-window)), var(--surface-card);
-  border-bottom: 1px solid var(--hairline);
+}
+
+/* Everything below the pinned section: the Clear divider and today's tabs.
+   `--below-pinned-clip` (set from belowPinnedClip() on scroll and resize) cuts
+   off the part scrolled under the sticky pinned section; the side and bottom
+   insets reach past the box so focus rings are never clipped. */
+.sidebar__below-pinned {
+  --below-pinned-clip: 0px;
+  display: flex;
+  flex-direction: column;
+  clip-path: inset(var(--below-pinned-clip) calc(-1 * var(--space-2)) calc(-1 * var(--space-2)));
 }
 
 .sidebar__list {
   list-style: none;
   margin: 0;
-  padding: 4px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* Divider with Clear: a hairline rule, then the action at the trailing edge. */
+.sidebar__divider {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  height: var(--label-height);
+  padding-left: 10px;
+}
+
+.sidebar__divider::before {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--hairline);
+}
+
+.sidebar__clear {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: var(--label-height);
+  padding: 0 6px;
+  border: none;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--ink-secondary);
+  font: inherit;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  cursor: pointer;
+  transition:
+    background-color var(--motion-fast) var(--ease-standard),
+    color var(--motion-fast) var(--ease-standard);
+}
+
+.sidebar__clear:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--ink-primary);
+}
+
+.sidebar__clear:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+/* Nothing to clear: the action recedes but stays legible as a label. */
+.sidebar__clear:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+/* The New Tab row: a ghost tab row that opens the command bar. */
+.sidebar__new-tab {
+  appearance: none;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  height: var(--row-height);
+  margin-bottom: 2px;
+  padding: 0 3px 0 11px;
+  border: none;
+  border-radius: var(--radius-tab);
+  background: transparent;
+  color: var(--ink-secondary);
+  font: inherit;
+  font-weight: var(--weight-medium);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background-color var(--motion-fast) var(--ease-standard),
+    color var(--motion-fast) var(--ease-standard);
+}
+
+.sidebar__new-tab:hover {
+  background: var(--surface-hover);
+  color: var(--ink-primary);
+}
+
+.sidebar__new-tab:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
 }
 
 .sidebar__empty {
-  padding: 12px;
-  font-size: 12px;
+  margin: 0;
+  padding: var(--space-4) 10px;
+  font-size: var(--text-sm);
   color: var(--ink-secondary);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar__clear,
+  .sidebar__new-tab {
+    transition: none;
+  }
 }
 
 /* Drag reorder ------------------------------------------------------------ */
@@ -167,7 +265,7 @@
 .drop-indicator {
   list-style: none;
   height: 2px;
-  margin: 1px 4px;
+  margin: 0 4px;
   border-radius: 1px;
   background: var(--accent);
 }
@@ -178,10 +276,9 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  min-height: 32px;
-  margin: 4px;
+  min-height: var(--row-height);
   border: 1px dashed var(--hairline);
-  border-radius: 6px;
+  border-radius: var(--radius-tab);
   color: var(--ink-secondary);
 }
 

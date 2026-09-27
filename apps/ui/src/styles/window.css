@@ -52,6 +52,10 @@
   display: flex;
   align-items: center;
   height: var(--window-row-height);
+  /* The sidebar pads its blocks 8px; the row spans the full sidebar width so
+     the traffic-light gutter is measured from the window edge, and sits 4px
+     closer to the URL pill than the sidebar's 10px block gap. */
+  margin: 0 calc(-1 * var(--space-4)) calc(-1 * var(--space-2));
   padding: 0 var(--space-4) 0 78px;
   -webkit-app-region: drag;
   user-select: none;
@@ -64,49 +68,8 @@
   margin-left: auto;
 }
 
-/* `.icon-button` is shared with the hover-revealed row buttons (tab-item.css,
-   loaded later, starts them at opacity 0); the row scope keeps these always
-   visible and gives them the 28px hit target. */
+/* The row's buttons are the shared `.icon-button` (base.css); only the drag
+   exemption is row-specific. */
 .window-row .icon-button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  padding: 0;
-  border-radius: var(--radius-control);
-  color: var(--ink-secondary);
-  opacity: 1;
-  transition:
-    background-color var(--motion-fast) var(--ease-standard),
-    color var(--motion-fast) var(--ease-standard);
   -webkit-app-region: no-drag;
-}
-
-.window-row .icon-button:hover {
-  background: var(--surface-hover);
-  color: var(--ink-primary);
-}
-
-.window-row .icon-button:active {
-  background: var(--fill-subtle);
-}
-
-.window-row .icon-button:focus-visible {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 1px;
-}
-
-/* 16px line icon; stroke comes from the SVG attributes and currentColor. */
-.icon {
-  display: block;
-  width: 16px;
-  height: 16px;
-  flex: 0 0 auto;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .window-row .icon-button {
-    transition: none;
-  }
 }

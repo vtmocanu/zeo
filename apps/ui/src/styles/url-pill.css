@@ -1,0 +1,51 @@
+/* URL pill (PRD 10.4 §7.1, design book `.zw-url`) --------------------------
+
+   The active tab's domain only, never the path: identity at a glance, the
+   full URL in the tooltip. A click opens the command bar in location mode. */
+.url-pill {
+  appearance: none;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  width: 100%;
+  height: var(--url-pill-height);
+  padding: 0 10px 0 12px;
+  border: none;
+  border-radius: var(--radius-pill);
+  background: var(--fill-subtle);
+  color: var(--ink-primary);
+  font: inherit;
+  font-size: var(--text-base);
+  font-weight: var(--weight-medium);
+  text-align: left;
+  cursor: text;
+  transition: background-color var(--motion-fast) var(--ease-standard);
+}
+
+.url-pill:hover {
+  background: var(--surface-hover);
+}
+
+.url-pill:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.url-pill__label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.url-pill__label--placeholder {
+  color: var(--ink-secondary);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .url-pill {
+    transition: none;
+  }
+}

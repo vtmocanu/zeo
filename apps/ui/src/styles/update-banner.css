@@ -1,37 +1,54 @@
-/* In-app update banner (PRD 9.6). Sits between the tab list and the footer;
-   present only while an update is available, so `margin-top: auto` on the
-   footer still keeps the footer pinned to the bottom either way. */
+/* In-app update banner (PRD 9.6, restyled by 10.4 §7.6). Sits between the
+   scroll container and the bottom bar, only while an update is available: a
+   raised card with the message, a dismiss button, and the primary action. */
 .update-banner {
   flex: 0 0 auto;
   display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
-  border-top: 1px solid var(--hairline);
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-4);
+  padding: 10px 10px 10px 12px;
+  border-radius: var(--radius-card);
   background: var(--surface-raised);
-  font-size: 12px;
+  box-shadow: var(--shadow-raised);
   color: var(--ink-primary);
+}
+
+.update-banner__head {
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
 }
 
 .update-banner__text {
   flex: 1 1 auto;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  overflow-wrap: anywhere;
+}
+
+/* The dismiss keeps its 28px hit target but pulls into the card's padding,
+   so the first line stays one text line tall. */
+.update-banner__dismiss {
+  margin: -6px -4px -6px 0;
 }
 
 .update-banner__action {
   appearance: none;
+  height: 24px;
+  padding: 0 9px;
   border: none;
-  border-radius: 4px;
+  border-radius: var(--radius-control);
   background: var(--accent);
   color: var(--ink-on-accent);
-  padding: 4px 10px;
-  font-size: 12px;
-  font-weight: 600;
+  font: inherit;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  white-space: nowrap;
   cursor: pointer;
-  flex: 0 0 auto;
+  transition: background-color var(--motion-fast) var(--ease-standard);
 }
 
 .update-banner__action:hover {
@@ -40,26 +57,11 @@
 
 .update-banner__action:focus-visible {
   outline: 2px solid var(--focus-ring);
-  outline-offset: 2px;
+  outline-offset: 1px;
 }
 
-.update-banner__dismiss {
-  appearance: none;
-  border: none;
-  background: none;
-  color: var(--ink-secondary);
-  font-size: 14px;
-  line-height: 1;
-  padding: 2px 4px;
-  cursor: pointer;
-  flex: 0 0 auto;
-}
-
-.update-banner__dismiss:hover {
-  color: var(--ink-primary);
-}
-
-.update-banner__dismiss:focus-visible {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: -2px;
+@media (prefers-reduced-motion: reduce) {
+  .update-banner__action {
+    transition: none;
+  }
 }

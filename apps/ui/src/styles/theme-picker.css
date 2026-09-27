@@ -1,6 +1,8 @@
 /* Space theme picker (PRD 10.3 §6) ---------------------------------------- */
 
-/* Anchored above the sidebar's bottom edge, inset 8px, as wide as the sidebar
+/* Anchored above the bottom bar (design README §6: the sidebar's 8px bottom
+   inset, the bar, then the 10px block gap), so the space dots it recolours
+   stay in view; inset 8px from the left, as wide as the sidebar
    minus 16px (inline width), so it never crosses into the content card.
    Core-computed colors arrive only as inline custom properties: --swatch on
    swatches and stop dots, --chip-* on the contrast chips. `z-index: 3` lifts
@@ -8,7 +10,9 @@
 .theme-picker {
   position: fixed;
   left: 8px;
-  bottom: 8px;
+  bottom: calc(var(--space-4) + var(--bottom-bar-height) + 10px);
+  max-height: calc(100vh - var(--window-row-height) - var(--space-4) - var(--bottom-bar-height) - 10px);
+  overflow-y: auto;
   z-index: 3;
   box-sizing: border-box;
   display: flex;
