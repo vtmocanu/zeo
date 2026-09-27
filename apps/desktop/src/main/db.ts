@@ -37,7 +37,6 @@ import type {
   HistoryVisit,
   SearchEngineId,
   WindowLayout,
-  WindowState,
   Download,
 } from "@zeo/core";
 
@@ -81,11 +80,20 @@ const DOWNLOADS_DDL =
  * `height` always set — plus the `maximized` flag. There is deliberately NO seed
  * row: its absence means "never saved", so a first run opens with platform
  * defaults. Like the other non-store tables it lives OUTSIDE the
- * {@link writeState} full-state flush, managed only by {@link readWindowState}
- * and {@link writeWindowState}.
+ * {@link writeState} full-state flush, managed only by `readWindowState` and
+ * `writeWindowState` (moved to `db-window.ts`, PRD 10.2).
  */
 const WINDOW_STATE_DDL =
   "CREATE TABLE window_state (id INTEGER PRIMARY KEY CHECK (id = 0), x INTEGER, y INTEGER, width INTEGER NOT NULL, height INTEGER NOT NULL, maximized INTEGER NOT NULL DEFAULT 0);";
+
+/**
+ * The chrome columns added to `window_state` at schema version 13 (PRD 10.2):
+ * the persisted sidebar width and collapsed flag, defaulted so a pre-13 row
+ * upgrades in place with the documented defaults.
+ */
+const WINDOW_STATE_CHROME_DDL =
+  "ALTER TABLE window_state ADD COLUMN sidebarWidth INTEGER NOT NULL DEFAULT 240;" +
+  "ALTER TABLE window_state ADD COLUMN sidebarCollapsed INTEGER NOT NULL DEFAULT 0;";
 
 const DDL = `
 CREATE TABLE profiles (
@@ -134,6 +142,7 @@ CREATE INDEX history_entries_lastVisitedAt ON history_entries(lastVisitedAt);
 ${SITE_ZOOM_DDL}
 ${DOWNLOADS_DDL}
 ${WINDOW_STATE_DDL}
+${WINDOW_STATE_CHROME_DDL}
 `;
 
 /**
@@ -185,6 +194,7 @@ const MIGRATION_STEPS: Record<number, string> = {
     "ALTER TABLE meta ADD COLUMN updateCheckEnabled INTEGER NOT NULL DEFAULT 1;" +
     "ALTER TABLE meta ADD COLUMN updateDismissedVersion TEXT;" +
     "ALTER TABLE meta ADD COLUMN updateLastCheckedAt INTEGER;" + "UPDATE meta SET schemaVersion = 12 WHERE id = 0;",
+  13: WINDOW_STATE_CHROME_DDL + "UPDATE meta SET schemaVersion = 13 WHERE id = 0;",
 };
 
 /** The module-level database handle, `null` until {@link loadStore} opens it. */
@@ -259,7 +269,7 @@ export function migrate(database: DatabaseType): void {
 }
 
 /** Throws when the module-level database handle is not open. */
-function requireDb(): DatabaseType {
+export function requireDb(): DatabaseType {
   if (db === null) {
     throw new Error("database is not open");
   }
@@ -535,59 +545,6 @@ export function writeWindowLayout(layout: WindowLayout): void {
       "UPDATE meta SET layoutMode='single', layoutLeftTabId=NULL, layoutRightTabId=NULL WHERE id=0",
     )
     .run();
-}
-
-/**
- * Reads the persisted window {@link WindowState} from the `window_state` row 0,
- * mapping SQLite's integer `maximized` to a boolean. Returns `null` when no row
- * has been saved yet (its absence means the bounds were never persisted — a first
- * run), so the caller opens with platform defaults; `x`/`y` stay `null` as `null`.
- * Managed ONLY here and by {@link writeWindowState}; like the other window/meta
- * helpers it is kept out of the {@link writeState} full-state flush. Throws when
- * the database is not open.
- */
-export function readWindowState(): WindowState | null {
-  const database = requireDb();
-  // SQLite-row boundary: .get() is typed `unknown`, cast to the known shape.
-  const row = database
-    .prepare("SELECT x, y, width, height, maximized FROM window_state WHERE id=0")
-    .get() as
-    | {
-        x: number | null;
-        y: number | null;
-        width: number;
-        height: number;
-        maximized: number;
-      }
-    | undefined;
-  if (row === undefined) {
-    return null;
-  }
-  return {
-    x: row.x,
-    y: row.y,
-    width: row.width,
-    height: row.height,
-    maximized: row.maximized !== 0,
-  };
-}
-
-/**
- * Persists the window {@link WindowState} to the `window_state` row 0, upserting
- * the single row (`ON CONFLICT(id)` overwrites every column) and mapping the
- * boolean `maximized` to SQLite's integer; `x`/`y` pass through as `number | null`.
- * Synchronous (better-sqlite3). Throws when the database is not open, so a caller's
- * ordered window-state-write contract sees the failure before it changes anything
- * else.
- */
-export function writeWindowState(state: WindowState): void {
-  const database = requireDb();
-  database
-    .prepare(
-      "INSERT INTO window_state (id, x, y, width, height, maximized) VALUES (0, ?, ?, ?, ?, ?) " +
-        "ON CONFLICT(id) DO UPDATE SET x=excluded.x, y=excluded.y, width=excluded.width, height=excluded.height, maximized=excluded.maximized",
-    )
-    .run(state.x, state.y, state.width, state.height, state.maximized ? 1 : 0);
 }
 
 /**

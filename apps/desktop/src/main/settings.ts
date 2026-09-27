@@ -1,6 +1,6 @@
 import { ipcMain, WebContentsView } from "electron";
 import { join } from "node:path";
-import { IPC, SIDEBAR_WIDTH, settingsBounds, searchEngine } from "@zeo/core";
+import { IPC, CARD_INSET, CARD_RADIUS, cardLeft, settingsBounds, searchEngine } from "@zeo/core";
 import type { Settings, SearchEngineId, SettingsSectionId } from "@zeo/core";
 import { writeSearchEngine, writeQuickBrowseExternal } from "./db.js";
 import { runtime, moduleDir } from "./state.js";
@@ -13,10 +13,10 @@ import { broadcast } from "./broadcast.js";
  */
 export function settingsBoundsRect(): Electron.Rectangle {
   if (runtime.win === null) {
-    return { x: SIDEBAR_WIDTH, y: 0, width: 0, height: 0 };
+    return { x: cardLeft(runtime.chrome), y: CARD_INSET, width: 0, height: 0 };
   }
   const [w, h] = runtime.win.getContentSize();
-  return settingsBounds(w, h);
+  return settingsBounds(w, h, runtime.chrome);
 }
 
 /**
@@ -44,6 +44,7 @@ export function openSettings(): void {
         nodeIntegration: false,
       },
     });
+    runtime.settingsView.setBorderRadius(CARD_RADIUS);
     const rendererUrl = process.env.ELECTRON_RENDERER_URL;
     if (rendererUrl !== undefined && rendererUrl !== "") {
       runtime.settingsView.webContents.loadURL(rendererUrl + "?view=settings").catch(() => {

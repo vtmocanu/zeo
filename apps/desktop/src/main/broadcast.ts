@@ -37,6 +37,7 @@ export function fullSnapshot(): TabsState {
     isDefaultBrowser: runtime.isDefaultBrowser,
     appVersion: runtime.appVersion,
     layout: runtime.layout,
+    chrome: runtime.chrome,
     update: runtime.update,
   };
 }

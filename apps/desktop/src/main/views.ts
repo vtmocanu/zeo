@@ -1,6 +1,9 @@
 import { WebContentsView, session } from "electron";
 import {
-  SIDEBAR_WIDTH,
+  CARD_INSET,
+  CARD_RADIUS,
+  cardLeft,
+  contentRect,
   titleForUrl,
   historyKey,
   siteKeyForUrl,
@@ -21,18 +24,13 @@ import { broadcast, noteInactiveChange, scheduleBlockingBroadcast } from "./broa
 import { recordNavigation, logHistoryError } from "./history.js";
 import { applyViewZoom, applyZoom } from "./zoom.js";
 
-/** Bounds of the tab web-view region: everything right of the sidebar. */
+/** Bounds of the tab web-view region: the inset card to the right of the sidebar. */
 export function viewBounds(): Electron.Rectangle {
   if (runtime.win === null) {
-    return { x: SIDEBAR_WIDTH, y: 0, width: 0, height: 0 };
+    return { x: cardLeft(runtime.chrome), y: CARD_INSET, width: 0, height: 0 };
   }
   const [width, height] = runtime.win.getContentSize();
-  return {
-    x: SIDEBAR_WIDTH,
-    y: 0,
-    width: Math.max(0, width - SIDEBAR_WIDTH),
-    height,
-  };
+  return contentRect(width, height, runtime.chrome);
 }
 
 /**
@@ -94,6 +92,7 @@ export function createViewFor(tab: Tab, spaceId: string, urlOverride?: string): 
       nodeIntegrationInSubFrames: true,
     },
   });
+  view.setBorderRadius(CARD_RADIUS);
   runtime.views.set(tab.id, view);
   // Route every page-initiated popup (window.open / target="_blank") into a tab
   // in the owning space instead of a BrowserWindow (#62). The handler calls a
