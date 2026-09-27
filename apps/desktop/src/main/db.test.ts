@@ -1035,9 +1035,11 @@ describe("migrate", () => {
       .prepare("SELECT id, theme FROM spaces ORDER BY id")
       .all() as { id: string; theme: string }[];
     // Rank 0 (space-a) -> MIGRATION_HUE_ORDER[0], rank 1 (space-b) -> [1],
-    // rank 2 (space-z) -> [2]. Reversing or removing the id tie-break would
-    // instead rank them by insertion order (z, a, b) and fail this
-    // assertion.
+    // rank 2 (space-z) -> [2]. Removing the `prior.id < spaces.id` clause
+    // from the backfill's rank subquery (db.ts) would make every tied row
+    // count 0 prior rows, so all three would collapse onto
+    // MIGRATION_HUE_ORDER[0] instead of insertion order — that clause, not
+    // insertion order, is what this test is guarding.
     expect(JSON.parse(rows.find((r) => r.id === "space-a")!.theme)).toEqual({
       stops: [MIGRATION_HUE_ORDER[0]],
       intensity: 1,

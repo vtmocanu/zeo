@@ -1,6 +1,7 @@
 import {
   useEffect,
   useId,
+  useLayoutEffect,
   useRef,
   useState,
   type CSSProperties,
@@ -19,6 +20,7 @@ import {
   themesEqual,
   toHex,
 } from "@zeo/core";
+import { findSpaceItem } from "./dom.js";
 
 export interface ThemePickerProps {
   /** The edited space, not necessarily the active one. */
@@ -27,6 +29,19 @@ export interface ThemePickerProps {
   sidebarWidth: number;
   onChange(theme: SpaceTheme): void;
   onClose(): void;
+  /**
+   * Called synchronously from this component's own `useLayoutEffect`
+   * cleanup, the instant before it unmounts, with whether focus was inside
+   * the picker at that moment. Layout-effect cleanups of a deleted fiber run
+   * before its host DOM nodes are removed, so this is the last point at
+   * which `document.activeElement` reliably reflects "was it in here" —
+   * by the time an ancestor's own effects run (e.g. after a sidebar collapse
+   * or the edited space being removed), the node is already gone and focus
+   * has already fallen back to `<body>`. The parent uses this to restore
+   * focus for those close reasons only; Escape and an outside pointerdown
+   * already move focus themselves before closing, so they report `false`.
+   */
+  reportUnmountFocus(hadFocus: boolean): void;
 }
 
 // Horizontal inset (px) on each side: the picker stays inside the sidebar
@@ -51,6 +66,11 @@ const MAX_PENDING = 32;
  * a recognized echo until an actual external change arrives and resets the
  * record; a single broadcast can therefore match interleaved sends out of
  * order without ever falling through to "external" and rewinding the draft.
+ *
+ * PRD §6 only asks to compare against "the last value the picker sent";
+ * matching the whole pending set is a deliberate widening — this picker is
+ * meant to be the only writer of its own space's theme while open, so the
+ * wider match is not expected to hide a genuine external change in practice.
  */
 export function isOwnThemeEcho(
   incoming: SpaceTheme | null,
@@ -102,6 +122,7 @@ export function ThemePicker({
   sidebarWidth,
   onChange,
   onClose,
+  reportUnmountFocus,
 }: ThemePickerProps): ReactElement {
   const [draft, setDraft] = useState<SpaceTheme | null>(space.theme);
   const [stopIndex, setStopIndex] = useState<0 | 1>(0);
@@ -116,7 +137,22 @@ export function ThemePicker({
   draftRef.current = draft;
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
+  const reportUnmountFocusRef = useRef(reportUnmountFocus);
+  reportUnmountFocusRef.current = reportUnmountFocus;
   const intensityId = useId();
+
+  // Report, right as this unmounts, whether focus was still inside it — see
+  // `reportUnmountFocus` on ThemePickerProps. A plain `useEffect` cleanup
+  // would run too late (after the host node is already removed and the
+  // parent's own effects have already run); `useLayoutEffect` cleanup runs
+  // in time.
+  useLayoutEffect(() => {
+    return () => {
+      const root = document.querySelector('[data-testid="theme-picker"]');
+      const active = document.activeElement;
+      reportUnmountFocusRef.current(root !== null && active instanceof Node && root.contains(active));
+    };
+  }, []);
 
   useEffect(() => {
     const incoming = space.theme;
@@ -183,9 +219,7 @@ export function ThemePicker({
     }
     event.preventDefault();
     event.stopPropagation();
-    const item = document.querySelector<HTMLElement>(
-      `[data-testid="space-item"][data-space-id="${CSS.escape(space.id)}"]`,
-    );
+    const item = findSpaceItem(space.id);
     onClose();
     item?.focus();
   };

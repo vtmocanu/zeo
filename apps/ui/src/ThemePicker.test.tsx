@@ -79,6 +79,7 @@ function render(theme: SpaceTheme | null, sidebarWidth = 232): MarkupNode {
         sidebarWidth={sidebarWidth}
         onChange={() => {}}
         onClose={() => {}}
+        reportUnmountFocus={() => {}}
       />,
     ),
   );
