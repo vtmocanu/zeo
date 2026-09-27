@@ -358,6 +358,23 @@ describe("TabStore.reorder", () => {
     expect(store.list().find((t) => t.id === "t2")?.pinned).toBe(false);
   });
 
+  test("groups are three-way (pinned, today, favorite): reordering a today tab never pulls in a favorite tab", () => {
+    const store = makeStore();
+    store.create({ url: "https://f.test", favoriteId: "fav1" }); // t1 = F (favorite, unpinned)
+    store.create({ url: "https://a.test" }); // t2 = a (today)
+    store.create({ url: "https://b.test" }); // t3 = b (today, active)
+    // Internal array order is [F, a, b]; F and b are both unpinned, so a
+    // two-way "pinned === target.pinned" group would wrongly include F.
+
+    store.reorder("t3", 1); // move b within its (today-only) group
+    // Today-only group is [a, b]; clamped to index 1 (last slot) -> unchanged.
+    expect(store.list().filter((t) => !t.pinned && t.favoriteId === null).map((t) => t.id)).toEqual(
+      ["t2", "t3"],
+    );
+    // The favorite group is untouched by the today-group reorder.
+    expect(store.list().filter((t) => t.favoriteId !== null).map((t) => t.id)).toEqual(["t1"]);
+  });
+
   test("throws on an unknown id", () => {
     const store = makeStore();
     store.create({ url: "https://a.test" });
@@ -1258,5 +1275,41 @@ describe("TabStore.archiveToday", () => {
 
     store.archiveToday();
     expect(store.archiveToday()).toEqual([]);
+  });
+
+  test("re-points active to the true MRU among remaining pinned/favorite tabs, not merely the first one", () => {
+    const store = makeStore();
+    store.create({ url: "https://p.test" }); // t1 = P (created first, oldest)
+    store.pin("t1");
+    store.create({ url: "https://f.test", favoriteId: "fav1" }); // t2 = F (created after P, more recent)
+    store.create({ url: "https://c.test" }); // t3 (active, today)
+
+    // F has a more recent lastActiveAt than P (created later), but P is FIRST
+    // in array/list() order (pinned group first) — a "first open tab"
+    // fallback would wrongly pick P instead of the true MRU, F.
+    store.archiveToday();
+    expect(store.activeTabId).toBe("t2");
+  });
+
+  test("leaves the active pointer unchanged when the active tab is pinned or a favorite", () => {
+    const store = makeStore();
+    store.create({ url: "https://a.test" }); // t1 (today)
+    store.create({ url: "https://p.test" }); // t2 = P (active)
+    store.pin("t2");
+
+    store.archiveToday();
+    expect(store.activeTabId).toBe("t2");
+  });
+
+  test("stamps archivalSeq for multiple today tabs in list() order", () => {
+    const store = makeFrozenStore();
+    store.create({ url: "https://a.test" }); // t1
+    store.create({ url: "https://b.test" }); // t2 (active)
+
+    store.archiveToday();
+    // Both share one archivedAt (frozen clock); archived() ties break by
+    // archivalSeq desc, so the LAST-stamped (last in list() order) tab comes
+    // first: t1 before t2 in list() -> t2 stamped last -> archived() = [t2, t1].
+    expect(store.archived().map((t) => t.id)).toEqual(["t2", "t1"]);
   });
 });

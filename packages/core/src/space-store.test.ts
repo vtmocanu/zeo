@@ -579,6 +579,26 @@ describe("SpaceStore routed tab ops target a tab's owning space", () => {
   });
 });
 
+describe("SpaceStore.reorder groups (three-way, via TabStore)", () => {
+  test("reordering a today tab never pulls in a favorite tab sharing the unpinned flag", () => {
+    const store = makeStore();
+    const f = store.create({ url: "https://f.test" }); // t1
+    store.addFavorite(f.id); // F, still unpinned
+    const a = store.create({ url: "https://a.test" }); // t2 = a (today)
+    const b = store.create({ url: "https://b.test" }); // t3 = b (today, active)
+    // Internal array order is [F, a, b]; F and b are both unpinned, so a
+    // two-way "pinned === target.pinned" group would wrongly include F.
+
+    store.reorder(b.id, 1);
+    expect(
+      store.list().filter((t) => !t.pinned && t.favoriteId === null).map((t) => t.id),
+    ).toEqual([a.id, b.id]);
+    expect(store.list().filter((t) => t.favoriteId !== null).map((t) => t.id)).toEqual([
+      f.id,
+    ]);
+  });
+});
+
 describe("SpaceStore.spaceOfTab ownership tracking", () => {
   test("tracks create, createInSpace, close, remove, and deleteSpace", () => {
     const store = makeStore();
@@ -1492,6 +1512,54 @@ describe("SpaceStore favorites", () => {
     expect(archived.length).toBe(1);
     expect(store.list()).toEqual([]);
   });
+
+  test("archiveToday only affects the active space, leaving other spaces' today tabs open", () => {
+    const store = makeStore();
+    const personalId = store.activeSpaceId;
+    store.create({ url: "https://p.test" }); // Personal today tab
+
+    const work = store.createSpace("Work");
+    store.setActiveSpace(work.id);
+    const w = store.create({ url: "https://w.test" }); // Work today tab
+
+    store.setActiveSpace(personalId);
+    store.archiveToday();
+
+    expect(store.list()).toEqual([]);
+    store.setActiveSpace(work.id);
+    expect(store.list().map((t) => t.id)).toEqual([w.id]);
+  });
+
+  test("updateMeta with a null faviconUrl does not change the linked favorite's faviconUrl", () => {
+    const store = makeStore();
+    const a = store.create({ url: "https://a.test/path" });
+    store.updateMeta(a.id, { faviconUrl: "https://a.test/icon.png" });
+    const favorite = store.addFavorite(a.id);
+    expect(favorite.faviconUrl).toBe("https://a.test/icon.png");
+
+    const result = store.updateMeta(a.id, { faviconUrl: null });
+    expect(result.favoritesChanged).toBe(false);
+    expect(store.favorites().find((f) => f.id === favorite.id)?.faviconUrl).toBe(
+      "https://a.test/icon.png",
+    );
+  });
+
+  test("removeFavorite leaves the unlinked tab as the last today row of its space", () => {
+    const store = makeStore();
+    const a = store.create({ url: "https://a.test" });
+    const b = store.create({ url: "https://b.test" });
+    const favorite = store.addFavorite(a.id);
+
+    store.removeFavorite(favorite.id);
+    expect(store.list().map((t) => t.id)).toEqual([b.id, a.id]);
+  });
+
+  test("snapshot().favorites equals favorites()", () => {
+    const store = makeStore();
+    const a = store.create({ url: "https://a.test" });
+    store.addFavorite(a.id);
+    expect(store.snapshot().favorites).toEqual(store.favorites());
+  });
 });
 
 describe("SpaceStore favorites persistence round trip", () => {
@@ -1567,6 +1635,28 @@ describe("SpaceStore favorites persistence round trip", () => {
     const restored = deserializeStore(persisted);
     expect(restored.list().find((t) => t.id === a.id)?.favoriteId).toBe(favorite.id);
     expect(restored.list().find((t) => t.id === "tDup")?.favoriteId).toBeNull();
+  });
+
+  test("fromPersisted sorts favorites by position and renumbers them, regardless of row order or gaps", () => {
+    const store = makeStore();
+    const a = store.create({ url: "https://a.test" });
+    const b = store.create({ url: "https://b.test" });
+    const favA = store.addFavorite(a.id);
+    const favB = store.addFavorite(b.id);
+    const persisted = store.toPersisted();
+
+    // Shuffle the row order and give the positions gaps: B (pos 5) before A
+    // (pos 2) in the array — the sort by position, not array order, must win.
+    const rowA = persisted.favorites.find((f) => f.id === favA.id)!;
+    const rowB = persisted.favorites.find((f) => f.id === favB.id)!;
+    persisted.favorites = [
+      { ...rowB, position: 5 },
+      { ...rowA, position: 2 },
+    ];
+
+    const restored = deserializeStore(persisted);
+    expect(restored.favorites().map((f) => f.id)).toEqual([favA.id, favB.id]);
+    expect(restored.favorites().map((f) => f.position)).toEqual([0, 1]);
   });
 
   test("repair: a repaired favorite tab persisted pinned=true restores unpinned", () => {

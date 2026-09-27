@@ -27,7 +27,7 @@ interface TabRecord extends Tab {
  * A SINGLE internal array holds every tab — open and archived alike. `list()`
  * and `archived()` derive their views by filtering, so cross-group array
  * position is irrelevant; only the relative order WITHIN a group (pinned,
- * unpinned) matters. All accessors return defensive copies stripped of the
+ * today, favorite) matters. All accessors return defensive copies stripped of the
  * private sequence fields, so external callers can never mutate internal state
  * nor observe the internal bookkeeping. Time and id generation are injectable
  * to keep the store deterministic under test.
@@ -49,9 +49,9 @@ export class TabStore {
    * internal array in EXACTLY the given order and assigning the private sequence
    * fields so the store REPRODUCES the input under `list()`/`archived()`.
    *
-   * The caller passes open tabs in `list()` order (pinned-then-unpinned)
-   * followed by archived tabs in `archived()` order (most-recently-archived
-   * first). Because `list()` filters by the `pinned` flag while preserving array
+   * The caller passes open tabs in `list()` order (pinned, then today, then
+   * favorite) followed by archived tabs in `archived()` order (most-recently-
+   * archived first). Because `list()` filters by group while preserving array
    * order, the open prefix reproduces exactly. For the archived suffix,
    * `archived()` sorts by `archivedAt` desc then `archivalSeq` desc, so an
    * EARLIER archived-array element is given a LARGER `archivalSeq`; that keeps
@@ -417,8 +417,8 @@ export class TabStore {
   }
 
   /**
-   * Moves an OPEN tab to `toIndex` WITHIN its own group (pinned or unpinned);
-   * the index is interpreted within that group and clamped to its bounds.
+   * Moves an OPEN tab to `toIndex` WITHIN its own group (pinned, today, or
+   * favorite); the index is interpreted within that group and clamped to its bounds.
    * Throws on an unknown or archived id. The other group and archived tabs keep
    * their positions.
    */
@@ -460,8 +460,8 @@ export class TabStore {
   }
 
   /**
-   * Moves an OPEN tab to the FIRST position of its own group (pinned or
-   * unpinned). Delegates to {@link reorder}, which performs all validation
+   * Moves an OPEN tab to the FIRST position of its own group (pinned, today,
+   * or favorite). Delegates to {@link reorder}, which performs all validation
    * (unknown/archived id, non-integer index) and leaves the other group and
    * archived tabs in place. An already-first or single-tab move is a no-op.
    */
@@ -470,8 +470,8 @@ export class TabStore {
   }
 
   /**
-   * Moves an OPEN tab to the LAST position of its own group (pinned or
-   * unpinned). {@link reorder} clamps an out-of-range index to the last slot of
+   * Moves an OPEN tab to the LAST position of its own group (pinned, today, or
+   * favorite). {@link reorder} clamps an out-of-range index to the last slot of
    * the tab's group and performs all validation (unknown/archived id,
    * non-integer index); `Number.MAX_SAFE_INTEGER` is a finite integer, so it
    * passes the integer guard and lands the tab last. (`Infinity` would throw —
@@ -555,10 +555,11 @@ export class TabStore {
   }
 
   /**
-   * Auto-archives every OPEN tab that has gone idle: not pinned, not the active
-   * tab, and whose age (`this.now() - lastActiveAt`) is STRICTLY GREATER THAN
-   * `maxIdleMs`. A tab whose age exactly equals `maxIdleMs` is kept (the PRD
-   * archives tabs "older than" the threshold, not at it). Each archived tab is
+   * Auto-archives every OPEN tab that has gone idle: not pinned, not a
+   * favorite, not the active tab, and whose age (`this.now() - lastActiveAt`)
+   * is STRICTLY GREATER THAN `maxIdleMs`. A tab whose age exactly equals
+   * `maxIdleMs` is kept (the PRD archives tabs "older than" the threshold, not
+   * at it). Each archived tab is
    * stamped exactly as `archive` stamps it: `archivedAt` from the clock plus a
    * fresh `archivalSeq`.
    *
