@@ -118,6 +118,13 @@ const commandHandlers: Record<CommandId, () => void> = {
       action: "rename",
       spaceId: runtime.store.activeSpaceId,
     }),
+  "space.editTheme": () => {
+    runtime.win?.webContents.send(IPC.spaceMenuAction, {
+      action: "edit-theme",
+      spaceId: runtime.store.activeSpaceId,
+    });
+    runtime.win?.webContents.focus();
+  },
   "space.delete": () => deleteSpace(runtime.store.activeSpaceId),
   "bar.open-location": () => openCommandBar("navigate"),
   "bar.open-commands": () => {

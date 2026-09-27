@@ -1,6 +1,6 @@
 import { ipcMain, Menu, session } from "electron";
 import type { MenuItemConstructorOptions } from "electron";
-import { IPC, buildSpaceContextMenu } from "@zeo/core";
+import { IPC, buildSpaceContextMenu, normalizeTheme, themesEqual } from "@zeo/core";
 import type { Profile, Space, SpaceContextMenuResult, SpacesState } from "@zeo/core";
 import { updateDownload } from "./db.js";
 import { terminalizeProfileDownloads } from "./download-ops.js";
@@ -161,6 +161,16 @@ export function showSpaceContextMenu(id: string, x: number, y: number): SpaceCon
             ),
           };
         }
+        if (item.id === "edit-theme") {
+          return {
+            label: item.label,
+            enabled: item.enabled,
+            click: wrap(item.id, () => {
+              popWin.webContents.send(IPC.spaceMenuAction, { action: "edit-theme", spaceId: id });
+              popWin.webContents.focus();
+            }),
+          };
+        }
         if (item.id === "delete") {
           return {
             label: item.label,
@@ -302,6 +312,35 @@ export function createProfileAndAssign(
   return profile;
 }
 
+/**
+ * Validates and applies a space's theme (PRD 10.3 §4). `id` must be a string
+ * and `theme` must be `null` or normalize via {@link normalizeTheme}; either
+ * failure throws a `TypeError` and changes nothing. A theme equal to the
+ * space's current one (per {@link themesEqual}) is a no-op — no store write,
+ * no broadcast. `runtime.store.spaceTheme`/`setSpaceTheme` throw on an unknown
+ * space id, which propagates out and rejects the invoke unchanged.
+ */
+export function setSpaceTheme(id: unknown, theme: unknown): void {
+  if (typeof id !== "string") {
+    throw new TypeError("spaces.setTheme: id must be a string");
+  }
+  let next: ReturnType<typeof normalizeTheme>;
+  if (theme === null) {
+    next = null;
+  } else {
+    next = normalizeTheme(theme);
+    if (next === null) {
+      throw new TypeError("spaces.setTheme: invalid theme");
+    }
+  }
+  const current = runtime.store.spaceTheme(id);
+  if (themesEqual(current, next)) {
+    return;
+  }
+  runtime.store.setSpaceTheme(id, next);
+  broadcast();
+}
+
 // --- Space commands -----------------------------------------------------------
 // The renderer's single UI bridge drives these; tab WebContentsViews have no
 // bridge and cannot dispatch. A thrown Error (unknown/last space) propagates out
@@ -338,6 +377,11 @@ ipcMain.handle(IPC.spacesDelete, (_event, id: string): void => {
 ipcMain.handle(IPC.spacesSetProfile, (_event, spaceId: string, profileId: string): void => {
   remapSpaceProfile(spaceId, profileId);
 });
+
+ipcMain.handle(
+  IPC.spacesSetTheme,
+  (_event, id: unknown, theme: unknown): void => setSpaceTheme(id, theme),
+);
 
 ipcMain.handle(IPC.profilesCreate, (_event, name: string): Profile => {
   const profile = runtime.store.createProfile(name);
