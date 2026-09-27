@@ -1035,11 +1035,13 @@ describe("migrate", () => {
       .prepare("SELECT id, theme FROM spaces ORDER BY id")
       .all() as { id: string; theme: string }[];
     // Rank 0 (space-a) -> MIGRATION_HUE_ORDER[0], rank 1 (space-b) -> [1],
-    // rank 2 (space-z) -> [2]. Removing the `prior.id < spaces.id` clause
-    // from the backfill's rank subquery (db.ts) would make every tied row
-    // count 0 prior rows, so all three would collapse onto
-    // MIGRATION_HUE_ORDER[0] instead of insertion order — that clause, not
-    // insertion order, is what this test is guarding.
+    // rank 2 (space-z) -> [2]. The backfill's rank subquery (db.ts) breaks a
+    // position tie by `prior.id < spaces.id`; drop just that conjunct and
+    // each tied row counts every tied row (itself included), so all three
+    // collapse onto the SAME later hue instead. Drop the whole `OR (...)`
+    // branch instead and a position tie counts 0 prior rows for every tied
+    // row, so all three collapse onto the same EARLIER hue instead. Either
+    // mutation fails this assertion.
     expect(JSON.parse(rows.find((r) => r.id === "space-a")!.theme)).toEqual({
       stops: [MIGRATION_HUE_ORDER[0]],
       intensity: 1,

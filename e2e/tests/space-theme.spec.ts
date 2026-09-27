@@ -350,6 +350,7 @@ test.describe("PRD 10.3 space themes", () => {
       await expect.poll(() => readAccent(settings)).toBe(bAccent);
 
       // Command-bar overlay, opened while B is still active.
+      await waitForViewsIdle(app);
       await sidebar.evaluate(async () => {
         const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
         await zeo.commandBar.open("commands");
@@ -564,9 +565,12 @@ test.describe("PRD 10.3 space themes", () => {
     }
   });
 
-  // --- Regression: the command-bar UI path must not steal focus back to a ------
-  // page view after `space.editTheme` closes the bar (apps/desktop/src/main/
-  // commands.ts calls closeCommandBar() itself, first, precisely to avoid this).
+  // --- The command-bar UI path opens a focused picker. -------------------------
+  // openSpaceThemeEditor (apps/desktop/src/main/theme-editor.ts) closes the bar
+  // before focusing the sidebar, so acceptCommandBar's own close cannot move
+  // focus to a page view afterwards. Under xvfb the page view never takes focus
+  // even without that ordering, so the ordering itself is guarded by
+  // theme-editor.test.ts; this test covers the end-to-end path.
   test("running Edit Space Theme through the command bar keeps the picker open and focused", async () => {
     const userDataDir = mkdtempSync(join(tmpdir(), "zeo-theme-cmdbar-"));
     const { app, sidebar } = await launch(userDataDir);
@@ -630,10 +634,99 @@ test.describe("PRD 10.3 space themes", () => {
     }
   });
 
+  // --- Removing the edited space while its picker has focus restores focus. ---
+  test("deleting the edited (non-active) space closes its picker and restores focus to the remaining space's item", async () => {
+    const userDataDir = mkdtempSync(join(tmpdir(), "zeo-theme-removed-"));
+    const { app, sidebar } = await launch(userDataDir);
+    try {
+      const before = await readSpaces(sidebar);
+      const personalId = before.activeSpaceId;
+      const b = await sidebar.evaluate(async () => {
+        const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+        return zeo.spaces.create("B");
+      });
+
+      // Open B's picker directly (mirrors a native space-context-menu click),
+      // without activating B — the picker can edit a non-active space's theme.
+      await sendEditThemeAction(app, b.id);
+      await expect(picker(sidebar)).toBeVisible();
+      await expect(picker(sidebar)).toHaveAttribute("data-space-id", b.id);
+      await expect.poll(async () =>
+        sidebar.evaluate(() => {
+          const root = document.querySelector('[data-testid="theme-picker"]');
+          const el = document.activeElement;
+          return root !== null && el instanceof Node && root.contains(el);
+        }),
+      ).toBe(true);
+
+      await sidebar.evaluate(async (id) => {
+        const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+        await zeo.spaces.delete(id);
+      }, b.id);
+
+      await expect(picker(sidebar)).toHaveCount(0);
+      await expect.poll(() => activeTestId(sidebar)).toBe("space-item");
+      const focusedId = await sidebar.evaluate(
+        () => document.activeElement?.getAttribute("data-space-id") ?? null,
+      );
+      expect(focusedId).toBe(personalId);
+    } finally {
+      await resetThemeSource(app);
+      await app.close();
+      rmSync(userDataDir, { recursive: true, force: true });
+    }
+  });
+
+  // --- Activating a different space while the picker has focus restores focus. -
+  test("activating a different space closes the edited space's picker and restores focus to the edited space's item", async () => {
+    const userDataDir = mkdtempSync(join(tmpdir(), "zeo-theme-active-change-"));
+    const { app, sidebar } = await launch(userDataDir);
+    try {
+      const before = await readSpaces(sidebar);
+      const personalId = before.activeSpaceId;
+      const c = await sidebar.evaluate(async () => {
+        const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+        return zeo.spaces.create("C");
+      });
+
+      // Open the still-active Personal space's own picker.
+      await sendEditThemeAction(app, personalId);
+      await expect(picker(sidebar)).toBeVisible();
+      await expect(picker(sidebar)).toHaveAttribute("data-space-id", personalId);
+      await expect.poll(async () =>
+        sidebar.evaluate(() => {
+          const root = document.querySelector('[data-testid="theme-picker"]');
+          const el = document.activeElement;
+          return root !== null && el instanceof Node && root.contains(el);
+        }),
+      ).toBe(true);
+
+      await sidebar.evaluate(async (id) => {
+        const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+        await zeo.spaces.activate(id);
+      }, c.id);
+
+      await expect(picker(sidebar)).toHaveCount(0);
+      await expect.poll(() => activeTestId(sidebar)).toBe("space-item");
+      const focusedId = await sidebar.evaluate(
+        () => document.activeElement?.getAttribute("data-space-id") ?? null,
+      );
+      // restoreFocusFromThemePicker prefers the EDITED space's own item over
+      // the newly-active one.
+      expect(focusedId).toBe(personalId);
+    } finally {
+      await resetThemeSource(app);
+      await app.close();
+      rmSync(userDataDir, { recursive: true, force: true });
+    }
+  });
+
   // --- Sidebar collapse while the picker has focus must close it cleanly. -----
-  // NOTE: unlike the active-space-change and edited-space-removal paths (both
-  // covered above, and both restoring focus to a space-item), a FULL collapse
-  // (`sidebarCollapsed && !sidebarRevealed`, exactly what `view.toggleSidebar`
+  // NOTE: unlike the active-space-change and edited-space-removal paths, each
+  // covered by its own test directly above ("activating a different space
+  // closes the edited space's picker..." and "deleting the edited (non-active)
+  // space closes its picker...") and both restoring focus to a space-item, a
+  // FULL collapse (`sidebarCollapsed && !sidebarRevealed`, exactly what `view.toggleSidebar`
   // produces here) sets `visibility: hidden` on the whole `<aside data-testid=
   // "sidebar">` (`.sidebar--hidden`, styles/sidebar.css) in the SAME commit
   // that unmounts the picker. A hidden element (and everything inside it,

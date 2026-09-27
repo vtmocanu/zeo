@@ -599,6 +599,14 @@ function pickerContainsActiveElement(): boolean {
  * `hadFocus` there comes from `ThemePicker`'s own `useLayoutEffect` cleanup
  * (see `reportUnmountFocus` below), captured while its DOM was still present
  * — a plain DOM check at that point would always see `<body>`.
+ *
+ * Documented limitation: on a FULL sidebar collapse (`sidebarCollapsed &&
+ * !sidebarRevealed`) the whole `<aside data-testid="sidebar">` becomes
+ * `visibility: hidden` (`.sidebar--hidden`, styles/sidebar.css) in the same
+ * commit that unmounts the picker, so no space-item inside it is focusable
+ * per the HTML focusability rules — `item?.focus()` below is then a verified
+ * no-op and focus falls back to `<body>`. That is the correct outcome of the
+ * sidebar itself going invisible, not something this function can prevent.
  */
 function restoreFocusFromThemePicker(
   hadFocus: boolean,
@@ -713,6 +721,7 @@ export function App() {
   useEffect(() => {
     if (themeEditSpaceId !== null && themeEditSpace === undefined) {
       restoreFocusFromThemePicker(themePickerHadFocusRef.current, themeEditSpaceId, state.activeSpaceId);
+      themePickerHadFocusRef.current = false;
       setThemeEditSpaceId(null);
     }
   }, [themeEditSpaceId, themeEditSpace, state.activeSpaceId]);

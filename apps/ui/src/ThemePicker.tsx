@@ -38,8 +38,13 @@ export interface ThemePickerProps {
    * by the time an ancestor's own effects run (e.g. after a sidebar collapse
    * or the edited space being removed), the node is already gone and focus
    * has already fallen back to `<body>`. The parent uses this to restore
-   * focus for those close reasons only; Escape and an outside pointerdown
-   * already move focus themselves before closing, so they report `false`.
+   * focus for those close reasons only; Escape moves focus itself (to the
+   * space's own item) before closing, so it reliably reports `false`. An
+   * outside pointerdown or a window blur does NOT move focus itself, so
+   * this can still report `true` for those closes — harmlessly, since the
+   * parent never consults this value for a plain outside-pointerdown/blur
+   * close, only for the sidebar-collapse, active-space-change and
+   * edited-space-removed paths.
    */
   reportUnmountFocus(hadFocus: boolean): void;
 }
