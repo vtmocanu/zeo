@@ -9,6 +9,30 @@ milestone, a minor bump only for very large breakthroughs.
 
 ## [Unreleased]
 
+## [0.0.30] - 2026-09-27
+
+### Added
+
+- Frameless window: the title bar is gone. The traffic lights sit in a 44 px
+  window row at the top of the sidebar, which drags the window and holds
+  Toggle Sidebar, Back, Forward and Reload buttons. The window uses the
+  macOS `sidebar` vibrancy.
+- The sidebar is resizable: drag its right edge (or focus the handle and use
+  the arrow keys) to set a width between 200 and 360 px.
+- View ▸ Toggle Sidebar (⌘S) collapses the sidebar and hides the traffic
+  lights. Touching the left edge of the window slides it back in; it hides
+  again 400 ms after the pointer leaves, or when the window loses focus.
+- The sidebar width and collapsed state survive a relaunch.
+
+### Changed
+
+- Pages, split panes and settings now sit in an inset card with rounded
+  corners, a hairline and a shadow, 8 px from the window's top, right and
+  bottom edges. Split panes are two cards with an 8 px gap.
+- Database schema version 13: `window_state` gains `sidebarWidth` and
+  `sidebarCollapsed` columns. Existing databases migrate in place and keep
+  their saved window bounds.
+
 ## [0.0.29] - 2026-09-27
 
 ### Added
