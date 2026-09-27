@@ -1,5 +1,9 @@
 import { describe, expect, test, vi, beforeEach, afterEach } from "vitest";
 
+const h = vi.hoisted(() => ({
+  setBackgroundColor: vi.fn(),
+}));
+
 vi.mock("electron", () => ({
   ipcMain: { handle: () => {} },
   WebContentsView: class {
@@ -8,7 +12,9 @@ vi.mock("electron", () => ({
       loadFile: () => Promise.resolve(),
       focus: () => {},
     };
-    setBackgroundColor(_color: string) {}
+    setBackgroundColor(color: string) {
+      h.setBackgroundColor(color);
+    }
     setBounds(_bounds: unknown) {}
     setVisible(_visible: boolean) {}
   },
@@ -34,6 +40,7 @@ describe("openSettings", () => {
   const originalCloseFindSession = runtime.closeFindSession;
 
   beforeEach(() => {
+    h.setBackgroundColor.mockClear();
     runtime.win = {
       contentView: { addChildView: () => {} },
       getContentSize: () => [1000, 700],
@@ -52,16 +59,35 @@ describe("openSettings", () => {
   });
 
   test("closes an open find session before adding the view", () => {
-    const closeFindSession = vi.fn();
+    const order: string[] = [];
+    const closeFindSession = vi.fn(() => {
+      order.push("closeFindSession");
+    });
     runtime.closeFindSession = closeFindSession;
+    const addChildView = vi.fn(() => {
+      order.push("addChildView");
+    });
+    runtime.win = {
+      contentView: { addChildView },
+      getContentSize: () => [1000, 700],
+    } as unknown as typeof runtime.win;
 
     openSettings();
 
     expect(closeFindSession).toHaveBeenCalledWith(false);
     expect(runtime.settingsOpen).toBe(true);
+    expect(order).toEqual(["closeFindSession", "addChildView"]);
   });
 
-  test("is a no-op past the find-close hook when there is no window", () => {
+  test("sets a transparent background on the settings view", () => {
+    runtime.closeFindSession = () => {};
+
+    openSettings();
+
+    expect(h.setBackgroundColor).toHaveBeenCalledWith("#00000000");
+  });
+
+  test("does nothing (not even closing find) when there is no window", () => {
     runtime.win = null;
     const closeFindSession = vi.fn();
     runtime.closeFindSession = closeFindSession;
