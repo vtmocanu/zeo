@@ -56,6 +56,7 @@ const ALL_IDS: CommandId[] = [
   "view.focusOtherPane",
   "view.swapPanes",
   "update.check",
+  "view.toggleSidebar",
 ];
 
 /**
@@ -218,6 +219,20 @@ describe("update.check command", () => {
   test("is enabled in every context", () => {
     expect(isCommandEnabled("update.check", context({ activeTab: null, spaceCount: 1 }))).toBe(true);
     expect(isCommandEnabled("update.check", context({ activeTab: activeTab(), spaceCount: 3, settingsOpen: true }))).toBe(true);
+  });
+});
+
+describe("view.toggleSidebar command", () => {
+  test("is registered in the view menu with the CmdOrCtrl+S accelerator", () => {
+    const entry = COMMANDS.find((c) => c.id === "view.toggleSidebar");
+    expect(entry).toBeDefined();
+    expect(entry?.menu).toBe("view");
+    expect(entry?.accelerator).toBe("CmdOrCtrl+S");
+  });
+
+  test("is enabled in every context", () => {
+    expect(isCommandEnabled("view.toggleSidebar", context({ activeTab: null, spaceCount: 1 }))).toBe(true);
+    expect(isCommandEnabled("view.toggleSidebar", context({ activeTab: activeTab(), spaceCount: 3, settingsOpen: true }))).toBe(true);
   });
 });
 
@@ -554,13 +569,13 @@ describe("isCommandEnabled — no active tab yields exactly the expected set", (
 
   test("with one space: only the always-enabled commands", () => {
     expect(enabledIds(context({ activeTab: null, spaceCount: 1 }))).toEqual(
-      ["bar.open-commands", "bar.open-location", "blocking.toggle", "browser.setDefault", "downloads.open", "downloads.openFolder", "history.clear", "history.open", "settings.open", "settings.openGeneral", "settings.openHistory", "settings.openProfiles", "space.new", "space.rename", "tab.new", "update.check"].sort(),
+      ["bar.open-commands", "bar.open-location", "blocking.toggle", "browser.setDefault", "downloads.open", "downloads.openFolder", "history.clear", "history.open", "settings.open", "settings.openGeneral", "settings.openHistory", "settings.openProfiles", "space.new", "space.rename", "tab.new", "update.check", "view.toggleSidebar"].sort(),
     );
   });
 
   test("with more than one space: the always-enabled commands plus space.delete", () => {
     expect(enabledIds(context({ activeTab: null, spaceCount: 2 }))).toEqual(
-      ["bar.open-commands", "bar.open-location", "blocking.toggle", "browser.setDefault", "downloads.open", "downloads.openFolder", "history.clear", "history.open", "settings.open", "settings.openGeneral", "settings.openHistory", "settings.openProfiles", "space.delete", "space.new", "space.rename", "tab.new", "update.check"].sort(),
+      ["bar.open-commands", "bar.open-location", "blocking.toggle", "browser.setDefault", "downloads.open", "downloads.openFolder", "history.clear", "history.open", "settings.open", "settings.openGeneral", "settings.openHistory", "settings.openProfiles", "space.delete", "space.new", "space.rename", "tab.new", "update.check", "view.toggleSidebar"].sort(),
     );
   });
 });

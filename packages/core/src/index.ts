@@ -151,7 +151,6 @@ export type {
 export { parseChangelogSection } from "./release.js";
 export type { ChangelogSection } from "./release.js";
 export {
-  SIDEBAR_WIDTH,
   SPACE_ACTIVATE_DELAY_MS,
   COMMAND_BAR_HEIGHT,
   SUGGESTION_ROW_HEIGHT,
@@ -169,6 +168,27 @@ export {
   DIVIDER_WIDTH,
   splitPaneBounds,
 } from "./layout.js";
+export {
+  SIDEBAR_DEFAULT_WIDTH,
+  SIDEBAR_MIN_WIDTH,
+  SIDEBAR_MAX_WIDTH,
+  CARD_INSET,
+  WINDOW_ROW_HEIGHT,
+  SIDEBAR_REVEAL_EDGE,
+  SIDEBAR_HIDE_DELAY_MS,
+  CARD_RADIUS,
+  TRAFFIC_LIGHT_POSITION,
+  DEFAULT_CHROME_STATE,
+  clampSidebarWidth,
+  sidebarVisible,
+  cardLeft,
+  contentRect,
+  withSidebarWidth,
+  withSidebarRevealed,
+  toggleSidebar,
+  restoreChrome,
+} from "./chrome.js";
+export type { ChromeState, PersistedChrome } from "./chrome.js";
 export {
   openQuickBrowse,
   replaceQuickBrowseUrl,
