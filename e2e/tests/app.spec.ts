@@ -162,7 +162,7 @@ interface ZeoBridge {
     >;
     run(id: string): Promise<void>;
   };
-  // PRD 10.6-adjacent in-page find bridge, redeclared structurally like the rest
+  // PRD 6.3 — the in-page find bridge, redeclared structurally like the rest
   // of this file (mirrors @zeo/core's FindState). Only the slice this spec
   // touches — closing an open find session and reading back `open` — is typed.
   find: {
@@ -3031,23 +3031,19 @@ test.describe("zeo desktop app", () => {
     expect(look.scrimBg).not.toBe("rgba(0, 0, 0, 0)");
     expect(look.scrimBg).not.toBe("transparent");
 
-    // Instrument the focus handoff BEFORE the scrim click: closeCommandBar calls
-    // .focus() on either the active tab's webContents or (no active tab) the
-    // window's own (sidebar) webContents — see command-bar.ts. Wrapping .focus()
-    // on both candidates and recording which one fired gives a deterministic
-    // signal that survives environments where getFocusedWebContents() below
-    // never observes a native focus change at all: under docker/xvfb (headless,
-    // no real window manager) a WebContentsView backing a plain page can simply
-    // never win OS keyboard focus, so getFocusedWebContents() can stay `null`
-    // through the whole handoff (this is exactly why the poll below maps `null`
-    // to `""` — see commit 7eef255). That makes "focused webContents is not the
-    // overlay" the strongest ASSERTION the native API can support headlessly,
-    // but it is satisfied by "focus left the overlay" as much as by "focus
-    // landed on the tab/sidebar" — it does not prove the handoff target. This
-    // wrapper closes that gap: it proves .focus() was actually invoked, and on
-    // which target, regardless of whether the OS ever reflects it back.
-    await app.evaluate(
-      ({ BrowserWindow, webContents }, activeTabUrl) => {
+    // This run has an active tab, so closeCommandBar's active-tab branch (not
+    // its no-active-tab sidebar fallback) is the one under test.
+    expect(before.url, "expected an active tab for this assertion to be meaningful").not.toBeNull();
+
+    // Instrument the focus handoff BEFORE the scrim click: wrapping .focus() on
+    // the sidebar and the active tab's webContents and recording which one
+    // fires proves closeCommandBar actually invoked .focus(), and on which
+    // target, even where the native focused-webContents check below can only
+    // prove focus left the overlay. The tab's webContents is resolved once
+    // here, restricted to the window's own content-view children (excluding
+    // the overlay), and reused below rather than re-matched by URL.
+    const { tabId, sidebarId } = await app.evaluate(
+      ({ BrowserWindow }, activeTabUrl) => {
         const marker = globalThis as unknown as { __zeoFocusTargetId?: number };
         marker.__zeoFocusTargetId = undefined;
         const win = BrowserWindow.getAllWindows()[0];
@@ -3059,10 +3055,18 @@ test.describe("zeo desktop app", () => {
             original();
           };
         }
-        const tabWc =
-          activeTabUrl === null
-            ? undefined
-            : webContents.getAllWebContents().find((w) => w.getURL() === activeTabUrl);
+        const tabView = (win?.contentView.children ?? []).find((child) => {
+          const wc = (child as { webContents?: { getURL(): string } }).webContents;
+          return (
+            wc != null &&
+            (wc as unknown) !== (sidebarWc as unknown) &&
+            !wc.getURL().includes("view=command-bar") &&
+            wc.getURL() === activeTabUrl
+          );
+        });
+        const tabWc = (
+          tabView as { webContents?: typeof sidebarWc } | undefined
+        )?.webContents;
         if (tabWc != null && !tabWc.isDestroyed()) {
           const original = tabWc.focus.bind(tabWc);
           tabWc.focus = () => {
@@ -3070,62 +3074,72 @@ test.describe("zeo desktop app", () => {
             original();
           };
         }
+        return { tabId: tabWc?.id ?? null, sidebarId: sidebarWc?.id ?? null };
       },
       before.url,
     );
 
-    // Bottom-left corner: over the sidebar's bottom bar, outside the panel.
-    await overlay.mouse.click(4, look.innerHeight - 4);
-    await expect
-      .poll(async () =>
-        sidebar.evaluate(async () => {
-          const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
-          return (await zeo.commandBar.state()).open;
-        }),
-      )
-      .toBe(false);
+    try {
+      // Bottom-left corner: over the sidebar's bottom bar, outside the panel.
+      await overlay.mouse.click(4, look.innerHeight - 4);
+      await expect
+        .poll(async () =>
+          sidebar.evaluate(async () => {
+            const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+            return (await zeo.commandBar.state()).open;
+          }),
+        )
+        .toBe(false);
 
-    const after = await snapshot();
-    expect(after.tabs).toBe(before.tabs);
-    expect(after.spaces).toBe(before.spaces);
-    expect(canonicalTabUrl(after.url)).toBe(canonicalTabUrl(before.url));
+      const after = await snapshot();
+      expect(after.tabs).toBe(before.tabs);
+      expect(after.spaces).toBe(before.spaces);
+      expect(canonicalTabUrl(after.url)).toBe(canonicalTabUrl(before.url));
 
-    // Closing hands focus back to the active tab (or the sidebar): the overlay
-    // is no longer the focused webContents. No focused webContents at all (the
-    // window lost OS focus) also means "not the overlay". This native check is
-    // necessarily weak (see the instrumentation comment above): it can only
-    // fail closed, it can never confirm the handoff landed on the right target.
-    await expect
-      .poll(() =>
-        app.evaluate(({ webContents }) => {
-          const focused = webContents.getFocusedWebContents();
-          return focused === null ? "" : focused.getURL();
-        }),
-      )
-      .not.toContain("view=command-bar");
+      // Closing hands focus back to the active tab (or the sidebar): the overlay
+      // is no longer the focused webContents. No focused webContents at all (the
+      // window lost OS focus) also means "not the overlay". This native check is
+      // necessarily weak (see the instrumentation comment above): it can only
+      // fail closed, it can never confirm the handoff landed on the right target.
+      await expect
+        .poll(() =>
+          app.evaluate(({ webContents }) => {
+            const focused = webContents.getFocusedWebContents();
+            return focused === null ? "" : focused.getURL();
+          }),
+        )
+        .not.toContain("view=command-bar");
 
-    // The strong assertion: closeCommandBar's .focus() call landed on the active
-    // tab's webContents or the sidebar's — never left unset, and never the
-    // overlay (whose .focus() was not wrapped, so it can't produce a false
-    // match here).
-    const { targetId, sidebarId, tabId } = await app.evaluate(
-      ({ BrowserWindow, webContents }, activeTabUrl) => {
-        const marker = globalThis as unknown as { __zeoFocusTargetId?: number };
-        const win = BrowserWindow.getAllWindows()[0];
-        const tabWc =
-          activeTabUrl === null
-            ? undefined
-            : webContents.getAllWebContents().find((w) => w.getURL() === activeTabUrl);
-        return {
-          targetId: marker.__zeoFocusTargetId ?? null,
-          sidebarId: win?.webContents.id ?? null,
-          tabId: tabWc?.id ?? null,
-        };
-      },
-      before.url,
-    );
-    expect(targetId, "closeCommandBar must call .focus() on a real handoff target").not.toBeNull();
-    expect([sidebarId, tabId]).toContain(targetId);
+      // The strong assertion: with an active tab, closeCommandBar's .focus()
+      // call must land on that tab's webContents specifically — not merely on
+      // "the sidebar or the tab" — so a wrong handoff to the sidebar is caught
+      // here rather than silently accepted.
+      const targetId = await app.evaluate(
+        () => (globalThis as unknown as { __zeoFocusTargetId?: number }).__zeoFocusTargetId ?? null,
+      );
+      expect(tabId, "expected to resolve the active tab's webContents").not.toBeNull();
+      expect(targetId, "closeCommandBar must call .focus() on a real handoff target").not.toBeNull();
+      expect(targetId, `expected the tab (sidebar was ${sidebarId})`).toBe(tabId);
+    } finally {
+      // Restore the wrapped .focus() methods (deleting the own property falls
+      // back to WebContents.prototype's) and drop the marker global, so a
+      // later test never inherits either.
+      await app.evaluate(
+        ({ webContents }, ids) => {
+          for (const id of [ids.tabId, ids.sidebarId]) {
+            if (id === null) {
+              continue;
+            }
+            const wc = webContents.fromId(id);
+            if (wc != null && !wc.isDestroyed()) {
+              delete (wc as unknown as { focus?: () => void }).focus;
+            }
+          }
+          delete (globalThis as unknown as { __zeoFocusTargetId?: number }).__zeoFocusTargetId;
+        },
+        { tabId, sidebarId },
+      );
+    }
   });
 
   // PRD 10.5 §6 — the find surface shares the overlay view but keeps its
@@ -3161,9 +3175,10 @@ test.describe("zeo desktop app", () => {
               : `overlay ${JSON.stringify(b.overlay)} vs content ${b.width}x${b.height}`;
         })
         .toBe("region");
-
+    } finally {
       // Close find so later tests do not inherit an open find surface (the
-      // overlay staying region-sized instead of the full-window bar size).
+      // overlay staying region-sized instead of the full-window bar size),
+      // even when the region poll above threw.
       await sidebar.evaluate(async () => {
         const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
         await zeo.find.close();
@@ -3176,7 +3191,6 @@ test.describe("zeo desktop app", () => {
           }),
         )
         .toBe(false);
-    } finally {
       await server.close();
     }
   });
