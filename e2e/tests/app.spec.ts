@@ -14,7 +14,9 @@ import type { AddressInfo } from "node:net";
 // adds `COMMANDS`: the accelerator/menu assertions derive their expectations from
 // the registry itself rather than hard-coded literals, so a registry edit that
 // changes a shortcut or a command's menu is caught here without touching the test.
-import { commandBarBounds, COMMANDS } from "@zeo/core";
+// #171 adds `VIEW_UNLOAD_AFTER_MS`: the idle-unload test injects a clock just past
+// the real threshold instead of shortening it.
+import { commandBarBounds, COMMANDS, VIEW_UNLOAD_AFTER_MS } from "@zeo/core";
 // PRD 10.2 — the chrome shape commandBarBounds takes; a type-only import.
 import type { ChromeState } from "@zeo/core";
 // PRD 9.1 — shared view-URL poll helpers (VIEW_POLL_TIMEOUT_MS-bounded), so
@@ -4136,11 +4138,13 @@ test.describe("zeo desktop app", () => {
   });
 });
 
-// PRD 9.3 §E / AC #3 — the idle-unload timer tears down hidden, silent views left
-// idle past the threshold, sparing the visible active view. This needs a short
-// threshold/interval, so it launches with ZEO_VIEW_UNLOAD_AFTER_MS /
-// ZEO_VIEW_UNLOAD_INTERVAL_MS overrides (honored ONLY under ZEO_E2E=1) — hence a
-// separate describe with its own harness mirroring the main one.
+// PRD 9.3 §E / AC #3 — the idle-unload sweep tears down hidden, silent views left
+// idle past the threshold, sparing the visible active view. The app keeps its real
+// 30min threshold / 5min interval, so the wall-clock timer never fires mid-test;
+// the test drives the sweep itself through the ZEO_E2E-only `__zeoUnloadIdleViews`
+// hook with an injected clock (#171: a 500ms threshold raced the test's own
+// "tab1 is live" precondition on slow runners). Separate describe with its own
+// harness mirroring the main one.
 test.describe("zeo view lifecycle — idle unload", () => {
   let app!: ElectronApplication;
   let sidebar!: Page;
@@ -4153,19 +4157,7 @@ test.describe("zeo view lifecycle — idle unload", () => {
       process.env.ZEO_E2E_NO_SANDBOX === "1" ? [...baseArgs, "--no-sandbox"] : baseArgs;
     app = await electron.launch({
       args: launchArgs,
-      // The two ZEO_VIEW_UNLOAD_* overrides shorten the idle threshold/sweep so
-      // the policy fires within a test budget; both are honored only under ZEO_E2E=1.
-      // The threshold must dwarf the IPC + poll latency between creating tab1 and
-      // first observing its view: at 500ms a loaded macOS runner swept the view
-      // before the "tab1 is live" poll ever saw it. 5s still sweeps well inside
-      // VIEW_POLL_TIMEOUT_MS.
-      env: {
-        ...process.env,
-        ELECTRON_RENDERER_URL: "",
-        ZEO_E2E: "1",
-        ZEO_VIEW_UNLOAD_AFTER_MS: "5000",
-        ZEO_VIEW_UNLOAD_INTERVAL_MS: "200",
-      },
+      env: { ...process.env, ELECTRON_RENDERER_URL: "", ZEO_E2E: "1" },
     });
     sidebar = await sidebarWindow(app);
   });
@@ -4177,6 +4169,23 @@ test.describe("zeo view lifecycle — idle unload", () => {
       userDataDir = undefined;
     }
   });
+
+  // Run one idle-unload sweep in main at `Date.now() + advanceMs` (main's clock).
+  const sweepAt = async (advanceMs: number): Promise<void> => {
+    await app.evaluate((_electron, advance) => {
+      const sweep = (globalThis as { __zeoUnloadIdleViews?: (now: number) => void })
+        .__zeoUnloadIdleViews;
+      if (sweep === undefined) {
+        throw new Error("ZEO_E2E __zeoUnloadIdleViews hook was not installed");
+      }
+      sweep(Date.now() + advance);
+    }, advanceMs);
+  };
+  const unloadedTabIds = async (): Promise<string[]> =>
+    sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      return (await zeo.tabs.list()).unloadedTabIds;
+    });
 
   test("the idle timer unloads a hidden idle view but spares the visible active view", async () => {
     // Fresh launch seeds one tab; create tab1 then tab2 (tab2 last → active/visible),
@@ -4194,19 +4203,20 @@ test.describe("zeo view lifecycle — idle unload", () => {
     await waitForViewUrl(app, "ZEO93IDLE1");
     await waitForViewUrl(app, "ZEO93IDLE2");
 
-    // tab1 (hidden, silent) goes idle past 5s and the 200ms timer frees it.
+    // A sweep before the threshold elapses frees nothing: tab1 is hidden but idle
+    // only milliseconds. The sweep is synchronous, so the state read right after
+    // it is final (an unload would have broadcast before evaluate returned).
+    await sweepAt(0);
+    expect(await unloadedTabIds()).toEqual([]);
+    await waitForViewUrl(app, "ZEO93IDLE1");
+
+    // A sweep just past the threshold frees tab1 (hidden, silent, idle).
+    await sweepAt(VIEW_UNLOAD_AFTER_MS + 1);
     await waitForViewGone(app, "ZEO93IDLE1");
     // The visible active tab2 view is never idle-unloaded.
     await waitForViewUrl(app, "ZEO93IDLE2");
 
     // Exactly tab1 is listed unloaded (the visible active tab is never listed).
-    await expect
-      .poll(async () =>
-        sidebar.evaluate(async () => {
-          const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
-          return (await zeo.tabs.list()).unloadedTabIds;
-        }),
-      )
-      .toEqual([ids.tab1]);
+    await expect.poll(unloadedTabIds).toEqual([ids.tab1]);
   });
 });
