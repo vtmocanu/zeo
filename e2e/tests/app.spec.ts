@@ -4155,11 +4155,15 @@ test.describe("zeo view lifecycle — idle unload", () => {
       args: launchArgs,
       // The two ZEO_VIEW_UNLOAD_* overrides shorten the idle threshold/sweep so
       // the policy fires within a test budget; both are honored only under ZEO_E2E=1.
+      // The threshold must dwarf the IPC + poll latency between creating tab1 and
+      // first observing its view: at 500ms a loaded macOS runner swept the view
+      // before the "tab1 is live" poll ever saw it. 5s still sweeps well inside
+      // VIEW_POLL_TIMEOUT_MS.
       env: {
         ...process.env,
         ELECTRON_RENDERER_URL: "",
         ZEO_E2E: "1",
-        ZEO_VIEW_UNLOAD_AFTER_MS: "500",
+        ZEO_VIEW_UNLOAD_AFTER_MS: "5000",
         ZEO_VIEW_UNLOAD_INTERVAL_MS: "200",
       },
     });
@@ -4190,7 +4194,7 @@ test.describe("zeo view lifecycle — idle unload", () => {
     await waitForViewUrl(app, "ZEO93IDLE1");
     await waitForViewUrl(app, "ZEO93IDLE2");
 
-    // tab1 (hidden, silent) goes idle past 500ms and the 200ms timer frees it.
+    // tab1 (hidden, silent) goes idle past 5s and the 200ms timer frees it.
     await waitForViewGone(app, "ZEO93IDLE1");
     // The visible active tab2 view is never idle-unloaded.
     await waitForViewUrl(app, "ZEO93IDLE2");
