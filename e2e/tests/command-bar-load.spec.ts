@@ -6,8 +6,9 @@
 // was silently lost, and a loading view could steal native focus so the overlay
 // blur handler closed the bar outright. The fix keeps the selected row by
 // IDENTITY (`suggestionKey`) across a re-rank and keeps the bar open; a row
-// click rendered against the list a re-rank just superseded is remapped to where
-// that row now sits instead of being rejected as stale.
+// click rendered against a list a background re-rank superseded (main keeps up to
+// MAX_PREVIOUS_SUGGESTION_LISTS of them) is remapped to where that row now sits
+// instead of being rejected as stale.
 //
 // These tests deliberately overlap a slow background load with bar interaction
 // (no waitForViewsIdle between opening the bar and the load finishing): a local
@@ -249,7 +250,8 @@ test.describe("command bar vs background load (#179)", () => {
       env: { ...process.env, ELECTRON_RENDERER_URL: "", ZEO_E2E: "1" },
     });
     sidebar = await sidebarWindow(app);
-    // Settle the seeded startup tab before the test creates its own tabs.
+    // Deliberate: settle the seeded startup tab so the ONLY load in flight while
+    // the bar is open is the one each test starts.
     await waitForViewsIdle(app);
   });
 
@@ -349,52 +351,82 @@ test.describe("command bar vs background load (#179)", () => {
       .toBe(false);
   });
 
-  test("a row click rendered against the list a background re-rank superseded is remapped", async () => {
+  test("a row click rendered before a background load reorders the rows activates the clicked row by identity", async () => {
     const tabs = await setUpTabs();
     const overlay = await openBar();
+    const rows = overlay.getByTestId("command-bar-suggestion");
+
+    // Type "fast": row 0 is the search action, then the two NON-active fast tabs.
+    // Both titles start with the term (tier 1), so recency breaks the tie:
+    // [search, Fast 2, Fast 1]. (Fast 3 is active and excluded; the seeded tab
+    // does not match; history rows for these urls are deduped by the open tabs.)
+    await sidebar.evaluate(async () => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      await zeo.commandBar.setQuery("fast");
+    });
+    await expect
+      .poll(async () => (await barState()).suggestions.map((s) => tabIdOf(s) ?? s.kind), {
+        timeout: VIEW_POLL_TIMEOUT_MS,
+        message: "expected [search, Fast 2, Fast 1] for the query",
+      })
+      .toEqual(["search", tabs[1]!.id, tabs[0]!.id]);
+    await expect(rows).toHaveCount(3);
 
     const opened = await barState();
     const oldRevision = opened.revision;
-    // Click target in the OLD list: row 1 (fast 1). Row 0 (fast 2) is the tab
-    // whose title changes, so the re-rank keeps the list order but supersedes
-    // the revision.
+    // Click target in the OLD list: row 1, Fast 2 — the tab about to reload.
     const clickedIndex = 1;
     const clickedTabId = tabIdOf(opened.suggestions[clickedIndex]);
-    expect(clickedTabId).toBe(tabs[0]!.id);
+    expect(clickedTabId).toBe(tabs[1]!.id);
 
-    // A background title change on fast 2 re-ranks the open bar. A same-document
-    // `document.title` write fires exactly one page-title-updated (no url change,
-    // no load), so the revision advances by exactly one list: the clicked list is
-    // the immediately PREVIOUS one, the one a remap is defined against. (A full
-    // slow navigation would re-rank on the url commit AND again on the title,
-    // leaving the clicked revision two lists behind.)
-    await app.evaluate(({ webContents }, sub) => {
-      const wc = webContents.getAllWebContents().find((w) => w.getURL().includes(sub));
-      if (wc === undefined) {
-        throw new Error(`live view for ${sub} not found`);
-      }
-      void wc.executeJavaScript(`document.title = ${JSON.stringify("Renamed 2")}`);
-    }, "/fast?n=2");
+    // Slow-load Fast 2 to a page whose TITLE no longer starts with "fast" (only
+    // its url still contains it), so it drops to the substring tier and ranks
+    // BELOW Fast 1. The real load re-ranks the open bar more than once (url
+    // commit, title, finish); every one of those lists is background-superseded,
+    // so the clicked revision stays remappable (MAX_PREVIOUS_SUGGESTION_LISTS).
+    await startBackgroundLoad("/fast?n=2", `${server!.base}/slow?fast=2`);
+    await expect
+      .poll(
+        () =>
+          app.evaluate(({ webContents }) => {
+            const wc = webContents.getAllWebContents().find((w) => w.getURL().includes("/slow"));
+            return wc === undefined || wc.isDestroyed()
+              ? null
+              : { loading: wc.isLoading(), title: wc.getTitle() };
+          }),
+        { timeout: VIEW_POLL_TIMEOUT_MS, message: "expected the slow load to finish" },
+      )
+      .toEqual({ loading: false, title: SLOW_TITLE });
 
+    // The re-rank REORDERED the rows: [search, Fast 1, Slow Loaded, ...]. (Fast
+    // 2's old /fast?n=2 visit is no longer covered by an open tab, so a History
+    // row for it may follow the Tabs group; only the leading rows are pinned.)
+    // The old clickedIndex now points at a DIFFERENT tab (Fast 1), so resolving
+    // the click by index would activate the wrong tab; only a remap by identity
+    // is right.
     await expect
       .poll(
         async () => {
           const st = await barState();
-          return (
-            st.revision !== oldRevision &&
-            st.suggestions.some(
-              (s) => s.kind === "tab" && s.tabId === tabs[1]!.id && s.title === "Renamed 2",
-            )
-          );
+          const reloaded = st.suggestions.find((s) => tabIdOf(s) === tabs[1]!.id);
+          return {
+            ids: st.suggestions.slice(0, 3).map((s) => tabIdOf(s) ?? s.kind),
+            reloadedTitle: reloaded?.kind === "tab" ? reloaded.title : null,
+          };
         },
-        { timeout: VIEW_POLL_TIMEOUT_MS, message: "expected a re-rank with the new title" },
+        {
+          timeout: VIEW_POLL_TIMEOUT_MS,
+          message: "expected the background load to reorder the rows",
+        },
       )
-      .toBe(true);
+      .toEqual({ ids: ["search", tabs[0]!.id, tabs[1]!.id], reloadedTitle: SLOW_TITLE });
     const reranked = await barState();
     expect(reranked.open).toBe(true);
+    expect(reranked.revision).not.toBe(oldRevision);
+    expect(tabIdOf(reranked.suggestions[clickedIndex])).toBe(tabs[0]!.id);
 
     // The overlay accepts the old (index, revision) pair, exactly as a row click
-    // rendered before the re-rank would. It must RESOLVE, not reject as stale.
+    // rendered before the load would. It must RESOLVE, not reject as stale.
     const outcome = await overlay.evaluate(
       async ([index, revision]) => {
         const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
@@ -409,7 +441,8 @@ test.describe("command bar vs background load (#179)", () => {
     );
     expect(outcome).toBe("resolved");
 
-    // The row that was at that index in the OLD list is the one activated.
+    // The row that was at clickedIndex in the OLD list (Fast 2) is the one
+    // activated, not Fast 1, which sits at that index now.
     await expect.poll(activeTabId, { timeout: VIEW_POLL_TIMEOUT_MS }).toBe(clickedTabId);
     await expect
       .poll(async () => (await barState()).open, { timeout: VIEW_POLL_TIMEOUT_MS })

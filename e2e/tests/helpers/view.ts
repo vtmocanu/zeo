@@ -102,21 +102,21 @@ export async function waitForViewGone(
 /**
  * Poll until every live WebContents is either destroyed or not loading.
  *
- * Driving the command bar while a tab view is still loading is flaky: when
- * that load finishes, the tab view's `did-finish-load` handler calls
- * `onStateApplied` and re-ranks the (still open) command bar, resetting
- * `selectedIndex` and bumping `revision` out from under an in-flight test
- * step; separately, the load can also steal native focus from the overlay,
- * which fires the overlay's `blur` handler and closes the bar entirely. The
- * two are separate events: the re-rank provably precedes the settle
- * (`did-finish-load` fires before `isLoading()` turns false), and in the
- * observed flakes the focus steal also happened while the view was loading,
- * so settling on `!isLoading()` before opening or driving the bar lands after
- * both. `isLoading()` is a deterministic gate here because a view
- * starts loading synchronously on creation/navigation (so it's never
- * momentarily "not loading yet" right after `tabs.create`), and it also goes
- * false on a failed load, not just a successful one, so this can't hang on a
- * broken URL.
+ * For tests that deliberately depend on a load having FINISHED: page content,
+ * a title or favicon that only lands on load, history recorded by the load,
+ * `canGoBack` after it, blocking counts, or a later step that must not overlap
+ * a still-running load (e.g. a focus assertion on a surface other than the
+ * command bar). It is NOT needed just to drive the command bar: an open bar
+ * keeps its selected row by identity across a background re-rank, remaps a row
+ * click rendered against a background-superseded list, and takes focus back
+ * from a loading tab view instead of closing (issue #179). A test that asserts
+ * specific data should prefer the narrower wait for it (`waitForViewUrl`, a
+ * title poll) over settling every view.
+ *
+ * `isLoading()` is a deterministic gate: a view starts loading synchronously on
+ * creation/navigation (so it's never momentarily "not loading yet" right after
+ * `tabs.create`), and it also goes false on a failed load, not just a
+ * successful one, so this can't hang on a broken URL.
  */
 export async function waitForViewsIdle(app: ElectronApplication): Promise<void> {
   await expect
