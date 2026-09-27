@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { CSSProperties } from "react";
-import { QUICK_BROWSE_CHROME_HEIGHT } from "@zeo/core";
+import { QUICK_BROWSE_CHROME_HEIGHT, activeSpaceTheme } from "@zeo/core";
 import type { TabsState } from "@zeo/core";
 import { useThemeTokens } from "./theme.js";
 
@@ -27,9 +27,9 @@ import { useThemeTokens } from "./theme.js";
  * other URL-executing sink.
  */
 export function QuickBrowse() {
-  useThemeTokens(null);
   // The mirrored application state; null until the first snapshot/broadcast lands.
   const [state, setState] = useState<TabsState | null>(null);
+  useThemeTokens(activeSpaceTheme(state));
 
   useEffect(() => {
     // Guard so a bare browser dev-open (no bridge) doesn't throw. In Electron

@@ -11,8 +11,13 @@
   border-bottom: 1px solid var(--hairline);
 }
 
+/* Inline-flex so the theme dot sits before the name; the name span carries the
+   ellipsis, since a flex container does not truncate its own text. */
 .space-item {
   appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
   border: 1px solid transparent;
   background: none;
   color: var(--ink-primary);
@@ -21,9 +26,25 @@
   font-size: 12px;
   max-width: 100%;
   overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
   cursor: pointer;
+}
+
+.space-item__name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The space's theme color (PRD 10.3 §8): `--space-dot` is set inline from
+   `spaceDotColor`; an untinted space falls back to the neutral secondary ink. */
+.space-item__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+  background: var(--space-dot, var(--ink-secondary));
 }
 
 .space-item:hover {

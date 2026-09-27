@@ -1,0 +1,211 @@
+/* Space theme picker (PRD 10.3 §6) --------------------------------------- */
+
+/* A popover inside the sidebar renderer, anchored above the bottom bar. Its
+   inline width is the sidebar width minus 16px, so with the 8px left inset it
+   stays clear of the content card. `z-index: 2` lifts it over the sticky
+   pinned section (z-index 1) inside the .sidebar stacking context. Colors the
+   core computes (swatches, chip grounds and inks) arrive as inline custom
+   properties; everything else reads the popover tokens. */
+.theme-picker {
+  position: fixed;
+  left: 8px;
+  bottom: 8px;
+  z-index: 2;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  padding: var(--space-5);
+  background: var(--surface-popover);
+  box-shadow: var(--shadow-popover);
+  border-radius: var(--radius-card);
+  color: var(--ink-popover);
+  font-size: var(--text-sm);
+  -webkit-app-region: no-drag;
+  transform-origin: bottom left;
+  animation: theme-picker-open var(--motion-base) var(--ease-standard);
+}
+
+@keyframes theme-picker-open {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+}
+
+.theme-picker__title {
+  margin: 0;
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Segmented control: kind (Solid / Gradient) and gradient stop. */
+.theme-picker__track {
+  display: flex;
+  gap: var(--space-1);
+  padding: var(--space-1);
+  border-radius: var(--radius-control);
+  background: var(--popover-well);
+}
+
+.theme-picker__segment {
+  appearance: none;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  border: none;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--ink-popover-secondary);
+  font: inherit;
+  cursor: pointer;
+  transition:
+    background-color var(--motion-fast) var(--ease-standard),
+    color var(--motion-fast) var(--ease-standard);
+}
+
+.theme-picker__segment:hover {
+  color: var(--ink-popover);
+}
+
+.theme-picker__segment[aria-pressed="true"] {
+  background: var(--control-raised);
+  color: var(--ink-popover);
+  box-shadow: var(--shadow-raised);
+}
+
+.theme-picker__stop-dot {
+  width: 10px;
+  height: 10px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--swatch);
+}
+
+/* Ten swatches, five per row. `space-between` spreads them across the
+   narrowest picker (a 200px sidebar leaves 160px of content: 5 × 28px + gaps). */
+.theme-picker__swatches {
+  display: grid;
+  grid-template-columns: repeat(5, 28px);
+  justify-content: space-between;
+  row-gap: var(--space-4);
+}
+
+.theme-picker__swatch {
+  appearance: none;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: var(--swatch);
+  cursor: pointer;
+  transition: box-shadow var(--motion-fast) var(--ease-standard);
+}
+
+.theme-picker__swatch[aria-pressed="true"] {
+  box-shadow:
+    0 0 0 2px var(--surface-popover),
+    0 0 0 4px var(--ink-popover);
+}
+
+.theme-picker__intensity {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  row-gap: var(--space-2);
+}
+
+.theme-picker__label {
+  color: var(--ink-popover-secondary);
+}
+
+.theme-picker__value {
+  font-variant-numeric: tabular-nums;
+}
+
+.theme-picker__slider {
+  grid-column: 1 / -1;
+  width: 100%;
+  margin: 0;
+  min-height: 28px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+/* Contrast readout: the window ground and ink this theme gives in each
+   appearance, with the primary and secondary text ratios. */
+.theme-picker__contrast {
+  display: flex;
+  gap: var(--space-4);
+}
+
+.theme-picker__chip {
+  box-sizing: border-box;
+  flex: 1 1 0;
+  min-width: 0;
+  height: 52px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-tab);
+  background: var(--chip-ground);
+  box-shadow: inset 0 0 0 1px var(--popover-hairline);
+  color: var(--chip-ink);
+}
+
+.theme-picker__chip-line {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.theme-picker__chip-sample {
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
+}
+
+.theme-picker__chip-name,
+.theme-picker__chip-ratios {
+  font-size: var(--text-xs);
+  color: var(--chip-ink-secondary);
+}
+
+.theme-picker__chip-ratios {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.theme-picker__segment:focus-visible,
+.theme-picker__swatch:focus-visible,
+.theme-picker__slider:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .theme-picker {
+    animation-name: theme-picker-fade;
+    animation-duration: var(--motion-fast);
+  }
+
+  .theme-picker__segment,
+  .theme-picker__swatch {
+    transition: none;
+  }
+}
+
+@keyframes theme-picker-fade {
+  from {
+    opacity: 0;
+  }
+}

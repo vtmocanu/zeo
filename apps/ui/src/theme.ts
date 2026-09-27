@@ -1,6 +1,6 @@
 import { useLayoutEffect, useEffect, useState } from "react";
-import type { Appearance, SpaceTheme } from "@zeo/core";
-import { themeTokens } from "@zeo/core";
+import type { Appearance, SpaceTheme, TabsState } from "@zeo/core";
+import { activeSpaceTheme, themeTokens, themesEqual } from "@zeo/core";
 
 /**
  * Applies every semantic token returned by `themeTokens(theme, appearance)` to
@@ -53,8 +53,57 @@ export function useAppearance(): Appearance {
  */
 export function useThemeTokens(theme: SpaceTheme | null): void {
   const appearance = useAppearance();
+  const stable = useStableTheme(theme);
 
   useLayoutEffect(() => {
-    applyThemeTokens(document.documentElement, theme, appearance);
-  }, [theme, appearance]);
+    applyThemeTokens(document.documentElement, stable, appearance);
+  }, [stable, appearance]);
+}
+
+/**
+ * `theme`, but keeping the previous object while the value is structurally
+ * equal. Every state broadcast carries fresh space objects, so without this a
+ * tab-only broadcast would recompute and re-apply identical tokens.
+ */
+function useStableTheme(theme: SpaceTheme | null): SpaceTheme | null {
+  const [stable, setStable] = useState(theme);
+  if (!themesEqual(stable, theme)) {
+    // Adjusting state during render: React re-renders before committing, so
+    // the layout effect below only ever sees the settled value.
+    setStable(theme);
+    return theme;
+  }
+  return stable;
+}
+
+/**
+ * The active space's theme for a surface that keeps no `TabsState` of its own
+ * (the overlay). Subscribes to state broadcasts and seeds from `tabs.list()`
+ * unless a broadcast already arrived, so a late seed never overwrites a newer
+ * state. `null` until the first state lands, and without the bridge.
+ */
+export function useActiveSpaceTheme(): SpaceTheme | null {
+  const [state, setState] = useState<TabsState | null>(null);
+
+  useEffect(() => {
+    if (!window.zeo) {
+      return;
+    }
+    let sawBroadcast = false;
+    const unsubscribe = window.zeo.onStateChange((s) => {
+      sawBroadcast = true;
+      setState(s);
+    });
+    void window.zeo.tabs
+      .list()
+      .then((s) => {
+        if (!sawBroadcast) {
+          setState(s);
+        }
+      })
+      .catch(() => {});
+    return unsubscribe;
+  }, []);
+
+  return activeSpaceTheme(state);
 }

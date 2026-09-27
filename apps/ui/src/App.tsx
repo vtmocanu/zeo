@@ -4,6 +4,7 @@ import {
   useLayoutEffect,
   useRef,
   useState,
+  type CSSProperties,
   type MouseEventHandler,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
@@ -15,6 +16,8 @@ import {
   DEFAULT_SEARCH_ENGINE_ID,
   SINGLE_LAYOUT,
   SPACE_ACTIVATE_DELAY_MS,
+  activeSpaceTheme,
+  cardLeft,
   defaultSpaceName,
   formatRelativeArchived,
   formatZoomPercent,
@@ -22,6 +25,7 @@ import {
   paneOf,
   siteKeyForUrl,
   sidebarVisible,
+  spaceDotColor,
 } from "@zeo/core";
 import { Favicon } from "./Favicon.js";
 import {
@@ -30,6 +34,7 @@ import {
   WindowRow,
   useSidebarReveal,
 } from "./WindowChrome.js";
+import { ThemePicker } from "./ThemePicker.js";
 import { useThemeTokens } from "./theme.js";
 
 // Pointer travel (px) required before a press turns into a drag. Below this a
@@ -555,7 +560,14 @@ function SpaceItem({
       }}
       onContextMenu={onContextMenu}
     >
-      {space.name}
+      <span
+        className="space-item__dot"
+        data-testid="space-dot"
+        data-hue={space.theme === null ? "none" : space.theme.stops.join("+")}
+        aria-hidden="true"
+        style={{ "--space-dot": spaceDotColor(space.theme) ?? undefined } as CSSProperties}
+      />
+      <span className="space-item__name">{space.name}</span>
     </button>
   );
 }
@@ -566,7 +578,6 @@ function SpaceItem({
  * (which implements ZeoApi). No Node or Electron imports.
  */
 export function App() {
-  useThemeTokens(null);
   const [state, setState] = useState<TabsState>({
     spaces: [],
     activeSpaceId: "",
@@ -614,6 +625,7 @@ export function App() {
       error: null,
     },
   });
+  useThemeTokens(activeSpaceTheme(state));
   const [showArchived, setShowArchived] = useState(false);
   const [now, setNow] = useState(() => Date.now());
 
@@ -632,6 +644,14 @@ export function App() {
   const [draft, setDraft] = useState("");
   const editRef = useRef<SpaceEdit | null>(null);
   const spacesRef = useRef<TabsState["spaces"]>([]);
+  const activeSpaceIdRef = useRef("");
+
+  // The space whose theme picker is open (PRD 10.3 §6), with the active space
+  // at the moment it opened: a space switch closes the picker.
+  const [themeEdit, setThemeEdit] = useState<{ spaceId: string; openedActiveId: string } | null>(
+    null,
+  );
+  const closeThemeEdit = useCallback(() => setThemeEdit(null), []);
   const openEdit = useCallback((next: SpaceEdit, initialDraft: string) => {
     editRef.current = next;
     setDraft(initialDraft);
@@ -641,6 +661,10 @@ export function App() {
     editRef.current = null;
     setEditState(null);
   }, []);
+
+  useEffect(() => {
+    activeSpaceIdRef.current = state.activeSpaceId;
+  }, [state.activeSpaceId]);
 
   useEffect(() => {
     spacesRef.current = state.spaces;
@@ -674,7 +698,10 @@ export function App() {
       if (action.action === "rename") {
         const space = spacesRef.current.find((s) => s.id === action.spaceId);
         openEdit({ mode: "rename", spaceId: action.spaceId }, space?.name ?? "");
-      } else {
+      } else if (action.action === "edit-theme") {
+        cancelEdit();
+        setThemeEdit({ spaceId: action.spaceId, openedActiveId: activeSpaceIdRef.current });
+      } else if (action.action === "new-profile") {
         openEdit({ mode: "new-profile", spaceId: action.spaceId }, "");
       }
     });
@@ -690,7 +717,22 @@ export function App() {
       unsubState();
       unsubMenu();
     };
-  }, [openEdit]);
+  }, [openEdit, cancelEdit]);
+
+  // The picker shows only while its space exists, the active space is the one
+  // it opened over, and the sidebar is showing (the card starts at its edge).
+  const themeEditSpace =
+    themeEdit === null ? undefined : state.spaces.find((s) => s.id === themeEdit.spaceId);
+  const themePickerOpen =
+    themeEdit !== null &&
+    themeEditSpace !== undefined &&
+    state.activeSpaceId === themeEdit.openedActiveId &&
+    cardLeft(state.chrome) === state.chrome.sidebarWidth;
+  useEffect(() => {
+    if (themeEdit !== null && !themePickerOpen) {
+      setThemeEdit(null);
+    }
+  }, [themeEdit, themePickerOpen]);
 
   const commitEdit = useCallback(() => {
     const current = editRef.current;
@@ -1018,6 +1060,17 @@ export function App() {
           </div>
         )}
       </footer>
+      {themePickerOpen && themeEditSpace !== undefined && (
+        <ThemePicker
+          key={themeEditSpace.id}
+          space={themeEditSpace}
+          sidebarWidth={sidebarWidth}
+          onChange={(theme) =>
+            void window.zeo?.spaces.setTheme(themeEditSpace.id, theme).catch(() => {})
+          }
+          onClose={closeThemeEdit}
+        />
+      )}
       <SidebarResizeHandle width={sidebarWidth} />
     </aside>
   );
