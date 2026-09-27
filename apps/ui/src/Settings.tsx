@@ -178,6 +178,13 @@ export function Settings() {
       if (target instanceof Element && target.closest('[role="alertdialog"]') !== null) {
         return;
       }
+      // Also bail whenever a dialog is open at all, even if focus sits
+      // somewhere the target check above doesn't catch (e.g. `<body>`, right
+      // after the dialog mounts): this handler must never switch/select a
+      // section — and unmount the dialog — out from under an open dialog.
+      if (document.querySelector('[role="alertdialog"]') !== null) {
+        return;
+      }
       if (event.key === "ArrowDown") {
         if (inTextField) {
           return;
@@ -1029,8 +1036,10 @@ function ProfilesSection({
  * {@link HISTORY_RETENTION_MS}, the on-demand entry/visit summary from
  * `history.stats()` (read on mount and re-read after a clear), and a clear
  * behind a {@link ConfirmDialog}: only the dialog's confirm calls
- * `history.clear()`. The dialog is portalled into the sheet so its scrim dims
- * the whole sheet, not just the scrolling panel.
+ * `history.clear()`. The clear trigger stays disabled until stats have loaded,
+ * so the dialog can never open quoting the "0 entries and 0 visits" placeholder
+ * counts. The dialog is portalled into the sheet so its scrim dims the whole
+ * sheet, not just the scrolling panel.
  */
 function HistorySection() {
   // The on-demand stats; null until the first read resolves.
@@ -1085,6 +1094,7 @@ function HistorySection() {
             className="settings__button settings__button--danger-text"
             data-testid="settings-history-clear"
             aria-haspopup="dialog"
+            disabled={stats === null}
             onClick={() => setConfirming(true)}
           >
             Clear Browsing History…
