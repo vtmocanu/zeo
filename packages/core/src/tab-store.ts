@@ -419,7 +419,7 @@ export class TabStore {
   /**
    * Moves an OPEN tab to `toIndex` WITHIN its own group (pinned, today, or
    * favorite); the index is interpreted within that group and clamped to its bounds.
-   * Throws on an unknown or archived id. The other group and archived tabs keep
+   * Throws on an unknown or archived id. The other groups and archived tabs keep
    * their positions.
    */
   reorder(id: string, toIndex: number): void {
@@ -462,7 +462,7 @@ export class TabStore {
   /**
    * Moves an OPEN tab to the FIRST position of its own group (pinned, today,
    * or favorite). Delegates to {@link reorder}, which performs all validation
-   * (unknown/archived id, non-integer index) and leaves the other group and
+   * (unknown/archived id, non-integer index) and leaves the other groups and
    * archived tabs in place. An already-first or single-tab move is a no-op.
    */
   moveToTop(id: string): void {
@@ -588,7 +588,7 @@ export class TabStore {
 
   /**
    * Restores an archived tab: clears `archivedAt`, clears `pinned`, and moves
-   * the record to the end of the array (= the end of the unpinned group).
+   * the record to the end of the array (= the end of the today group).
    */
   restore(id: string): void {
     const record = this.findRecord(id, "restore");

@@ -1,6 +1,6 @@
 import { clipboard, ipcMain, Menu } from "electron";
 import type { MenuItemConstructorOptions } from "electron";
-import { IPC, titleForUrl, dropBlockedTab, FAVORITES_MAX } from "@zeo/core";
+import { IPC, titleForUrl, dropBlockedTab, FAVORITES_MAX, sidebarSections } from "@zeo/core";
 import type { Tab, TabsState, TabContextMenuResult } from "@zeo/core";
 import { runtime, DEFAULT_URL, IDLE_THRESHOLD_MS } from "./state.js";
 import { broadcast, fullSnapshot, withResync } from "./broadcast.js";
@@ -298,13 +298,10 @@ export function showTabContextMenu(id: string, x: number, y: number): TabContext
 
   const isFavorite = tab.favoriteId !== null;
   const favoritesFull = runtime.store.favorites().length === FAVORITES_MAX;
-  // The three-way sidebar-section key (pinned / today / favorite) tab belongs
-  // to, mirroring TabStore's private groupKey: "pinned" for a pinned tab,
-  // else "favorite" when it has a favoriteId, else "today". Move to Top/Bottom
-  // only reorder within this same group.
-  const groupKey = (t: Tab): "pinned" | "today" | "favorite" =>
-    t.pinned ? "pinned" : t.favoriteId !== null ? "favorite" : "today";
-  const group = runtime.store.list().filter((t) => groupKey(t) === groupKey(tab));
+  // The three-way sidebar section (pinned / today / favorite) tab belongs to.
+  // Move to Top/Bottom only reorder within this same group.
+  const sections = sidebarSections(runtime.store.list());
+  const group = tab.pinned ? sections.pinned : isFavorite ? sections.favoriteTabs : sections.today;
   const indexInGroup = group.findIndex((t) => t.id === id);
 
   const actions: { id: string; label: string; enabled: boolean; click: () => void }[] = [

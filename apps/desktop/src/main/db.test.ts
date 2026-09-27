@@ -2331,7 +2331,9 @@ describe("downloads helpers", () => {
     expect(spaces.find((s) => s.id === "space-a")!.theme).toEqual(gradient);
     expect(spaces.find((s) => s.id === "space-b")!.theme).toBeNull();
   });
+});
 
+describe("favorites persistence", () => {
   test("favorites and a linked tab survive a debounced save and reopen, in position order", () => {
     const path = join(tempDir, "zeo.db");
     const seed = new Database(path);

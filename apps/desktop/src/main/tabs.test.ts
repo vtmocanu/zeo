@@ -282,8 +282,8 @@ describe("showTabContextMenu", () => {
     const favoriteTab = store.create({ url: "https://fav.test", title: "Fav" });
     store.addFavorite(favoriteTab.id);
 
-    // list() order is [today, favoriteTab] (favorites/pinned still sort after
-    // today in the raw list; the group key is what matters here). The today
+    // list() order is [today, favoriteTab] (list() returns pinned, then today,
+    // then favorite; the group key is what matters here). The today
     // group contains ONLY `today`, so it is both first and last in its own
     // group — Move to Bottom must be disabled, not enabled because a
     // differently-grouped favorite tab happens to follow it in list() order.
