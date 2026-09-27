@@ -213,9 +213,10 @@ test.describe("command bar vs background load (#179)", () => {
   }
 
   /**
-   * Start a navigation of the (background) view whose url contains `sub` to
-   * `url`, from main, WITHOUT awaiting it; then poll until that view reports
-   * `isLoading()` so the caller provably overlaps the load.
+   * Start a navigation of the view whose url contains `sub` to `url`, from main,
+   * WITHOUT awaiting it; then poll until that view reports `isLoading()` so the
+   * caller provably overlaps the load. Usually a background view; the
+   * active-tab test drives the ACTIVE (visible) view through it too.
    */
   async function startBackgroundLoad(sub: string, url: string): Promise<void> {
     await app.evaluate(
@@ -349,6 +350,96 @@ test.describe("command bar vs background load (#179)", () => {
     await expect
       .poll(async () => (await barState()).open, { timeout: VIEW_POLL_TIMEOUT_MS })
       .toBe(false);
+  });
+
+  test("an ACTIVE tab's load finishing keeps the overlay focused, the arrowed-to row selected, and typing in the bar", async () => {
+    // The tests above slow-load a HIDDEN background tab, which can never take
+    // native focus. The ACTIVE tab's view is visible under the overlay, so its
+    // load is the one that could steal focus and blur-close the bar. Under xvfb
+    // a page view rarely takes native focus even when it would on a desktop, so
+    // this pins the CONTRACT (bar open, overlay focused, same row, typing lands
+    // in the input); the unit tests for command-bar-focus guard the steal logic.
+    const tabs = await setUpTabs();
+    const overlay = await openBar();
+    const rows = overlay.getByTestId("command-bar-suggestion");
+    const input = overlay.getByTestId("command-bar-input");
+
+    // Recent order: fast 2 (row 0), fast 1 (row 1), then the seeded tab. Fast 3
+    // is the active tab, so new-tab mode excludes it.
+    const opened = await barState();
+    expect(opened.open).toBe(true);
+    expect(opened.selectedIndex).toBe(0);
+    expect(tabIdOf(opened.suggestions[0])).toBe(tabs[1]!.id);
+    expect(tabIdOf(opened.suggestions[1])).toBe(tabs[0]!.id);
+
+    // Arrow to row 1 (fast 1) so a reset-to-0 would be observable.
+    await input.press("ArrowDown");
+    await expect(rows.nth(1)).toHaveAttribute("aria-selected", "true");
+    const selectedText = (await rows.nth(1).textContent()) ?? "";
+    expect(selectedText).toContain("Fast 1");
+    const moved = await barState();
+    expect(moved.selectedIndex).toBe(1);
+    const keptRow = moved.suggestions[1]!;
+    expect(keptRow.kind).toBe("tab");
+    expect(tabIdOf(keptRow)).toBe(tabs[0]!.id);
+
+    // Slow-load the ACTIVE tab (fast 3) from main, not through the bar. The
+    // distinguishing query string keeps this view's url unique while it loads.
+    const activeSlowSub = "/slow?active=3";
+    expect(await activeTabId()).toBe(tabs[2]!.id);
+    await startBackgroundLoad("/fast?n=3", `${server!.base}${activeSlowSub}`);
+    // Still overlapping: the bar is open while the active view loads.
+    expect((await barState()).open).toBe(true);
+
+    // Let the load finish: the active view settles on the slow page and title.
+    await expect
+      .poll(
+        () =>
+          app.evaluate(({ webContents }, sub) => {
+            const wc = webContents.getAllWebContents().find((w) => w.getURL().includes(sub));
+            return wc === undefined || wc.isDestroyed()
+              ? null
+              : { loading: wc.isLoading(), title: wc.getTitle() };
+          }, activeSlowSub),
+        { timeout: VIEW_POLL_TIMEOUT_MS, message: "expected the active tab's slow load to finish" },
+      )
+      .toEqual({ loading: false, title: SLOW_TITLE });
+    // The loaded view is still the active tab.
+    expect(await activeTabId()).toBe(tabs[2]!.id);
+
+    // The overlay (located by its `view=command-bar` url, as page-search.spec.ts
+    // does) holds native focus, not the page view that just finished loading.
+    const overlayFocused = () =>
+      app.evaluate(({ webContents }) => {
+        const wc = webContents
+          .getAllWebContents()
+          .find((w) => !w.isDestroyed() && w.getURL().includes("view=command-bar"));
+        return wc === undefined ? null : wc.isFocused();
+      });
+    expect(await overlayFocused()).toBe(true);
+
+    // The bar is still open and still on the SAME row by identity (kind + tab
+    // id), not merely the same index.
+    const after = await barState();
+    expect(after.open).toBe(true);
+    const selected = after.suggestions[after.selectedIndex];
+    expect(selected?.kind).toBe(keptRow.kind);
+    expect(tabIdOf(selected)).toBe(tabIdOf(keptRow));
+    await expect(rows.nth(after.selectedIndex)).toHaveAttribute("aria-selected", "true");
+    await expect(
+      overlay.locator('[data-testid="command-bar-suggestion"][aria-selected="true"]'),
+    ).toHaveText(selectedText);
+
+    // Keystrokes on the overlay page reach the bar input: main's query and the
+    // input's DOM value both carry them.
+    await expect(input).toBeFocused();
+    await overlay.keyboard.type("fa");
+    await expect(input).toHaveValue("fa");
+    await expect
+      .poll(async () => (await barState()).query, { timeout: VIEW_POLL_TIMEOUT_MS })
+      .toBe("fa");
+    expect((await barState()).open).toBe(true);
+    expect(await overlayFocused()).toBe(true);
   });
 
   test("a row click rendered before a background load reorders the rows activates the clicked row by identity", async () => {
