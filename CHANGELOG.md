@@ -21,8 +21,7 @@ milestone, a minor bump only for very large breakthroughs.
   open.
 - Find in page is a compact floating pill 8 px inside the top-right corner of
   the page it searches. In split view it sits on the pane the search belongs
-  to, follows divider drags and sidebar changes, and closes when focus moves to
-  the other pane.
+  to and follows divider drags and sidebar changes.
 - The quick-browse window has a 48 px top bar with the page title above its
   URL, an accent "Open in Tab" button, "Move to Space…" and a Dismiss icon
   button; the bar drags the window.
@@ -37,7 +36,8 @@ milestone, a minor bump only for very large breakthroughs.
 
 ### Fixed
 
-- Quick-browse buttons no longer render under the page view.
+- An open find session in split view now closes when another pane's tab
+  becomes active, instead of staying bound to the pane that lost focus.
 
 ## [0.0.33] - 2026-09-27
 
