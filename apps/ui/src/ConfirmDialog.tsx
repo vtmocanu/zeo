@@ -20,6 +20,15 @@ export interface ConfirmDialogProps {
   confirmTestId?: string;
   /** `data-testid` of the cancel button; defaults to `${testId}-cancel`. */
   cancelTestId?: string;
+  /** Disables the confirm button (e.g. while the confirmed action is in flight). */
+  confirmDisabled?: boolean;
+  /**
+   * An inline error to show below the body, e.g. after the confirmed action
+   * rejected. Rendered with `role="alert"` and `data-testid={testId}-error` so
+   * it is announced and findable without keeping the dialog's own shape a
+   * caller has to duplicate. `null`/`undefined`/omitted renders nothing.
+   */
+  error?: string | null;
   onConfirm: () => void;
   onCancel: () => void;
 }
@@ -45,6 +54,8 @@ export function ConfirmDialog(props: ConfirmDialogProps): ReactElement {
     testId,
     confirmTestId = `${testId}-confirm`,
     cancelTestId = `${testId}-cancel`,
+    confirmDisabled = false,
+    error = null,
     onConfirm,
     onCancel,
   } = props;
@@ -127,6 +138,11 @@ export function ConfirmDialog(props: ConfirmDialogProps): ReactElement {
         <p className="dialog__body" id={bodyId}>
           {body}
         </p>
+        {error !== null && (
+          <p className="dialog__error" role="alert" data-testid={`${testId}-error`}>
+            {error}
+          </p>
+        )}
         <div className="dialog__actions">
           <button
             ref={cancelRef}
@@ -142,6 +158,7 @@ export function ConfirmDialog(props: ConfirmDialogProps): ReactElement {
             type="button"
             className={`dialog__button ${destructive ? "dialog__button--danger" : "dialog__button--primary"}`}
             data-testid={confirmTestId}
+            disabled={confirmDisabled}
             onClick={onConfirm}
           >
             {confirmLabel}

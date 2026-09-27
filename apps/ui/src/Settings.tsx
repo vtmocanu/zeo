@@ -29,6 +29,13 @@ import {
   type UpdateState,
 } from "@zeo/core";
 import { ConfirmDialog } from "./ConfirmDialog.js";
+import {
+  historyClearDialogBody,
+  historyClearTriggerDisabled,
+  historyStatsText,
+  HISTORY_CLEAR_ERROR,
+  type HistoryStatsStatus,
+} from "./history-clear.js";
 import { Icon, type IconName } from "./icons.js";
 import { useThemeTokens } from "./theme.js";
 import { useWindowSize } from "./WindowChrome.js";
@@ -313,7 +320,7 @@ export function Settings() {
             {selected === "profiles" && state !== null && (
               <ProfilesSection profiles={state.profiles} spaces={state.spaces} />
             )}
-            {selected === "history" && <HistorySection />}
+            {selected === "history" && <HistorySection open={state?.settingsOpen ?? false} />}
             {selected === "about" && state !== null && (
               <AboutSection version={state.appVersion} />
             )}
@@ -1034,49 +1041,112 @@ function ProfilesSection({
 /**
  * The history settings body: the fixed retention derived from
  * {@link HISTORY_RETENTION_MS}, the on-demand entry/visit summary from
- * `history.stats()` (read on mount and re-read after a clear), and a clear
- * behind a {@link ConfirmDialog}: only the dialog's confirm calls
- * `history.clear()`. The clear trigger stays disabled until stats have loaded,
- * so the dialog can never open quoting the "0 entries and 0 visits" placeholder
- * counts. The dialog is portalled into the sheet so its scrim dims the whole
- * sheet, not just the scrolling panel.
+ * `history.stats()`, and a clear behind a {@link ConfirmDialog}: only the
+ * dialog's confirm calls `history.clear()`.
+ *
+ * `open` is `settingsOpen` from the mirrored `TabsState`, not just whether
+ * this section is selected: the settings renderer stays mounted across a
+ * close (main only detaches the native view; `closeSettings` does not tear
+ * down this React tree), so without `open` a dialog left open, or stats read
+ * on a now-stale mount, would still be showing when the sheet reopens. The
+ * effect below re-reads stats and resets the dialog/error/in-flight state on
+ * every `open` transition, so a reopen always starts clean.
+ *
+ * `status` tracks the stats read itself (`"loading"` | `"loaded"` |
+ * `"failed"`) so a rejected `history.stats()` cannot disable the trigger
+ * forever: only `"loading"` disables it. A `"failed"` status falls back to
+ * count-free wording (see history-clear.ts) since there are no counts to
+ * quote.
  */
-function HistorySection() {
+function HistorySection({ open }: { open: boolean }) {
+  const [status, setStatus] = useState<HistoryStatsStatus>("loading");
   // The on-demand stats; null until the first read resolves.
   const [stats, setStats] = useState<{ entries: number; visits: number } | null>(
     null,
   );
   // Whether the confirmation dialog is open.
   const [confirming, setConfirming] = useState(false);
+  // Whether history.clear() is currently in flight (disables Confirm).
+  const [clearing, setClearing] = useState(false);
+  // The inline error shown in the dialog after a rejected clear.
+  const [error, setError] = useState<string | null>(null);
+  // Guards against a same-tick double confirm firing history.clear() twice;
+  // a ref because it must be read/set synchronously within one click handler,
+  // before any state update re-renders.
+  const pendingRef = useRef(false);
   const sheet = useContext(SheetContext);
 
   useEffect(() => {
-    // History is not broadcast; read the counts on mount.
-    void window.zeo?.history.stats().then(setStats).catch(() => {});
-  }, []);
+    if (!open) {
+      // The sheet closed (or has not opened yet): drop any in-progress dialog
+      // state so a reopen never shows a stale confirm.
+      setConfirming(false);
+      setError(null);
+      setClearing(false);
+      pendingRef.current = false;
+      return;
+    }
+    // The sheet (re)opened: read the counts fresh. Guard against a stale
+    // response landing after a close-then-reopen raced past it.
+    let cancelled = false;
+    setStatus("loading");
+    void window.zeo?.history
+      .stats()
+      .then((next) => {
+        if (cancelled) {
+          return;
+        }
+        setStats(next);
+        setStatus("loaded");
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setStatus("failed");
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
 
   /**
    * Clears history, then re-reads the counts and closes the dialog. Only the
-   * dialog's confirm clears; the trigger just opens it.
+   * dialog's confirm clears; the trigger just opens it. A failed clear keeps
+   * the dialog open with an inline error instead of silently doing nothing.
+   * A failed re-read after a successful clear still closes the dialog (the
+   * clear itself succeeded) and reports `status: "failed"` instead.
    */
   const onConfirmClear = (): void => {
     const api = window.zeo;
-    if (!api) {
+    if (!api || pendingRef.current) {
       return;
     }
-    void api.history
-      .clear()
-      .then(() => api.history.stats())
-      .then((next) => {
-        setStats(next);
+    pendingRef.current = true;
+    setClearing(true);
+    setError(null);
+    void api.history.clear().then(
+      () => {
+        pendingRef.current = false;
+        setClearing(false);
         setConfirming(false);
-      })
-      .catch(() => {});
+        setStatus("loading");
+        void api.history
+          .stats()
+          .then((next) => {
+            setStats(next);
+            setStatus("loaded");
+          })
+          .catch(() => setStatus("failed"));
+      },
+      () => {
+        pendingRef.current = false;
+        setClearing(false);
+        setError(HISTORY_CLEAR_ERROR);
+      },
+    );
   };
 
   const retentionDays = HISTORY_RETENTION_MS / (24 * 60 * 60 * 1000);
-  const entries = stats?.entries ?? 0;
-  const visits = stats?.visits ?? 0;
 
   return (
     <section className="settings__group">
@@ -1086,7 +1156,7 @@ function HistorySection() {
           History is kept for {retentionDays} days.
         </p>
         <p className="settings__row settings__value" data-testid="settings-history-stats">
-          {entries} entries · {visits} visits
+          {historyStatsText(status, stats)}
         </p>
         <div className="settings__row">
           <button
@@ -1094,7 +1164,7 @@ function HistorySection() {
             className="settings__button settings__button--danger-text"
             data-testid="settings-history-clear"
             aria-haspopup="dialog"
-            disabled={stats === null}
+            disabled={historyClearTriggerDisabled(status)}
             onClick={() => setConfirming(true)}
           >
             Clear Browsing History…
@@ -1106,14 +1176,19 @@ function HistorySection() {
         createPortal(
           <ConfirmDialog
             title="Clear browsing history?"
-            body={`This removes ${entries} entries and ${visits} visits. It cannot be undone.`}
+            body={historyClearDialogBody(status, stats)}
             confirmLabel="Clear History"
             destructive
             testId="settings-history-clear-dialog"
             confirmTestId="settings-history-clear-confirm"
             cancelTestId="settings-history-clear-cancel"
+            confirmDisabled={clearing}
+            error={error}
             onConfirm={onConfirmClear}
-            onCancel={() => setConfirming(false)}
+            onCancel={() => {
+              setConfirming(false);
+              setError(null);
+            }}
           />,
           sheet,
         )}

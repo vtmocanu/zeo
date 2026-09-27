@@ -691,6 +691,117 @@ test.describe("PRD 6.5 settings sections + search engine (offline)", () => {
       rmSync(userDataDir, { recursive: true, force: true });
     }
   });
+
+  // The settings renderer stays mounted across a close (main only detaches the
+  // native view), so an open confirm dialog and its stats must not survive a
+  // close/reopen: closing must reset the dialog, and reopening must re-read
+  // stats rather than show whatever was current when it closed.
+  test("closing settings resets an open clear dialog; reopening re-reads stats and refocuses Cancel", async () => {
+    const userDataDir = mkdtempSync(join(tmpdir(), "zeo-settings-"));
+    const server = await startHistoryFixtureServer();
+    const { app, sidebar } = await launch(userDataDir);
+    try {
+      const tabId = await freshHistory(app, sidebar);
+      await navigateAndRecord(sidebar, tabId, `${server.base}/a.html`, 1);
+
+      let settings = await openSettings(app, sidebar, "settings.openHistory");
+      await expect(settings.getByTestId("settings-history-stats")).toContainText("1 entries");
+      await settings.getByTestId("settings-history-clear").click();
+      const dialog = settings.getByTestId("settings-history-clear-dialog");
+      await expect(dialog).toBeVisible();
+
+      // Close settings (via the settings.close command) while the dialog is open.
+      await runCommand(sidebar, "settings.close");
+      await expect
+        .poll(() => settingsOpen(sidebar), { message: "expected settings.close to close settings" })
+        .toBe(false);
+
+      // Seed another visit while settings is closed: a stale reopen would still
+      // show "1 entries".
+      await navigateAndRecord(sidebar, tabId, `${server.base}/b.html`, 2);
+
+      settings = await openSettings(app, sidebar, "settings.openHistory");
+      // The dialog is not already open on reopen.
+      await expect(settings.getByTestId("settings-history-clear-dialog")).toHaveCount(0);
+      await expect(settings.getByTestId("settings-history-stats")).toContainText("2 entries");
+      await expect(settings.getByTestId("settings-history-stats")).toContainText("2 visits");
+
+      await settings.getByTestId("settings-history-clear").click();
+      const reopenedDialog = settings.getByTestId("settings-history-clear-dialog");
+      await expect(reopenedDialog).toBeVisible();
+      const cancel = settings.getByTestId("settings-history-clear-cancel");
+      await expect(cancel).toBeFocused();
+      const focusedTestId = await settings.evaluate(
+        () => (document.activeElement as HTMLElement | null)?.dataset.testid ?? null,
+      );
+      expect(focusedTestId).toBe("settings-history-clear-cancel");
+      await expect(reopenedDialog).toContainText("This removes 2 entries and 2 visits.");
+    } finally {
+      await app.close();
+      await server.close();
+      rmSync(userDataDir, { recursive: true, force: true });
+    }
+  });
+
+  // A rejected history.stats() must not disable the clear trigger forever, and
+  // a rejected history.clear() must keep the dialog open with an inline error
+  // instead of silently doing nothing — and a same-tick double confirm must
+  // fire history.clear() only once.
+  test("a failed stats read still enables the trigger; a failed clear keeps the dialog open with an inline error", async () => {
+    const userDataDir = mkdtempSync(join(tmpdir(), "zeo-settings-"));
+    const { app, sidebar } = await launch(userDataDir);
+    try {
+      await app.evaluate(({ ipcMain }) => {
+        ipcMain.removeHandler("zeo:history:stats");
+        ipcMain.handle("zeo:history:stats", () => {
+          throw new Error("boom");
+        });
+      });
+
+      const settings = await openSettings(app, sidebar, "settings.openHistory");
+      const trigger = settings.getByTestId("settings-history-clear");
+      await expect(trigger).toBeEnabled();
+      await expect(settings.getByTestId("settings-history-stats")).toContainText("unavailable");
+
+      await trigger.click();
+      const dialog = settings.getByTestId("settings-history-clear-dialog");
+      await expect(dialog).toBeVisible();
+      // Count-free wording: no counts are known.
+      await expect(dialog).toContainText("This removes all browsing history.");
+      await expect(dialog).not.toContainText("entries");
+
+      // Replace the clear handler with one that counts invocations and rejects
+      // after a delay, so an in-flight double confirm is observable.
+      await app.evaluate(({ ipcMain }) => {
+        (globalThis as unknown as { __zeoHistoryClearCalls: number }).__zeoHistoryClearCalls = 0;
+        ipcMain.removeHandler("zeo:history:clear");
+        ipcMain.handle("zeo:history:clear", () => {
+          (globalThis as unknown as { __zeoHistoryClearCalls: number }).__zeoHistoryClearCalls += 1;
+          return new Promise((_resolve, reject) => {
+            setTimeout(() => reject(new Error("clear failed")), 300);
+          });
+        });
+      });
+
+      const confirm = settings.getByTestId("settings-history-clear-confirm");
+      await confirm.dblclick();
+      await expect(confirm).toBeDisabled();
+      expect(
+        await app.evaluate(
+          () => (globalThis as unknown as { __zeoHistoryClearCalls: number }).__zeoHistoryClearCalls,
+        ),
+      ).toBe(1);
+
+      const error = settings.getByTestId("settings-history-clear-dialog-error");
+      await expect(error).toBeVisible();
+      await expect(error).toHaveAttribute("role", "alert");
+      await expect(dialog).toBeVisible();
+      await expect(confirm).toBeEnabled();
+    } finally {
+      await app.close();
+      rmSync(userDataDir, { recursive: true, force: true });
+    }
+  });
 });
 
 // --- History seeding fixtures (mirrors history.spec.ts). ------------------------

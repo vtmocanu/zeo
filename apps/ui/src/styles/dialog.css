@@ -39,6 +39,12 @@
   color: var(--ink-popover-secondary);
 }
 
+.dialog__error {
+  margin: -12px 0 18px;
+  color: var(--danger);
+  font-size: var(--text-sm);
+}
+
 .dialog__actions {
   display: flex;
   justify-content: flex-end;
