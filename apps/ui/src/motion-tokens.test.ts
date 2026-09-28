@@ -103,7 +103,7 @@ function stripComments(source: string): string {
 
 /** Keyframes that animate an element into view. They define only `from`, so a
  *  forwards fill (`both`/`forwards`) would keep the end state applied after the
- *  animation ends, leaving a stacking context behind. */
+ *  animation ends. */
 const ENTER_KEYFRAMES = [
   "zeo-enter",
   "zeo-fade-in",
@@ -148,6 +148,17 @@ describe("enter animations do not persist (PRD 10.7 §2)", () => {
   test(".window-tint-outgoing still uses both, to hold its final frame until unmount", () => {
     const match = /\.window-tint-outgoing\s*\{[^}]*animation\s*:\s*([^;]+);/.exec(css);
     expect(match?.[1]).toMatch(/\bboth\b/);
+  });
+});
+
+describe(".sidebar clips on both axes without a scroll container (PRD 10.7 §4)", () => {
+  const css = stripComments(readFileSync(join(stylesDir, "sidebar.css"), "utf8"));
+  const block = /(?:^|\n)\.sidebar\s*\{([^}]*)\}/.exec(css)?.[1] ?? "";
+
+  test("overflow-x and overflow-y are both clip, so vertical overflow never scrolls the document", () => {
+    expect(block).toMatch(/overflow-x\s*:\s*clip\s*;/);
+    expect(block).toMatch(/overflow-y\s*:\s*clip\s*;/);
+    expect(block).not.toMatch(/overflow(-[xy])?\s*:\s*(hidden|scroll|auto|visible)\b/);
   });
 });
 
