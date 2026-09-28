@@ -12,6 +12,7 @@ import type {
   DownloadsState,
   FindState,
   QuickBrowseState,
+  RevisionedSuggestions,
   Settings,
   SettingsSectionId,
   UpdateState,
@@ -80,6 +81,15 @@ export interface RuntimeState {
   layoutSaveTimer: Timer;
   commandBar: CommandBarState;
   commandBarRevision: number;
+  /**
+   * The `{ revision, suggestions }` lists BACKGROUND re-ranks replaced since the
+   * last user-driven change (oldest first, capped at
+   * `MAX_PREVIOUS_SUGGESTION_LISTS`), kept so {@link acceptCommandBar} can remap
+   * a click that raced a re-rank (via {@link resolveAcceptIndex}) instead of
+   * rejecting it. Emptied by a typed query and whenever the bar opens or closes,
+   * so a click is never remapped across a change the user made.
+   */
+  commandBarPrevious: RevisionedSuggestions[];
   find: FindState;
   historyErrorLogged: boolean;
   blocker: Blocker | null;
@@ -131,6 +141,14 @@ export interface RuntimeState {
   executeCommand: ((id: CommandId) => void) | null;
   commandContextOf: (() => CommandContext) | null;
   closeFindSession: ((returnFocus?: boolean) => void) | null;
+  /**
+   * Registered by `command-bar.ts` at load so `command-bar-focus.ts` can close
+   * the bar without importing `command-bar.ts` — `command-bar.ts` imports
+   * `layout.ts`, and both `layout.ts` and `views.ts` import
+   * `command-bar-focus.ts`, so a direct import there would cycle back (madge
+   * cycle guard, matching `closeTabHook` above).
+   */
+  closeCommandBarHook: (() => void) | null;
   rebuildMenu: (() => void) | null;
   createWindow: ((seed: boolean) => void) | null;
   openPopupAsTab: ((ownerTabId: string, url: string) => void) | null;
@@ -169,6 +187,7 @@ export const runtime: RuntimeState = {
     surface: "bar",
   },
   commandBarRevision: 0,
+  commandBarPrevious: [],
   find: {
     open: false,
     query: "",
@@ -222,6 +241,7 @@ export const runtime: RuntimeState = {
   executeCommand: null,
   commandContextOf: null,
   closeFindSession: null,
+  closeCommandBarHook: null,
   rebuildMenu: null,
   createWindow: null,
   openPopupAsTab: null,

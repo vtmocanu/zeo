@@ -481,9 +481,6 @@ async function waitForCommandHostReady(app: ElectronApplication, page: Page): Pr
       await zeo.tabs.create(url);
     }, pageUrl);
     await waitForViewUrl(app, token);
-    // Settle the newly created tab's load before the caller opens the command
-    // bar against it (see waitForViewsIdle for the blur-close/re-rank race).
-    await waitForViewsIdle(app);
   } finally {
     await server.close();
   }
@@ -524,10 +521,6 @@ test.describe("zeo desktop app", () => {
       env: { ...process.env, ELECTRON_RENDERER_URL: "", ZEO_E2E: "1" },
     });
     sidebar = await sidebarWindow(app);
-    // The seeded startup tab's example.com load starts synchronously in
-    // createWindow, so it can still be in flight here; settle it before any
-    // test drives the command bar (see waitForViewsIdle for the race).
-    await waitForViewsIdle(app);
   });
 
   test.afterEach(async () => {
@@ -2423,9 +2416,6 @@ test.describe("zeo desktop app", () => {
       return { personalId, researchId: research.id, tabId: tab.id };
     });
 
-    // Settle the new tab's load before opening the bar (see waitForViewsIdle).
-    await waitForViewsIdle(app);
-
     // Open in new-tab mode and type part of the cross-space tab's title.
     await sidebar.evaluate(async () => {
       const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
@@ -2517,11 +2507,6 @@ test.describe("zeo desktop app", () => {
     });
     expect(setup.archivedContains).toBe(true);
     expect(setup.openContains).toBe(false);
-
-    // Archiving destroyed archmy's view and re-showed the already-idle seeded
-    // view (no new load); settle defensively before opening the bar (see
-    // waitForViewsIdle).
-    await waitForViewsIdle(app);
 
     await sidebar.evaluate(async () => {
       const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
@@ -2652,9 +2637,6 @@ test.describe("zeo desktop app", () => {
       return { matchId: match.id, tabCount: s.tabs.length };
     });
 
-    // Settle both new tabs' loads before opening the bar (see waitForViewsIdle).
-    await waitForViewsIdle(app);
-
     // "zebra" resolves to a SEARCH (no dot), so row 0 is a `search` action; it
     // also substring-matches the zebra.example tab, so there is a tab row below.
     const shape = await sidebar.evaluate(async () => {
@@ -2707,9 +2689,6 @@ test.describe("zeo desktop app", () => {
       await zeo.tabs.create("zebra.example");
       await zeo.tabs.create("zebrafish.example");
     });
-
-    // Settle both new tabs' loads before opening the bar (see waitForViewsIdle).
-    await waitForViewsIdle(app);
 
     await sidebar.evaluate(async () => {
       const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
@@ -2776,11 +2755,6 @@ test.describe("zeo desktop app", () => {
       };
     });
 
-    // Settle all three new tabs' loads before opening the bar (see
-    // waitForViewsIdle). This only adds a settle point after the creates
-    // above; it does not reorder them, so the lastActiveAt gaps still hold.
-    await waitForViewsIdle(app);
-
     // charlie was created last, so it is active and must be EXCLUDED.
     await sidebar.evaluate(async () => {
       const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
@@ -2821,9 +2795,6 @@ test.describe("zeo desktop app", () => {
       // plus the orchid tab row.
       await zeo.tabs.create("daffodil.example");
     });
-
-    // Settle both new tabs' loads before opening the bar (see waitForViewsIdle).
-    await waitForViewsIdle(app);
 
     await sidebar.evaluate(async () => {
       const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
@@ -2903,7 +2874,6 @@ test.describe("zeo desktop app", () => {
       // A non-matching tab created last so neither matching tab is ACTIVE.
       await zeo.tabs.create("other.example");
     });
-    await waitForViewsIdle(app);
 
     await sidebar.evaluate(async () => {
       const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
@@ -3157,6 +3127,10 @@ test.describe("zeo desktop app", () => {
         await zeo.tabs.create(url);
       }, `${server.base}/page.html?probe=${token}`);
       await waitForViewUrl(app, token);
+      // Deliberate: find opens a session on the active tab's document, and the
+      // #179 focus hand-back covers only the bar surface, not find. Letting the
+      // fresh tab finish loading first keeps a late load from overlapping the
+      // find session this test measures.
       await waitForViewsIdle(app);
 
       await sidebar.evaluate(async () => {
@@ -3211,9 +3185,6 @@ test.describe("zeo desktop app", () => {
       // eligible as suggestion rows.
       await zeo.tabs.create("fern.example");
     });
-
-    // Settle all three new tabs' loads before opening the bar (see waitForViewsIdle).
-    await waitForViewsIdle(app);
 
     const setup = await sidebar.evaluate(async () => {
       const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
@@ -3502,10 +3473,10 @@ test.describe("zeo desktop app", () => {
   // tab.back row appear AND the menu item enable WITHOUT retyping. Network-
   // dependent (a real navigation must load), so it polls generously.
   test("the Go Back row and menu item enable without retyping after an in-place navigation", async () => {
-    // Fully load the seeded page (example.com) BEFORE opening the bar. The overlay
-    // closes on ANY focus loss (its blur handler), and a page finishing load can
-    // steal focus; doing the load now means the ONLY thing that happens with the
-    // bar open is the focus-neutral hash change below, so the bar stays open.
+    // Fully load the seeded page (example.com) BEFORE opening the bar, so the ONLY
+    // navigation that happens with the bar open is the hash change below. The
+    // load's own re-ranks are then over before the "no back row yet" baseline is
+    // read, and the tab.back row can only come from the in-place navigation.
     const tabView = await tabViewWindow(app, sidebar);
     await expect.poll(() => tabView.url(), { timeout: 30_000 }).toContain("example.com");
     await tabView.waitForLoadState("load").catch(() => {});
@@ -3539,12 +3510,11 @@ test.describe("zeo desktop app", () => {
     expect(await goBackEnabled()).toBe(false);
 
     // Navigate the active tab IN PLACE via a same-document hash change, run in
-    // the tab view's own context. This is deliberately NOT a full `tabs.navigate`
-    // reload: a fresh page load focuses the tab's WebContentsView, which would blur
-    // and close the overlay — so the row could never appear while the bar is shut.
-    // A hash change instead adds a real back-history entry (canGoBack → true) and
-    // fires `did-navigate-in-page` WITHOUT reloading or refocusing the view, so the
-    // overlay stays open and refreshCommandState re-ranks its suggestions live.
+    // the tab view's own context. This is deliberately NOT a full `tabs.navigate`:
+    // a hash change adds a real back-history entry (canGoBack → true) and fires
+    // `did-navigate-in-page` with no network load, so the test is offline-safe
+    // and isolates the thing under test: refreshCommandState re-ranking the open
+    // bar's suggestions live on the navigation event.
     await tabView.evaluate(() => {
       window.location.hash = "#zeo-back";
     });
@@ -3951,9 +3921,6 @@ test.describe("zeo desktop app", () => {
     });
     expect(pb.seededId).not.toBeNull();
 
-    // Settle the new tab's load before opening the bar (see waitForViewsIdle).
-    await waitForViewsIdle(app);
-
     // commands mode: querying "pin" surfaces command rows only — never a tab row,
     // even though the "pinboard" tab title matches.
     const commandsKinds = await sidebar.evaluate(async () => {
@@ -4147,7 +4114,7 @@ test.describe("zeo desktop app", () => {
 
   // §5 bullet 7 — enablement refresh in commands mode without retyping. With the bar
   // open in commands mode and "back" typed, a fresh tab has no tab.back row. An
-  // IN-PLACE hash navigation (focus-neutral, keeps the overlay open) adds back-history
+  // IN-PLACE hash navigation (no reload, no network) adds back-history
   // and refreshCommandState re-ranks the live suggestions, so the tab.back row appears
   // WITHOUT retyping. Setup is fully deterministic and OFFLINE: a fresh tab is pointed
   // at a loopback page (no external network, no swallowed page-load failure), and the
@@ -4172,8 +4139,11 @@ test.describe("zeo desktop app", () => {
       // is by URL token in the main process (network-free); on a loopback origin the
       // commit is effectively immediate.
       await waitForViewUrl(app, token);
-      // Settle the fresh tab's load before opening the bar (see waitForViewsIdle);
-      // the later in-place hash navigation is deliberate and left untouched.
+      // Deliberate: the test is "load finished, canGoBack false, then an in-place
+      // navigation makes it true". Let the initial load FINISH before the hash
+      // change below, so the back entry is pushed onto the loaded document rather
+      // than racing the initial navigation (Chromium can turn a navigation that
+      // lands before the load completes into a history replace).
       await waitForViewsIdle(app);
 
       // Open commands mode. Anchor the setup BEFORE the negative assertion so the
@@ -4212,9 +4182,9 @@ test.describe("zeo desktop app", () => {
 
       // Navigate the active tab IN PLACE via a same-document hash change in the tab's
       // OWN context, driven from the main process: adds a real back-history entry
-      // (canGoBack → true) and fires did-navigate-in-page WITHOUT reloading or
-      // refocusing the view, so the overlay stays open and refreshCommandState
-      // re-ranks its suggestions live. A missing view throws — setup failures reject
+      // (canGoBack → true) and fires did-navigate-in-page WITHOUT reloading the
+      // view, and refreshCommandState re-ranks the open bar's suggestions live. A
+      // missing view throws — setup failures reject
       // rather than being swallowed.
       await app.evaluate(async ({ webContents }, tok) => {
         const wc = webContents.getAllWebContents().find((w) => w.getURL().includes(tok));

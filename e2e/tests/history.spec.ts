@@ -9,7 +9,7 @@ import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 // PRD 9.1 — shared view-URL poll helper (VIEW_POLL_TIMEOUT_MS-bounded). PRD
 // 10.5 — plus the shared command-bar overlay window lookup.
-import { commandBarWindow, waitForViewsIdle, waitForViewUrl } from "./helpers/view";
+import { commandBarWindow, waitForViewUrl } from "./helpers/view";
 
 // Absolute path to the built Electron main entry, resolved from this test file
 // (e2e is ESM, so no __dirname). Layout mirrors persistence.spec.ts / app.spec.ts:
@@ -467,9 +467,6 @@ test.describe("PRD 6.1 history", () => {
       const tabId = await freshHistory(app, sidebar);
       await navigateAndRecord(sidebar, tabId, `${server.base}/a.html`, 1);
       await navigateAndRecord(sidebar, tabId, `${server.base}/b.html`, 2);
-      // Settle the tab's load before driving the bar (#175): a late
-      // did-finish-load re-ranks or blur-closes an open bar.
-      await waitForViewsIdle(app);
 
       // Open history mode by RUNNING the command (Cmd+Y is a native accelerator
       // Playwright cannot fire); read back the pushed state.

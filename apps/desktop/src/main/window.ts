@@ -18,6 +18,7 @@ import { readWindowState, writeWindowState, readChromePrefs } from "./db-window.
 import { runtime, moduleDir, DEFAULT_URL } from "./state.js";
 import { broadcast } from "./broadcast.js";
 import { closeCommandBar } from "./command-bar.js";
+import { onOverlayBlur } from "./command-bar-focus.js";
 import { applyLayout, sendDividerGeometry } from "./layout.js";
 import { relayoutWindow, applyWindowButtons, setChrome, flushChromeSave } from "./chrome.js";
 
@@ -177,10 +178,12 @@ export function createWindow(seed: boolean): void {
       query: { view: "command-bar" },
     });
   }
-  // Click on the page or sidebar (overlay loses focus) dismisses the bar.
-  // closeCommandBar is idempotent, so the focus return it performs never recurses.
+  // Click on the page or sidebar (overlay loses focus) dismisses the bar — but a
+  // loading tab view can ALSO steal focus this way without a real user dismiss,
+  // so the decision is deferred to onOverlayBlur, which distinguishes a genuine
+  // blur from a steal (see command-bar-focus.ts) before closing.
   runtime.overlay!.webContents.on("blur", () => {
-    closeCommandBar();
+    onOverlayBlur();
   });
 
   runtime.win!.on("resize", () => {
@@ -241,6 +244,9 @@ export function createWindow(seed: boolean): void {
       revision: ++runtime.commandBarRevision,
       surface: "bar",
     };
+    // No session left to remap a stray click against once the window (and its
+    // bar) is gone.
+    runtime.commandBarPrevious = [];
     // Drop the settings view with the window it was parented to; a later
     // createWindow + settings.open recreates it lazily.
     if (runtime.settingsView !== null && !runtime.settingsView.webContents.isDestroyed()) {

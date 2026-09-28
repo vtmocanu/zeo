@@ -18,6 +18,7 @@ import {
   layoutsEqual,
 } from "@zeo/core";
 import type { DividerGeometry, PaneSide, Tab, WindowLayout } from "@zeo/core";
+import { focusTabViewDeliberately, focusTabViewPassively } from "./command-bar-focus.js";
 import { writeWindowLayout, readWindowLayout } from "./db.js";
 import { runtime, moduleDir, LAYOUT_SAVE_DEBOUNCE_MS } from "./state.js";
 import { broadcast } from "./broadcast.js";
@@ -85,8 +86,19 @@ export function ensureDividerView(): void {
  * open find session bound to a tab that is no longer active, via
  * {@link closeFindOffActiveTab}. Called everywhere the layout or the active view
  * can change.
+ *
+ * `opts.focus` (default `"passive"`) controls how the focused pane's view is
+ * focused in split mode: `"passive"` (via {@link focusTabViewPassively}) never
+ * steals focus from an open command bar, for a layout pass NOT initiated by
+ * the user directly acting on the split (e.g. restoreTab, remapSpaceProfile,
+ * sweepIdle, createWindow's first layout, or a non-pane tab closing), and for
+ * doSetRatio, whose divider drag cannot start while the full-window command
+ * bar is open anyway; `"deliberate"`
+ * (via {@link focusTabViewDeliberately}) closes an open command bar first, for
+ * the explicit user split/focus ops in this file and {@link activateTab}.
  */
-export function applyLayout(): void {
+export function applyLayout(opts?: { focus?: "deliberate" | "passive" }): void {
+  const focusMode = opts?.focus ?? "passive";
   if (runtime.win === null) {
     return;
   }
@@ -141,7 +153,11 @@ export function applyLayout(): void {
   if (focusedTabId !== null) {
     const focusedView = runtime.views.get(focusedTabId);
     if (focusedView !== undefined && !focusedView.webContents.isDestroyed()) {
-      focusedView.webContents.focus();
+      if (focusMode === "deliberate") {
+        focusTabViewDeliberately(focusedView.webContents);
+      } else {
+        focusTabViewPassively(focusedView.webContents);
+      }
     }
   }
   if (runtime.find.open) {
@@ -155,8 +171,11 @@ export function applyLayout(): void {
  * idempotent view-reconcile entry point: in single mode it behaves like
  * {@link ensureActiveView}; in split mode it re-lays the panes + divider or
  * collapses to single when the split can no longer be honored.
+ *
+ * `opts` is threaded straight through to {@link applyLayout} — see its doc
+ * comment for `opts.focus` (default `"passive"`).
  */
-export function reconcileAndApply(): void {
+export function reconcileAndApply(opts?: { focus?: "deliberate" | "passive" }): void {
   const previous = runtime.layout;
   runtime.layout = reconcileLayout(
     runtime.layout,
@@ -170,7 +189,7 @@ export function reconcileAndApply(): void {
     // app must not exit with split metadata the store no longer supports (#140).
     persistLayout();
   }
-  applyLayout();
+  applyLayout(opts);
 }
 
 /**
@@ -323,7 +342,7 @@ export function doSplit(): Promise<void> {
   }
   runtime.layout = enterSplit(activeId, otherId);
   persistLayout();
-  applyLayout();
+  applyLayout({ focus: "deliberate" });
   sendDividerGeometry();
   broadcast();
   return Promise.resolve();
@@ -352,7 +371,7 @@ export function doSplitWith(tabId: string): Promise<void> {
   }
   runtime.layout = enterSplit(activeId, tabId);
   persistLayout();
-  applyLayout();
+  applyLayout({ focus: "deliberate" });
   sendDividerGeometry();
   broadcast();
   return Promise.resolve();
@@ -373,7 +392,7 @@ export function doUnsplit(): void {
   }
   runtime.layout = unsplit(runtime.layout);
   persistLayout();
-  applyLayout();
+  applyLayout({ focus: "deliberate" });
   broadcast();
 }
 
@@ -388,7 +407,7 @@ export function doSwap(): void {
   }
   runtime.layout = swapPanes(runtime.layout);
   persistLayout();
-  applyLayout();
+  applyLayout({ focus: "deliberate" });
   sendDividerGeometry();
   broadcast();
 }
@@ -416,7 +435,7 @@ export function doFocusPane(pane: PaneSide): void {
     runtime.store.activeTabId,
   );
   persistLayout();
-  applyLayout();
+  applyLayout({ focus: "deliberate" });
   broadcast();
 }
 
@@ -435,7 +454,7 @@ export function doFocusOther(): void {
     runtime.store.activate(focusedTabId);
   }
   persistLayout();
-  applyLayout();
+  applyLayout({ focus: "deliberate" });
   broadcast();
 }
 
@@ -510,7 +529,8 @@ export function activateTab(id: string): void {
   // Layout-aware reconcile: activating a pane tab re-focuses that pane; activating
   // a non-pane tab collapses the split to single (reconcile drops the split when
   // the active tab is neither pane), and applyLayout materializes the view.
-  reconcileAndApply();
+  // "deliberate": the user directly activated this tab.
+  reconcileAndApply({ focus: "deliberate" });
   broadcast();
 }
 

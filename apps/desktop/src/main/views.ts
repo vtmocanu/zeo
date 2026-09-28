@@ -19,6 +19,7 @@ import {
 } from "@zeo/core";
 import type { Tab, UnloadCandidate } from "@zeo/core";
 import { updateVisitTitle } from "./db.js";
+import { onTabViewFocus } from "./command-bar-focus.js";
 import { runtime } from "./state.js";
 import { broadcast, noteInactiveChange, scheduleBlockingBroadcast } from "./broadcast.js";
 import { recordNavigation, logHistoryError } from "./history.js";
@@ -282,6 +283,11 @@ export function createViewFor(tab: Tab, spaceId: string, urlOverride?: string): 
   view.webContents.on("did-finish-load", () => {
     runtime.onStateApplied?.();
   });
+
+  // A loading tab view can steal native focus from the full-window overlay even
+  // though the user's click never left the command bar; hand focus straight
+  // back when the bar currently owns it (PRD 10.5 follow-up, issue #179 M2).
+  view.webContents.on("focus", onTabViewFocus);
 
   // Track load failure so activation can retry it; a later success clears it.
   view.webContents

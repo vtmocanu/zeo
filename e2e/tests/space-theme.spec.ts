@@ -350,7 +350,6 @@ test.describe("PRD 10.3 space themes", () => {
       await expect.poll(() => readAccent(settings)).toBe(bAccent);
 
       // Command-bar overlay, opened while B is still active.
-      await waitForViewsIdle(app);
       await sidebar.evaluate(async () => {
         const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
         await zeo.commandBar.open("commands");
@@ -620,6 +619,10 @@ test.describe("PRD 10.3 space themes", () => {
         const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
         await zeo.tabs.activate(id);
       }, tab.id);
+      // Deliberate: the assertion below is that focus lands in the sidebar
+      // picker, and the #179 focus hand-back only covers the command bar. A tab
+      // view still loading (this data: page or the seeded tab) could take focus
+      // off the picker, so let every load finish first.
       await waitForViewsIdle(app);
 
       await sidebar.evaluate(async () => {
