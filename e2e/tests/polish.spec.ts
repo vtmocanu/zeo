@@ -600,6 +600,16 @@ const SIDEBAR_MAIN_REQUIRED = [
   '[data-testid="new-space-button"]',
 ];
 
+// sidebar-resize-handle is a §6 sidebar-row control (PRD 10.7 §6) and so is
+// required for the focus-ring sweep, but it is one of §7's two named
+// pointer-only drag-strip exemptions from the hit-target floor — so it is
+// added only here, never to SIDEBAR_MAIN_REQUIRED (assertHitTargets skips it
+// entirely as exempt, and would fail coverage if it were required there).
+const SIDEBAR_MAIN_FOCUS_REQUIRED = [
+  ...SIDEBAR_MAIN_REQUIRED,
+  '[data-testid="sidebar-resize-handle"]',
+];
+
 const THEME_PICKER_REQUIRED = [
   '[data-testid="theme-kind-solid"]',
   '[data-testid="theme-kind-gradient"]',
@@ -695,7 +705,7 @@ test.describe("PRD 10.7 polish — sidebar and overlay focus ring and hit target
       // today tab, and the archived view all present together. Coverage is
       // asserted, not assumed: assertFocusRings/assertHitTargets throw if any
       // SIDEBAR_MAIN_REQUIRED identifier was not actually found and probed. ---
-      await assertFocusRings(sidebar, SIDEBAR_MAIN_REQUIRED);
+      await assertFocusRings(sidebar, SIDEBAR_MAIN_FOCUS_REQUIRED);
       await assertHitTargets(sidebar, SIDEBAR_MAIN_REQUIRED);
 
       // PRD 10.7 §10 — a real Tab-key smoke test on the sidebar too,
@@ -705,10 +715,14 @@ test.describe("PRD 10.7 polish — sidebar and overlay focus ring and hit target
       // side effects, then Tab and check every stop's ring.
       await sidebar.getByTestId("nav-back").evaluate((el) => (el as HTMLElement).focus());
       const sidebarTabVisited = await assertFocusRingsByTab(sidebar, 6);
+      // nav-forward is the very next control after nav-back in DOM tab order
+      // (WindowChrome.tsx's WINDOW_ROW_BUTTONS) and is never disabled (the
+      // sidebar has no navigation flags), so Tab must land on it first — a
+      // Tab press that does nothing would leave it unvisited.
       expect(
-        sidebarTabVisited.size,
+        [...sidebarTabVisited],
         `real Tab walk on sidebar visited: ${[...sidebarTabVisited].join(", ")}`,
-      ).toBeGreaterThan(0);
+      ).toContain('[data-testid="nav-forward"]');
 
       // --- Phase B: rename, in isolation. space-name-input is measured
       // (size, then focus ring) BEFORE anything else takes focus — a full
@@ -820,11 +834,14 @@ test.describe("PRD 10.7 polish — settings focus ring and hit targets", () => {
         settings.locator('[data-testid="settings-section-general"][aria-current="page"]'),
       ).toHaveCount(1);
       const tabVisited = await assertFocusRingsByTab(settings, 10);
-      const tabVisitedSections = [...tabVisited].filter((id) => id.includes("settings-section-"));
+      // settings-section-blocking is the next section-nav button after
+      // settings-section-general in DOM order (SETTINGS_SECTIONS in
+      // packages/core/src/settings.ts, rendered in that order as plain
+      // <button>s with no tabindex overrides), so Tab must land on it first.
       expect(
-        tabVisitedSections.length,
-        `real Tab walk should reach settings-section-* items; visited: ${[...tabVisited].join(", ")}`,
-      ).toBeGreaterThan(0);
+        [...tabVisited],
+        `real Tab walk should reach settings-section-blocking next; visited: ${[...tabVisited].join(", ")}`,
+      ).toContain('[data-testid="settings-section-blocking"]');
 
       for (const section of ["general", "blocking", "profiles", "history", "about"]) {
         await settings.getByTestId(`settings-section-${section}`).click();

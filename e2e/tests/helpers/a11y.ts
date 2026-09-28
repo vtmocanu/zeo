@@ -301,14 +301,49 @@ export async function assertFocusRings(
 }
 
 /**
+ * The identifier of `document.activeElement` on `page`, in the same format
+ * `identify()` uses everywhere else in this module (its own inline copy — a
+ * `page.evaluate()` callback is serialized and cannot close over a
+ * module-scope helper). `null` when nothing but the document body has focus.
+ */
+async function activeElementLabel(page: Page): Promise<string | null> {
+  return page.evaluate(() => {
+    function identify(el: Element): string {
+      const testid = el.getAttribute("data-testid");
+      if (testid !== null) return `[data-testid="${testid}"]`;
+      const className = typeof el.className === "string" ? el.className.trim() : "";
+      if (className !== "") return `.${className.split(/\s+/).join(".")}`;
+      return el.tagName.toLowerCase();
+    }
+    const active = document.activeElement;
+    if (active === null || active === document.body) return null;
+    return identify(active);
+  });
+}
+
+/**
  * The real Tab-key smoke test PRD 10.7 §10 asks for: presses Tab up to
- * `maxSteps` times starting from `page`'s current focus, and for every
- * distinct element that becomes `document.activeElement`, asserts it shows
- * the same 2px solid `--focus-ring` ring §6 requires (skipping the two exempt
- * inputs). Stops early once focus cycles back to an element already seen.
- * Returns the identifiers of every element visited, so a caller can assert
- * the walk actually reached the controls it expected to reach — a Tab walk
- * that never leaves the first control would otherwise pass vacuously.
+ * `maxSteps` times starting from `page`'s current focus (the "seed", whatever
+ * the caller already focused before calling this), and for every distinct
+ * element that becomes `document.activeElement` AFTER a Tab press, asserts it
+ * shows the same 2px solid `--focus-ring` ring §6 requires (skipping the two
+ * exempt inputs). Stops early once focus cycles back to an element already
+ * seen (the seed counts as already seen, so a Tab walk that wraps all the way
+ * around stops there too).
+ *
+ * The seed itself is recorded (via `document.activeElement`) BEFORE the first
+ * Tab and is never counted as visited: a caller focuses the seed only to give
+ * the walk a known starting point, and never presses Tab to reach it, so
+ * crediting it as "visited" would let a Tab key that does nothing at all
+ * (e.g. a listener that `preventDefault`s it) pass vacuously — the seed would
+ * still show up as the sole "visited" entry. The first Tab press is also
+ * required to actually move focus away from the seed; if it does not, this
+ * throws immediately rather than silently returning an empty/seed-only set.
+ *
+ * Returns the identifiers of every element Tab actually moved focus to (never
+ * including the seed), so a caller can assert the walk reached specific next
+ * stops in DOM tab order — asserting only a non-empty set is exactly the
+ * vacuous check this helper is designed not to allow.
  *
  * This is a genuine `keyboard.press("Tab")` walk, not the synthetic
  * `el.focus({ focusVisible: true })` sweep `assertFocusRings` uses: under
@@ -321,7 +356,8 @@ export async function assertFocusRingsByTab(
   maxSteps: number = 40,
 ): Promise<Set<string>> {
   const focusRing = await tokenBackground(page, "--focus-ring");
-  const visited = new Set<string>();
+  const seedLabel = await activeElementLabel(page);
+  const visited = new Set<string>(seedLabel !== null ? [seedLabel] : []);
   const order: string[] = [];
 
   for (let step = 0; step < maxSteps; step += 1) {
@@ -348,6 +384,16 @@ export async function assertFocusRingsByTab(
         outlineColor: s.outlineColor,
       };
     }, FOCUS_EXEMPT_TESTIDS);
+
+    if (step === 0) {
+      const firstLabel = info === null ? null : info.label;
+      if (firstLabel === seedLabel) {
+        throw new Error(
+          `Tab-key smoke test: the first Tab press left focus on the seed control` +
+            `${seedLabel !== null ? ` (${seedLabel})` : ""} instead of moving it — Tab did not move focus`,
+        );
+      }
+    }
 
     if (info === null) continue;
     if (info.exempt === true) {
