@@ -677,15 +677,16 @@ export function App() {
   }, []);
 
   // The outgoing tint layer unmounts on `animationend` (handled by
-  // WindowBackdrop) or on a fallback timer, whichever comes first. Until
-  // the layer's fade-out animation actually starts painting
-  // (see `handleOutgoingTintStart` below) it is armed with the generous
-  // `OUTGOING_TINT_START_BACKSTOP_MS`, since a layer that has never started
-  // has never painted and can linger unseen; once `animationstart` fires it
-  // is re-armed with the tight `motionMs("--motion-space") + 50` ms, so a
-  // dropped `animationend` (e.g. the tab losing focus mid-fade) can't strand
-  // a layer that IS visible. (With motion off the layer never mounts at
-  // all: `!motionDisabled()` guards the switch effect above.)
+  // WindowBackdrop) or on a fallback timer, whichever comes first. From mount
+  // until its fade-out's `animationstart` it is armed with the generous
+  // `OUTGOING_TINT_START_BACKSTOP_MS`, so a renderer that is slow to produce
+  // its first frame cannot remove the layer before the fade-out runs;
+  // `handleOutgoingTintStart` then re-arms it at
+  // `motionMs("--motion-space") + 50` ms, so a dropped `animationend` (e.g.
+  // the tab losing focus mid-fade) can't strand a visible layer. With motion
+  // off the layer never mounts: `!motionDisabled()` guards the switch effect.
+  // One ref serves both: `setOutgoingTint` is a sync-lane update, so this
+  // effect always runs before the new layer's `animationstart`.
   const outgoingTintTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     if (!outgoingTint) {

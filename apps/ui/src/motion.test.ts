@@ -132,7 +132,7 @@ describe("outgoingTintDecision (compares the theme actually on screen)", () => {
 
 describe("OUTGOING_TINT_START_BACKSTOP_MS (PRD 10.7 §4)", () => {
   test("is fixed and generous, not tied to any motion token's duration", () => {
-    // A layer whose animation has never started has never painted, so it
+    // Before the renderer's first frame the layer is not on screen, so it
     // can linger long after the shortest reduced-motion duration (120ms)
     // without ever being visible; the backstop only needs to be well clear
     // of a slow first frame, not derived from --motion-space.

@@ -96,7 +96,7 @@ export function WindowBackdrop(props: {
    *  App's own timers instead. */
   onOutgoingTintEnd: (key: string) => void;
   /** Called with the outgoing layer's key when its fade-out animation
-   *  actually starts painting, so App can swap from its generous
+   *  animation starts, so App can swap from its generous
    *  never-started backstop to the tight post-start timeout. */
   onOutgoingTintStart: (key: string) => void;
   /** Bumped by App on every switch that changes the tint, so `.window-tint`

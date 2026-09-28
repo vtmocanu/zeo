@@ -330,12 +330,11 @@ function outgoingTintCount(sidebar: Page): Promise<number> {
  * gap between App arming its unmount timer at mount and the layer's
  * `animationstart` actually firing.
  *
- * `stallMs` must stay above the old bug's window (App used to unmount at
- * `motionMs("--motion-space") + 50` = 170ms under reduced motion,
- * regardless of whether the animation had started) and comfortably below
- * `OUTGOING_TINT_START_BACKSTOP_MS` (1500ms), so the fixed code's
- * never-started backstop can't fire either: only a correct start/backstop
- * split makes this test pass deterministically.
+ * `stallMs` must stay above `motionMs("--motion-space") + 50` (170ms under
+ * reduced motion), the timeout App may only arm once the fade-out has
+ * started, and comfortably below
+ * `OUTGOING_TINT_START_BACKSTOP_MS` (1500ms), so the pre-start backstop
+ * can't fire either.
  */
 async function stallOutgoingTintFirstFrame(sidebar: Page, stallMs: number): Promise<void> {
   await sidebar.evaluate((ms) => {
@@ -677,11 +676,8 @@ test.describe("PRD 10.7 motion — reduced motion", () => {
       await activateSpace(sidebar, a);
       await clearMotionLog(sidebar);
 
-      // Stall the outgoing tint layer's first frame for longer than the old
-      // bug's 170ms unmount window (regression coverage: apps/ui/src/App.tsx
-      // used to arm its unmount timer at mount, not at `animationstart`, so
-      // a stall here used to make the cross-fade vanish before it ever
-      // painted).
+      // Stall the outgoing tint layer's first frame past 170ms: a timer armed
+      // at mount must not remove the layer before its fade-out starts.
       await stallOutgoingTintFirstFrame(sidebar, 400);
       await activateSpace(sidebar, c);
       // Under reduced motion the forward class still applies (direction is
