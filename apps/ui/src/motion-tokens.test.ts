@@ -101,8 +101,9 @@ function stripComments(source: string): string {
   return source.replace(/\/\*[\s\S]*?\*\//g, (c) => c.replace(/[^\n]/g, " "));
 }
 
-/** Keyframes that animate an element into view; their `animation:` shorthand
- *  must not keep applying the `from` frame after the animation ends. */
+/** Keyframes that animate an element into view. They define only `from`, so a
+ *  forwards fill (`both`/`forwards`) would keep the end state applied after the
+ *  animation ends, leaving a stacking context behind. */
 const ENTER_KEYFRAMES = [
   "zeo-enter",
   "zeo-fade-in",
@@ -133,6 +134,14 @@ describe("enter animations do not persist (PRD 10.7 §2)", () => {
       expect(decl).toMatch(/\bbackwards\b/);
       expect(decl).not.toMatch(/\bboth\b/);
       expect(decl).not.toMatch(/\bforwards\b/);
+    }
+  });
+
+  test("no rule overrides the fill mode with an animation-fill-mode longhand", () => {
+    const files = readdirSync(stylesDir).filter((name) => name.endsWith(".css"));
+    for (const name of files) {
+      const source = stripComments(readFileSync(join(stylesDir, name), "utf8"));
+      expect(source, name).not.toMatch(/animation-fill-mode\s*:/);
     }
   });
 

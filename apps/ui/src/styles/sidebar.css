@@ -11,13 +11,16 @@
   padding: 0 var(--space-4) var(--space-4);
   color: var(--ink-primary);
   font-size: var(--text-base);
-  /* PRD 10.7 §4: `overflow-x: clip` only, since the 28px space-switch shift
-     is horizontal and `.sidebar` itself never overflows vertically (that is
-     `.sidebar__sections` below, whose own `overflow-y: auto` is the only
-     scroll container). `clip` establishes no scroll container, so
-     `.sidebar__section--pinned`'s `position: sticky` inside
-     `.sidebar__sections` keeps working. */
+  /* PRD 10.7 §4: `overflow-x: clip` keeps the 28px space-switch shift from
+     scrolling the sidebar. `overflow-y: clip` too, because a short window
+     with a full favorites grid, the update banner or the space-name editor
+     can overflow `.sidebar` vertically, and nothing above it clips, so the
+     overflow would make the document scroll. `clip` establishes no scroll
+     container on either axis (`.sidebar__sections` below, with its own
+     `overflow-y: auto`, stays the only one), so
+     `.sidebar__section--pinned`'s `position: sticky` keeps working. */
   overflow-x: clip;
+  overflow-y: clip;
 }
 
 /* Collapsed and not revealed: the card spans the window. The sidebar keeps
@@ -32,9 +35,9 @@
    otherwise swallows the strip across the pinned band. Nothing else inside the
    sidebar is positioned above it (menus and popovers are separate surfaces),
    and the window row's 8px right padding keeps its buttons clear of the 6px strip.
-   The global focus ring on this strip has its right edge clipped by
-   `.sidebar { overflow-x: clip }`, so the focused handle also lights its
-   2px bar in `--focus-ring` as a fully visible indicator. */
+   The global focus ring on this strip is clipped by `.sidebar`'s
+   `clip` overflow along the sidebar's edges, so the focused handle also
+   lights its 2px bar in `--focus-ring` as a fully visible indicator. */
 .sidebar__resize-handle {
   position: absolute;
   z-index: 2;
