@@ -45,11 +45,11 @@
 }
 
 .motion-enter {
-  animation: zeo-enter var(--motion-base) var(--ease-standard) both;
+  animation: zeo-enter var(--motion-base) var(--ease-standard) backwards;
 }
 
 .motion-fade {
-  animation: zeo-fade-in var(--motion-base) var(--ease-standard) both;
+  animation: zeo-fade-in var(--motion-base) var(--ease-standard) backwards;
 }
 
 [data-motion="closed"] {
@@ -58,24 +58,26 @@
 
 /* Space-switch slide (PRD 10.7 §4): applied to the .sidebar__space wrapper. */
 .sidebar__space--enter-forward {
-  animation: zeo-space-in-forward var(--motion-space) var(--ease-standard) both;
+  animation: zeo-space-in-forward var(--motion-space) var(--ease-standard) backwards;
 }
 
 .sidebar__space--enter-backward {
-  animation: zeo-space-in-backward var(--motion-space) var(--ease-standard) both;
+  animation: zeo-space-in-backward var(--motion-space) var(--ease-standard) backwards;
 }
 
 .sidebar__space--enter-fade {
-  animation: zeo-fade-in var(--motion-space) var(--ease-standard) both;
+  animation: zeo-fade-in var(--motion-space) var(--ease-standard) backwards;
 }
 
 /* Tint cross-fade (PRD 10.7 §4): .window-tint replays its ::after fade-in
    while the outgoing layer fades out. Geometry for .window-tint-outgoing is
    in window.css. */
 .window-tint--enter::after {
-  animation: zeo-tint-in var(--motion-space) var(--ease-standard) both;
+  animation: zeo-tint-in var(--motion-space) var(--ease-standard) backwards;
 }
 
+/* Keeps `both`: the `to` frame (opacity: 0) must hold after the animation
+   ends so the outgoing layer stays invisible until it unmounts. */
 .window-tint-outgoing {
   animation: zeo-tint-out var(--motion-space) var(--ease-standard) both;
 }

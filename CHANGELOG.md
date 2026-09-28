@@ -30,8 +30,8 @@ milestone, a minor bump only for very large breakthroughs.
 
 - Keyboard focus shows the same 2 px accent ring on every control in the
   sidebar, settings, find pill and quick-browse window. The sidebar resize
-  handle now uses that ring too; the sidebar's edge clips it, so only its inner
-  edge shows.
+  handle also lights its own bar in that focus color when focused from the
+  keyboard.
 - Small controls grew to at least 28 × 28 px: the tab zoom badge, the update
   banner's action button, the Clear button, settings link buttons and the theme
   picker's intensity slider.

@@ -101,6 +101,47 @@ function stripComments(source: string): string {
   return source.replace(/\/\*[\s\S]*?\*\//g, (c) => c.replace(/[^\n]/g, " "));
 }
 
+/** Keyframes that animate an element into view; their `animation:` shorthand
+ *  must not keep applying the `from` frame after the animation ends. */
+const ENTER_KEYFRAMES = [
+  "zeo-enter",
+  "zeo-fade-in",
+  "zeo-space-in-forward",
+  "zeo-space-in-backward",
+  "zeo-tint-in",
+];
+
+function readMotionCss(): string {
+  return stripComments(readFileSync(join(stylesDir, "motion.css"), "utf8"));
+}
+
+describe("enter animations do not persist (PRD 10.7 §2)", () => {
+  const css = readMotionCss();
+  const declarations = [...css.matchAll(/animation\s*:\s*([^;]+);/g)].map((m) => m[1]);
+
+  test("at least one enter-keyframe animation declaration exists", () => {
+    const enterDeclarations = declarations.filter((decl) =>
+      ENTER_KEYFRAMES.some((name) => new RegExp(`\\b${name}\\b`).test(decl)),
+    );
+    expect(enterDeclarations.length).toBeGreaterThan(0);
+  });
+
+  test("every enter-keyframe animation uses backwards, never both/forwards", () => {
+    for (const decl of declarations) {
+      const isEnter = ENTER_KEYFRAMES.some((name) => new RegExp(`\\b${name}\\b`).test(decl));
+      if (!isEnter) continue;
+      expect(decl).toMatch(/\bbackwards\b/);
+      expect(decl).not.toMatch(/\bboth\b/);
+      expect(decl).not.toMatch(/\bforwards\b/);
+    }
+  });
+
+  test(".window-tint-outgoing still uses both, to hold its final frame until unmount", () => {
+    const match = /\.window-tint-outgoing\s*\{[^}]*animation\s*:\s*([^;]+);/.exec(css);
+    expect(match?.[1]).toMatch(/\bboth\b/);
+  });
+});
+
 describe("no stray outline:none/outline:0 (PRD 10.7 §6, §10)", () => {
   const files = readdirSync(stylesDir).filter(
     (name) => name.endsWith(".css") && name !== "tokens.css",
