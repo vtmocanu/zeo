@@ -19,7 +19,7 @@ import {
 import type { ChromeState, Rect, Space, SpaceTheme, ZeoApi } from "@zeo/core";
 import { waitForViewUrl, waitForViewsIdle, VIEW_POLL_TIMEOUT_MS } from "./helpers/view";
 import { tokenBackground } from "./helpers/token";
-import { assertHitTargets } from "./helpers/a11y";
+import { assertFocusRings, assertFocusRingsByTab, assertHitTargets } from "./helpers/a11y";
 
 // Absolute path to the built Electron main entry, resolved from this test file
 // (e2e is ESM, so no __dirname). Same layout as chrome.spec.ts / motion.spec.ts.
@@ -36,6 +36,7 @@ type ZeoBridge = Pick<
   | "splitView"
   | "favorites"
   | "zoom"
+  | "downloads"
 >;
 
 // --- Window lookups, copied from motion.spec.ts / chrome.spec.ts. --------------
@@ -390,13 +391,28 @@ test.describe("PRD 10.7 polish — geometry", () => {
           await expect
             .poll(async () => {
               const { width: cw, height: ch } = await contentSize(app);
-              const want = contentRect(cw, ch, await chromeState(sidebar));
+              const chrome = await chromeState(sidebar);
+              const want = contentRect(cw, ch, chrome);
               const bounds = await nativeBounds(app, TOKEN);
               const cards = await cardBoxes(sidebar);
-              return JSON.stringify(bounds) === JSON.stringify(want) &&
+              // A clamped resize (e.g. xvfb's screen refusing 1280x800) must
+              // not silently shrink the matrix: the applied content size and
+              // the applied sidebar width must equal what was requested, not
+              // just be self-consistent with contentRect.
+              const sizeMatches = cw === w && ch === h;
+              const sidebarMatches = chrome.sidebarWidth === width;
+              return sizeMatches &&
+                sidebarMatches &&
+                JSON.stringify(bounds) === JSON.stringify(want) &&
                 JSON.stringify(cards) === JSON.stringify([want])
                 ? "ok"
-                : JSON.stringify({ bounds, cards, want });
+                : JSON.stringify({
+                    requested: { w, h, sidebarWidth: width },
+                    applied: { cw, ch, sidebarWidth: chrome.sidebarWidth },
+                    bounds,
+                    cards,
+                    want,
+                  });
             }, { message: `geometry at ${w}x${h}, sidebar ${width}` })
             .toBe("ok");
         }
@@ -407,13 +423,23 @@ test.describe("PRD 10.7 polish — geometry", () => {
         await expect
           .poll(async () => {
             const { width: cw, height: ch } = await contentSize(app);
-            const want = contentRect(cw, ch, await chromeState(sidebar));
+            const chrome = await chromeState(sidebar);
+            const want = contentRect(cw, ch, chrome);
             const bounds = await nativeBounds(app, TOKEN);
             const cards = await cardBoxes(sidebar);
-            return JSON.stringify(bounds) === JSON.stringify(want) &&
+            const sizeMatches = cw === w && ch === h;
+            return sizeMatches &&
+              chrome.sidebarCollapsed === true &&
+              JSON.stringify(bounds) === JSON.stringify(want) &&
               JSON.stringify(cards) === JSON.stringify([want])
               ? "ok"
-              : JSON.stringify({ bounds, cards, want });
+              : JSON.stringify({
+                  requested: { w, h },
+                  applied: { cw, ch, sidebarCollapsed: chrome.sidebarCollapsed },
+                  bounds,
+                  cards,
+                  want,
+                });
           }, { message: `collapsed geometry at ${w}x${h}` })
           .toBe("ok");
         await runCommand(sidebar, "view.toggleSidebar");
@@ -487,86 +513,11 @@ test.describe("PRD 10.7 polish — geometry", () => {
 // ================================================================================
 // §6/§7 — focus ring and hit targets
 // ================================================================================
+// assertFocusRings and assertHitTargets now live in ./helpers/a11y.ts (shared
+// with update.spec.ts and quick-browse.spec.ts) and return the set of
+// identifiers they actually measured/focused, so a required-coverage list can
+// be asserted against a real sweep result instead of a comment's claim.
 
-/** The exempt inputs whose `outline: none` PRD 10.7 §6 keeps. */
-const FOCUS_EXEMPT_TESTIDS = ["command-bar-input", "find-input"];
-
-/**
- * Sweeps every visible, enabled, non-exempt control on `page` matching the same
- * `:where(...)` universe base.css's focus-ring rule targets, focusing each one
- * directly with `el.focus({ focusVisible: true })` rather than a real Tab-key
- * walk: under xvfb a WebContentsView-hosted page can fail to take keyboard
- * focus at all (a known flake noted for this PRD), so a per-control synthetic
- * focus is the reliable oracle here. Every focused control's computed outline
- * must be the 2px solid `--focus-ring` ring, offset 1px (PRD 10.7 §6).
- * Returns the number of controls checked, so a caller can assert it saw at
- * least one (a state with zero eligible controls would otherwise pass vacuously).
- */
-async function assertFocusRings(page: Page): Promise<number> {
-  const focusRing = await tokenBackground(page, "--focus-ring");
-  const probeIds: { index: number; label: string }[] = await page.evaluate(
-    (exempt) => {
-      const selector =
-        'button, a[href], input, select, textarea, summary, [tabindex]:not([tabindex="-1"])';
-      function isVisible(el: Element): boolean {
-        const rect = el.getBoundingClientRect();
-        if (rect.width <= 0 || rect.height <= 0) return false;
-        const style = getComputedStyle(el);
-        return style.visibility !== "hidden" && style.display !== "none";
-      }
-      const out: { index: number; label: string }[] = [];
-      let i = 0;
-      for (const el of Array.from(document.querySelectorAll(selector))) {
-        const testid = el.getAttribute("data-testid");
-        if (testid !== null && exempt.includes(testid)) continue;
-        if ((el as HTMLButtonElement | HTMLInputElement).disabled === true) continue;
-        if (!isVisible(el)) continue;
-        el.setAttribute("data-zeo-focus-probe", String(i));
-        out.push({ index: i, label: testid ?? (el.className || el.tagName.toLowerCase()) });
-        i += 1;
-      }
-      return out;
-    },
-    FOCUS_EXEMPT_TESTIDS,
-  );
-
-  for (const probe of probeIds) {
-    const locator = page.locator(`[data-zeo-focus-probe="${probe.index}"]`);
-    await locator.evaluate((el) => {
-      const target = el as HTMLElement;
-      // Blur first: a prior real click (e.g. selecting a settings section)
-      // can leave `target` already the active element WITHOUT focus-visible,
-      // and re-focusing an already-focused element is a no-op in the DOM
-      // focus model — no new focus transition, so `focusVisible: true` would
-      // never take effect. Blurring guarantees the next focus() is a genuine
-      // transition.
-      target.blur();
-      target.focus({ focusVisible: true } as unknown as FocusOptions);
-    });
-    const style = await locator.evaluate((el) => {
-      const s = getComputedStyle(el);
-      return {
-        outlineStyle: s.outlineStyle,
-        outlineWidth: s.outlineWidth,
-        outlineOffset: s.outlineOffset,
-        outlineColor: s.outlineColor,
-      };
-    });
-    expect(style, `focus ring on ${probe.label}`).toEqual({
-      outlineStyle: "solid",
-      outlineWidth: "2px",
-      outlineOffset: "1px",
-      outlineColor: focusRing,
-    });
-  }
-
-  await page.evaluate(() => {
-    for (const el of Array.from(document.querySelectorAll("[data-zeo-focus-probe]"))) {
-      el.removeAttribute("data-zeo-focus-probe");
-    }
-  });
-  return probeIds.length;
-}
 
 /** A trivial same-origin fixture page, for zoom (host-keyed) and downloads. */
 async function startFixtureServer(): Promise<{ base: string; close: () => Promise<void> }> {
@@ -603,10 +554,70 @@ async function startFixtureServer(): Promise<{ base: string; close: () => Promis
   };
 }
 
+/** Poll `zeo.downloads.list()` until every entry matches `predicate`. */
+async function pollDownloads(
+  sidebar: Page,
+  predicate: (items: { state: string }[]) => boolean,
+  deadlineMs = 15_000,
+): Promise<void> {
+  const deadline = Date.now() + deadlineMs;
+  let last: { state: string }[] = [];
+  while (Date.now() < deadline) {
+    last = await sidebar.evaluate(() => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      return zeo.downloads.list();
+    });
+    if (predicate(last)) return;
+    await new Promise((resolve) => setTimeout(resolve, 150));
+  }
+  throw new Error(
+    `pollDownloads: predicate not satisfied within ${deadlineMs}ms; last list = ${JSON.stringify(last)}`,
+  );
+}
+
+// The §6 sidebar-row identifiers (PRD 10.7 §6's table, in the identify()
+// format `a11y.ts`'s sweeps return) that this suite's sidebar setup must
+// actually present and probe. Excludes update-banner-action/.update-banner__
+// dismiss (covered by update.spec.ts, where the banner is actually shown) and
+// the ThemePicker/space-name-input controls, which get their own phases below.
+const SIDEBAR_MAIN_REQUIRED = [
+  '[data-testid="sidebar-toggle"]',
+  '[data-testid="nav-back"]',
+  '[data-testid="nav-forward"]',
+  '[data-testid="nav-reload"]',
+  '[data-testid="sidebar-url-pill"]',
+  '[data-testid="favorite-tile"]',
+  ".tab-item__title",
+  ".icon-button.tab-item__close",
+  '[data-testid="tab-zoom"]',
+  '[data-testid="new-tab-button"]',
+  '[data-testid="clear-today-button"]',
+  '[data-testid="downloads-indicator"]',
+  '[data-testid="archived-toggle"]',
+  ".archived-item__title",
+  '[data-testid="archived-delete"]',
+  '[data-testid="space-item"]',
+  '[data-testid="new-space-button"]',
+];
+
+const THEME_PICKER_REQUIRED = [
+  '[data-testid="theme-kind-solid"]',
+  '[data-testid="theme-kind-gradient"]',
+  '[data-testid="theme-stop"]',
+  '[data-testid="theme-swatch"]',
+  '[data-testid="theme-intensity"]',
+];
+
+const OVERLAY_FIND_REQUIRED = [
+  '[data-testid="find-previous"]',
+  '[data-testid="find-next"]',
+  '[data-testid="find-close"]',
+];
+
 test.describe("PRD 10.7 polish — sidebar and overlay focus ring and hit targets", () => {
-  test("with a zoomed tab, the archived view, a download, a rename and ThemePicker open", async () => {
+  test("with a non-favorited zoomed tab, a favorite tile, a completed download archived on its own, a rename and ThemePicker open", async () => {
     // This setup chains a real download, a real zoom (host-keyed, so it needs a
-    // live fixture page), and two full focus-ring sweeps; under xvfb it can run
+    // live fixture page), and several focus-ring sweeps; under xvfb it can run
     // past the config's default 60s.
     test.setTimeout(120_000);
     const userDataDir = mkdtempSync(join(tmpdir(), "zeo-polish-sidebar-"));
@@ -614,81 +625,154 @@ test.describe("PRD 10.7 polish — sidebar and overlay focus ring and hit target
     const server = await startFixtureServer();
     const { app, sidebar } = await launch(userDataDir, downloadsDir);
     try {
-      // --- A zoomed tab (host-keyed, so it needs a real same-origin page). ---
-      const zoomedTab = await sidebar.evaluate(async (base) => {
+      // --- A tab to favorite (host-keyed origin, but never zoomed — it must
+      // NOT be the zoomed tab below, or favoriting it would turn it into a
+      // tile and remove it from the TabItem row entirely, taking tab-zoom
+      // with it). ---
+      const favTabId = await sidebar.evaluate(async (base) => {
         const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
-        const tab = await zeo.tabs.create(base + "/page.html");
+        const tab = await zeo.tabs.create(base + "/page.html?fav");
         await zeo.tabs.activate(tab.id);
         return tab.id;
       }, server.base);
-      await waitForViewUrl(app, "page.html");
+      await waitForViewUrl(app, "page.html?fav");
+      await sidebar.evaluate(
+        (id) => {
+          const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+          return zeo.favorites.add(id);
+        },
+        favTabId,
+      );
+      await expect.poll(() => sidebar.getByTestId("favorite-tile").count()).toBeGreaterThan(0);
+
+      // --- A distinct, non-favorited zoomed tab: it stays a normal
+      // TabItem row for the whole test, so .tab-item__title,
+      // .tab-item__close and tab-zoom are always present to probe. ---
+      await sidebar.evaluate(async (base) => {
+        const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+        const tab = await zeo.tabs.create(base + "/page.html?zoom");
+        await zeo.tabs.activate(tab.id);
+        return tab.id;
+      }, server.base);
+      await waitForViewUrl(app, "page.html?zoom");
       await sidebar.evaluate(() => {
         const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
         return zeo.zoom.zoomIn();
       });
       await expect.poll(() => sidebar.getByTestId("tab-zoom").count()).toBeGreaterThan(0);
 
-      // --- A favorite tile. ---
-      await sidebar.evaluate(
-        (id) => {
-          const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
-          return zeo.favorites.add(id);
-        },
-        zoomedTab,
-      );
-      await expect.poll(() => sidebar.getByTestId("favorite-tile").count()).toBeGreaterThan(0);
-
-      // --- A download, completed against the loopback fixture. ---
-      await sidebar.evaluate(async (base) => {
+      // --- A third tab that triggers a real download; poll it to
+      // "completed" (mirrors downloads.spec.ts's pollDownloads) rather than
+      // just waiting for the views to go idle, so the assertion actually
+      // proves the download settled, not just that navigation stopped. ---
+      const downloadTabId = await sidebar.evaluate(async (base) => {
         const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
         const tab = await zeo.tabs.create(base + "/file.bin");
         await zeo.tabs.activate(tab.id);
+        return tab.id;
       }, server.base);
       await waitForViewsIdle(app);
+      await pollDownloads(sidebar, (items) => items.some((d) => d.state === "completed"));
 
-      // --- Archive today's tabs (the seeded tab and the fixture tabs), then
-      // open the archived view so archived-item / archived-delete render. ---
-      await runCommand(sidebar, "tabs.clearToday");
+      // --- Archive that specific download tab (not tabs.clearToday, which
+      // would also archive the zoomed tab and disable Clear). The zoomed tab
+      // and the favorited tab both remain in "today", so
+      // clear-today-button stays enabled and every sidebar §6 control is
+      // simultaneously reachable. ---
+      await sidebar.evaluate(
+        (id) => {
+          const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+          return zeo.tabs.archive(id);
+        },
+        downloadTabId,
+      );
       await sidebar.getByTestId("archived-toggle").click();
       await expect(sidebar.getByTestId("archived-view")).toBeVisible();
       await expect.poll(() => sidebar.getByTestId("archived-item").count()).toBeGreaterThan(0);
+      await expect(sidebar.getByTestId("clear-today-button")).toBeEnabled();
 
-      // --- Rename the active space: dblclick the space dot to show its input. ---
+      // --- Phase A: the main sweep, with the favorite tile, the zoomed
+      // today tab, and the archived view all present together. Coverage is
+      // asserted, not assumed: assertFocusRings/assertHitTargets throw if any
+      // SIDEBAR_MAIN_REQUIRED identifier was not actually found and probed. ---
+      await assertFocusRings(sidebar, SIDEBAR_MAIN_REQUIRED);
+      await assertHitTargets(sidebar, SIDEBAR_MAIN_REQUIRED);
+
+      // PRD 10.7 §10 — a real Tab-key smoke test on the sidebar too,
+      // alongside the synthetic sweep above. Seed focus programmatically
+      // (not a click — clicking sidebar-toggle/sidebar-url-pill would
+      // collapse the sidebar or open the command bar) on a control with no
+      // side effects, then Tab and check every stop's ring.
+      await sidebar.getByTestId("nav-back").evaluate((el) => (el as HTMLElement).focus());
+      const sidebarTabVisited = await assertFocusRingsByTab(sidebar, 6);
+      expect(
+        sidebarTabVisited.size,
+        `real Tab walk on sidebar visited: ${[...sidebarTabVisited].join(", ")}`,
+      ).toBeGreaterThan(0);
+
+      // --- Phase B: rename, in isolation. space-name-input is measured
+      // (size, then focus ring) BEFORE anything else takes focus — a full
+      // page sweep would eventually focus some other control, and
+      // SpaceNameInput's onBlur cancels the edit and unmounts the input. ---
+      const focusRing = await tokenBackground(sidebar, "--focus-ring");
       const activeSpaceId = (await readSpaces(sidebar)).activeSpaceId;
       await sidebar
         .locator(`[data-testid="space-item"][data-space-id="${activeSpaceId}"]`)
         .dblclick();
-      await expect(sidebar.getByTestId("space-name-input")).toBeVisible();
+      const nameInput = sidebar.getByTestId("space-name-input");
+      await expect(nameInput).toBeVisible();
+      const box = await nameInput.boundingBox();
+      expect(box, "space-name-input has a bounding box").not.toBeNull();
+      expect(box!.width, "space-name-input width").toBeGreaterThanOrEqual(28);
+      expect(box!.height, "space-name-input height").toBeGreaterThanOrEqual(28);
+      // The input already has focus via `autoFocus`; nudge input modality to
+      // keyboard (an ArrowRight leaves the text unchanged) rather than
+      // blurring and refocusing it, since a blur would fire onBlur and
+      // cancel the edit before the ring could ever be read.
+      await nameInput.press("ArrowRight");
+      const nameInputStyle = await nameInput.evaluate((el) => {
+        const s = getComputedStyle(el);
+        return {
+          outlineStyle: s.outlineStyle,
+          outlineWidth: s.outlineWidth,
+          outlineOffset: s.outlineOffset,
+          outlineColor: s.outlineColor,
+        };
+      });
+      expect(nameInputStyle, "focus ring on space-name-input").toEqual({
+        outlineStyle: "solid",
+        outlineWidth: "2px",
+        outlineOffset: "1px",
+        outlineColor: focusRing,
+      });
+      await nameInput.press("Escape");
+      await expect(sidebar.getByTestId("space-name-input")).toHaveCount(0);
 
-      // --- ThemePicker open. ---
+      // --- Phase C: ThemePicker, in isolation (space.editTheme's handler
+      // calls cancelEdit() unconditionally, so it must run after the rename
+      // phase has already completed and read its own state, not before). ---
       await runCommand(sidebar, "space.editTheme");
       await expect(sidebar.getByTestId("theme-picker")).toBeVisible();
-
-      // The sweep runs while the picker (a modal-ish overlay) sits over the
-      // rest of the sidebar, matching what a user can actually focus right now.
-      const sidebarChecked = await assertFocusRings(sidebar);
-      expect(sidebarChecked).toBeGreaterThan(0);
-      await assertHitTargets(sidebar);
-
-      // Close the picker and re-run the sweep over the rest of the sidebar
-      // (space-name-input, archived-item, tab-zoom, favorite-tile, etc.),
-      // which the picker occluded above.
+      // theme-stop only renders for a 2-stop gradient theme (ThemePicker.tsx),
+      // and the default space theme is a solid (1-stop) theme — switch kind
+      // first so every §6 ThemePicker control, including theme-stop, is
+      // actually on the page for the sweep to reach.
+      await sidebar.getByTestId("theme-kind-gradient").click();
+      await expect(sidebar.getByTestId("theme-stop")).toHaveCount(2);
+      await assertFocusRings(sidebar, THEME_PICKER_REQUIRED);
+      await assertHitTargets(sidebar, THEME_PICKER_REQUIRED);
       await sidebar.getByTestId("theme-intensity").press("Escape");
       await expect(sidebar.getByTestId("theme-picker")).toHaveCount(0);
-      const restChecked = await assertFocusRings(sidebar);
-      expect(restChecked).toBeGreaterThan(0);
-      await assertHitTargets(sidebar);
 
-      // --- Overlay: find pill open, with a page to search. ---
+      // --- Phase D: overlay, find pill open, with a page to search. ---
       const overlay = await overlayWindow(app);
       await sidebar.evaluate(() => {
         const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
         return zeo.find.open();
       });
       await expect(overlay.getByTestId("find-bar")).toBeVisible();
-      const overlayChecked = await assertFocusRings(overlay);
-      expect(overlayChecked).toBeGreaterThan(0);
-      await assertHitTargets(overlay);
+      await assertFocusRings(overlay, OVERLAY_FIND_REQUIRED);
+      await assertHitTargets(overlay, OVERLAY_FIND_REQUIRED);
     } finally {
       await app.close();
       await server.close();
@@ -698,6 +782,26 @@ test.describe("PRD 10.7 polish — sidebar and overlay focus ring and hit target
   });
 });
 
+// §6/§7's per-section required identifiers: at least one control from each
+// settings section body, so the sweep's coverage check catches a section that
+// silently rendered no probeable controls (or where a click on the section
+// nav failed to actually switch sections).
+const SETTINGS_SECTION_REQUIRED: Record<string, string[]> = {
+  general: [
+    '[data-testid="settings-search-engine-duckduckgo"]',
+    '[data-testid="update-auto-check"]',
+    '[data-testid="settings-quick-browse-external"]',
+  ],
+  blocking: [
+    '[data-testid="settings-blocking-enabled"]',
+    '[data-testid="settings-allowlist-input"]',
+    '[data-testid="settings-allowlist-add"]',
+  ],
+  profiles: ['[data-testid="settings-profile-create-name"]', '[data-testid="settings-profile-create"]'],
+  history: ['[data-testid="settings-history-clear"]'],
+  about: ['[data-testid="settings-close"]'],
+};
+
 test.describe("PRD 10.7 polish — settings focus ring and hit targets", () => {
   test("every settings section, plus the history-clear dialog", async () => {
     test.setTimeout(90_000);
@@ -706,14 +810,31 @@ test.describe("PRD 10.7 polish — settings focus ring and hit targets", () => {
     try {
       const settings = await openSettings(app, sidebar);
 
+      // PRD 10.7 §10 — a real Tab-key smoke test on the settings page: from
+      // the general section nav item, Tab should cycle focus through the
+      // section items (and beyond), with every stop showing the same ring
+      // §6 requires. This exercises real keyboard focus, not just the
+      // synthetic `el.focus({ focusVisible: true })` sweep below.
+      await settings.getByTestId("settings-section-general").click();
+      await expect(
+        settings.locator('[data-testid="settings-section-general"][aria-current="page"]'),
+      ).toHaveCount(1);
+      const tabVisited = await assertFocusRingsByTab(settings, 10);
+      const tabVisitedSections = [...tabVisited].filter((id) => id.includes("settings-section-"));
+      expect(
+        tabVisitedSections.length,
+        `real Tab walk should reach settings-section-* items; visited: ${[...tabVisited].join(", ")}`,
+      ).toBeGreaterThan(0);
+
       for (const section of ["general", "blocking", "profiles", "history", "about"]) {
         await settings.getByTestId(`settings-section-${section}`).click();
         await expect(
           settings.locator(`[data-testid="settings-section-${section}"][aria-current="page"]`),
         ).toHaveCount(1);
-        const checked = await assertFocusRings(settings);
-        expect(checked, `section ${section}`).toBeGreaterThan(0);
-        await assertHitTargets(settings);
+        const required = SETTINGS_SECTION_REQUIRED[section];
+        const checked = await assertFocusRings(settings, required);
+        expect(checked.size, `section ${section}`).toBeGreaterThan(0);
+        await assertHitTargets(settings, required);
       }
 
       // The history-clear confirmation dialog.
@@ -721,9 +842,13 @@ test.describe("PRD 10.7 polish — settings focus ring and hit targets", () => {
       await expect(settings.getByTestId("settings-history-stats")).toBeVisible();
       await settings.getByTestId("settings-history-clear").click();
       await expect(settings.getByTestId("settings-history-clear-dialog")).toBeVisible();
-      const dialogChecked = await assertFocusRings(settings);
-      expect(dialogChecked).toBeGreaterThan(0);
-      await assertHitTargets(settings);
+      const dialogRequired = [
+        '[data-testid="settings-history-clear-cancel"]',
+        '[data-testid="settings-history-clear-confirm"]',
+      ];
+      const dialogChecked = await assertFocusRings(settings, dialogRequired);
+      expect(dialogChecked.size).toBeGreaterThan(0);
+      await assertHitTargets(settings, dialogRequired);
       await settings.getByTestId("settings-history-clear-cancel").click();
 
       await settings.getByTestId("settings-close").click();

@@ -703,12 +703,14 @@ test.describe("PRD 10.7 motion — off", () => {
       const motionSpace = await sidebar.evaluate(() =>
         getComputedStyle(document.documentElement).getPropertyValue("--motion-space").trim(),
       );
-      // `--motion-space` is never registered with `@property`, so nothing in
-      // the spec REQUIRES normalization here — but observed directly under
-      // Chromium (verified against this build), `getPropertyValue` on an
-      // unregistered custom property still returns "0s", not the "0ms"
-      // literal authored in tokens.css's `.zeo-motion-off` rule. Assert the
-      // value this engine actually produces, not the source spelling.
+      // The "0s" here is not a Chromium normalization of an unregistered
+      // custom property — it comes from the build's own CSS minifier: the
+      // built stylesheet's `.zeo-motion-off` rule reads
+      // `--motion-fast:0s;--motion-base:0s;--motion-space:0s`, not the
+      // `0ms` PRD 10.7 §2 and its source `tokens.css` author. That is a
+      // literal deviation from §10's "`--motion-space` computes 0ms"
+      // wording; assert the value this build actually produces, not the
+      // PRD's literal spelling.
       expect(motionSpace).toBe("0s");
 
       // Install a MutationObserver BEFORE the switch: this is the only way to
@@ -796,7 +798,9 @@ test.describe("PRD 10.7 motion — off", () => {
 // was intended to prove. (b) does NOT guard App's post-switch
 // `previousRef.current = ...` write in isolation: App.tsx also has a second,
 // later-declared layout effect keyed on `[state.activeSpaceId, activeTheme]`
-// that writes the same ref every commit, so mutating only the switch effect's
+// that writes the same ref whenever either dependency changes (not every
+// commit — a `useEffect`/`useLayoutEffect` only re-runs when its deps
+// change), so mutating only the switch effect's
 // write leaves that ref current and (b) green. A mutation run confirmed (b)
 // DOES fail under a bare `replaySpaceMotion` mutation (dropping its
 // classList-clear loop, so a stale `sidebar__space--enter-*` class survives

@@ -7,8 +7,12 @@ import { join } from "node:path";
 import { createServer } from "node:http";
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
-// PRD 10.7 §7 — the shared hit-target audit, run here with the update banner shown.
-import { assertHitTargets } from "./helpers/a11y";
+// PRD 10.7 §6/§7 — the shared focus-ring and hit-target audits, run here with
+// the update banner shown (its `update-banner-action` and
+// `.update-banner__dismiss` controls are §6 sidebar-row controls that no
+// other spec's sweep can reach, since they only render while a banner is
+// shown).
+import { assertFocusRings, assertHitTargets } from "./helpers/a11y";
 
 // PRD 9.6 — in-app update check, driven end to end against a loopback releases
 // feed. Nothing here touches the network beyond 127.0.0.1.
@@ -327,9 +331,15 @@ test.describe("PRD 9.6 in-app update check (offline fixture feed)", () => {
       const snapshot = await tabsList(sidebar);
       expect(snapshot.update.available?.version).toBe("9.9.9");
 
-      // PRD 10.7 §7 — the sidebar's hit-target audit, with the update banner
-      // (update-banner-action, .update-banner__dismiss) visible.
-      await assertHitTargets(sidebar);
+      // PRD 10.7 §6/§7 — the sidebar's focus-ring and hit-target audits, with
+      // the update banner (update-banner-action, .update-banner__dismiss)
+      // visible, requiring the sweep to actually have reached both.
+      const bannerRequired = [
+        '[data-testid="update-banner-action"]',
+        ".icon-button.update-banner__dismiss",
+      ];
+      await assertFocusRings(sidebar, bannerRequired);
+      await assertHitTargets(sidebar, bannerRequired);
     } finally {
       await app.close();
       await server.close();
