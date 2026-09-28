@@ -20,6 +20,8 @@ import {
 import type { Rect } from "@zeo/core";
 // PRD 10.6 — resolve a token through a probe element to compare computed colors.
 import { tokenBackground } from "./helpers/token";
+// PRD 10.7 §7 — the shared hit-target audit, run here with the quick-browse chrome shown.
+import { assertHitTargets } from "./helpers/a11y";
 
 // Absolute path to the built Electron main entry, resolved from this test file
 // (e2e is ESM, so no __dirname). Layout mirrors blocking.spec.ts / settings.spec.ts /
@@ -1107,6 +1109,9 @@ test.describe("PRD 10.6 quick-browse chrome", () => {
       // The bar drags the window; its buttons do not.
       await expect(chrome.getByTestId("quick-browse")).toHaveCSS("-webkit-app-region", "drag");
       await expect(promote).toHaveCSS("-webkit-app-region", "no-drag");
+
+      // PRD 10.7 §7 — the hit-target audit, with the quick-browse chrome shown.
+      await assertHitTargets(chrome);
     } finally {
       await app.close();
       await server.close();

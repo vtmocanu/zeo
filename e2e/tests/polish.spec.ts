@@ -1,0 +1,735 @@
+import { test, expect, _electron as electron } from "@playwright/test";
+import type { ElectronApplication, Page } from "@playwright/test";
+import { fileURLToPath } from "node:url";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createServer } from "node:http";
+import type { Server } from "node:http";
+import type { AddressInfo } from "node:net";
+// PRD 10.7 — the e2e oracle for every expected color/geometry is the same pure
+// @zeo/core function the renderer/main applies, never a copied table or formula.
+import {
+  SEMANTIC_TOKENS,
+  contentRect,
+  contrastAudit,
+  splitPaneBounds,
+  themeTokens,
+} from "@zeo/core";
+import type { ChromeState, Rect, Space, SpaceTheme, ZeoApi } from "@zeo/core";
+import { waitForViewUrl, waitForViewsIdle, VIEW_POLL_TIMEOUT_MS } from "./helpers/view";
+import { tokenBackground } from "./helpers/token";
+import { assertHitTargets } from "./helpers/a11y";
+
+// Absolute path to the built Electron main entry, resolved from this test file
+// (e2e is ESM, so no __dirname). Same layout as chrome.spec.ts / motion.spec.ts.
+const mainPath = fileURLToPath(new URL("../../apps/desktop/out/main/index.js", import.meta.url));
+
+type ZeoBridge = Pick<
+  ZeoApi,
+  | "tabs"
+  | "spaces"
+  | "commandBar"
+  | "commands"
+  | "chrome"
+  | "find"
+  | "splitView"
+  | "favorites"
+  | "zoom"
+>;
+
+// --- Window lookups, copied from motion.spec.ts / chrome.spec.ts. --------------
+
+async function sidebarWindow(app: ElectronApplication): Promise<Page> {
+  await app.firstWindow();
+  const deadline = Date.now() + VIEW_POLL_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    for (const w of app.windows()) {
+      try {
+        if ((await w.getByTestId("sidebar").count()) > 0) {
+          return w;
+        }
+      } catch {
+        // A navigating WebContentsView can momentarily lose its execution context.
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  throw new Error('No renderer window exposing data-testid="sidebar" was found');
+}
+
+async function windowByUrl(app: ElectronApplication, urlSubstring: string): Promise<Page> {
+  const deadline = Date.now() + VIEW_POLL_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    for (const w of app.windows()) {
+      try {
+        if (w.url().includes(urlSubstring)) {
+          return w;
+        }
+      } catch {
+        // A navigating/loading WebContentsView can momentarily lose its context.
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  throw new Error(`No window whose url includes "${urlSubstring}" was found`);
+}
+
+async function settingsWindow(app: ElectronApplication): Promise<Page> {
+  return windowByUrl(app, "view=settings");
+}
+
+async function overlayWindow(app: ElectronApplication): Promise<Page> {
+  return windowByUrl(app, "view=command-bar");
+}
+
+/**
+ * Launch the packaged Electron build against a temp userData dir with default
+ * settings: ZEO_E2E=1 (motion off, per PRD 10.7 §5), no ZEO_E2E_MOTION. Mirrors
+ * chrome.spec.ts / motion.spec.ts's `launch`. `downloadsDir`, when given, is
+ * wired via `ZEO_DOWNLOADS_DIR` (required whenever `ZEO_E2E=1` and a test
+ * drives a real download — downloads.spec.ts's `launch` does the same; without
+ * it main's save path resolves to `undefined` and a download never settles).
+ */
+async function launch(
+  userDataDir: string,
+  downloadsDir?: string,
+): Promise<{ app: ElectronApplication; sidebar: Page }> {
+  const app = await electron.launch({
+    args: [
+      mainPath,
+      "--user-data-dir=" + userDataDir,
+      ...(process.env.ZEO_E2E_NO_SANDBOX === "1" ? ["--no-sandbox"] : []),
+    ],
+    env: {
+      ...process.env,
+      ELECTRON_RENDERER_URL: "",
+      ZEO_E2E: "1",
+      ...(downloadsDir !== undefined ? { ZEO_DOWNLOADS_DIR: downloadsDir } : {}),
+    },
+  });
+  const sidebar = await sidebarWindow(app);
+  return { app, sidebar };
+}
+
+// --- Bridge helpers --------------------------------------------------------------
+
+function runCommand(page: Page, id: string): Promise<void> {
+  return page.evaluate((cmd) => {
+    const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+    return zeo.commands.run(cmd as Parameters<ZeoBridge["commands"]["run"]>[0]);
+  }, id);
+}
+
+function readSpaces(sidebar: Page): Promise<{ spaces: Space[]; activeSpaceId: string }> {
+  return sidebar.evaluate(() => {
+    const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+    return zeo.spaces.list();
+  });
+}
+
+function createSpace(sidebar: Page, name: string): Promise<Space> {
+  return sidebar.evaluate((n) => {
+    const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+    return zeo.spaces.create(n);
+  }, name);
+}
+
+function setTheme(sidebar: Page, id: string, theme: SpaceTheme): Promise<void> {
+  return sidebar.evaluate(
+    (data) => {
+      const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+      return zeo.spaces.setTheme(data.id, data.theme);
+    },
+    { id, theme },
+  );
+}
+
+function activateSpace(sidebar: Page, id: string): Promise<void> {
+  return sidebar.evaluate((spaceId) => {
+    const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+    return zeo.spaces.activate(spaceId);
+  }, id);
+}
+
+function settingsOpen(sidebar: Page): Promise<boolean> {
+  return sidebar.evaluate(async () => {
+    const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+    const state = await zeo.tabs.list();
+    return (state as unknown as { settingsOpen: boolean }).settingsOpen === true;
+  });
+}
+
+/** Open the settings view (once) and return its {@link Page}. */
+async function openSettings(app: ElectronApplication, sidebar: Page): Promise<Page> {
+  await runCommand(sidebar, "settings.open");
+  await expect.poll(() => settingsOpen(sidebar)).toBe(true);
+  const settings = await settingsWindow(app);
+  await expect(settings.getByTestId("settings")).toHaveCount(1);
+  return settings;
+}
+
+async function resetThemeSource(app: ElectronApplication): Promise<void> {
+  await app
+    .evaluate(({ nativeTheme }) => {
+      nativeTheme.themeSource = "system";
+    })
+    .catch(() => undefined);
+}
+
+/**
+ * Emulate `scheme` on every one of `pages` (nativeTheme does not reach a
+ * renderer's `prefers-color-scheme` under xvfb/CI — theme.spec.ts's
+ * `followAppearance` documents the same). Also sets `nativeTheme.themeSource`
+ * so process-wide state matches, though no assertion depends on it.
+ */
+async function setAppearance(
+  app: ElectronApplication,
+  pages: Page[],
+  scheme: "light" | "dark",
+): Promise<void> {
+  await app.evaluate(({ nativeTheme }, s) => {
+    nativeTheme.themeSource = s;
+  }, scheme);
+  for (const page of pages) {
+    if (!page.isClosed()) await page.emulateMedia({ colorScheme: scheme });
+  }
+}
+
+/** Every {@link SEMANTIC_TOKENS} value computed on `page`'s `<html>`. */
+function readSemanticTokens(page: Page): Promise<Record<string, string>> {
+  return page.evaluate((tokens) => {
+    const style = getComputedStyle(document.documentElement);
+    const out: Record<string, string> = {};
+    for (const t of tokens) out[t] = style.getPropertyValue(t).trim();
+    return out;
+  }, SEMANTIC_TOKENS as unknown as string[]);
+}
+
+/** The live computed `color` of `.sidebar__title`. */
+function sidebarTitleColor(sidebar: Page): Promise<string> {
+  return sidebar
+    .locator(".sidebar__title")
+    .evaluate((el) => getComputedStyle(el).color);
+}
+
+// ================================================================================
+// §8 — theme tokens and the contrast audit
+// ================================================================================
+
+test.describe("PRD 10.7 polish — tokens and contrast", () => {
+  test("SEMANTIC_TOKENS on every surface equal themeTokens(), and contrastAudit passes, for A/B/C in light and dark", async () => {
+    const userDataDir = mkdtempSync(join(tmpdir(), "zeo-polish-tokens-"));
+    const { app, sidebar } = await launch(userDataDir);
+    try {
+      const overlay = await overlayWindow(app);
+      const settings = await openSettings(app, sidebar);
+
+      // Three themed spaces, mirroring motion.spec.ts's setupSpaces.
+      const before = await readSpaces(sidebar);
+      const a = before.activeSpaceId;
+      const aTheme: SpaceTheme = { stops: ["iris"], intensity: 1 };
+      await setTheme(sidebar, a, aTheme);
+      const bSpace = await createSpace(sidebar, "B");
+      const bTheme: SpaceTheme = { stops: ["rose", "amber"], intensity: 1 };
+      await setTheme(sidebar, bSpace.id, bTheme);
+      const cSpace = await createSpace(sidebar, "C");
+      const cTheme: SpaceTheme = { stops: ["teal"], intensity: 1 };
+      await setTheme(sidebar, cSpace.id, cTheme);
+      const spaces: { id: string; theme: SpaceTheme }[] = [
+        { id: a, theme: aTheme },
+        { id: bSpace.id, theme: bTheme },
+        { id: cSpace.id, theme: cTheme },
+      ];
+
+      for (const appearance of ["light", "dark"] as const) {
+        await setAppearance(app, [sidebar, overlay, settings], appearance);
+        for (const space of spaces) {
+          await activateSpace(sidebar, space.id);
+
+          const expected = themeTokens(space.theme, appearance);
+          await expect
+            .poll(() => readSemanticTokens(sidebar), {
+              message: `sidebar tokens for space ${space.id} (${appearance})`,
+            })
+            .toEqual(expected);
+          await expect
+            .poll(() => readSemanticTokens(overlay), {
+              message: `overlay tokens for space ${space.id} (${appearance})`,
+            })
+            .toEqual(expected);
+          await expect
+            .poll(() => readSemanticTokens(settings), {
+              message: `settings tokens for space ${space.id} (${appearance})`,
+            })
+            .toEqual(expected);
+
+          // contrastAudit: every one of the 17 checks passes its floor.
+          const audit = contrastAudit(space.theme, appearance);
+          const failing = audit.filter((c) => !c.pass);
+          expect(failing, JSON.stringify(failing)).toEqual([]);
+          expect(audit.length).toBe(17);
+
+          // .sidebar__title (the active space's label) is painted in --ink-secondary.
+          const inkSecondary = await tokenBackground(sidebar, "--ink-secondary");
+          await expect
+            .poll(() => sidebarTitleColor(sidebar))
+            .toBe(inkSecondary);
+        }
+      }
+    } finally {
+      await resetThemeSource(app);
+      await app.close();
+      rmSync(userDataDir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ================================================================================
+// §8/§10 — geometry: contentRect and splitPaneBounds across the size/sidebar matrix
+// ================================================================================
+
+/** The main window's content size, as main reads it for every bounds formula. */
+function contentSize(app: ElectronApplication): Promise<{ width: number; height: number }> {
+  return app.evaluate(({ BrowserWindow }) => {
+    const [width, height] = BrowserWindow.getAllWindows()[0].getContentSize();
+    return { width, height };
+  });
+}
+
+function setContentSize(app: ElectronApplication, w: number, h: number): Promise<void> {
+  return app.evaluate(
+    ({ BrowserWindow }, size) => {
+      BrowserWindow.getAllWindows()[0].setContentSize(size.w, size.h);
+    },
+    { w, h },
+  );
+}
+
+function setSidebarWidth(sidebar: Page, px: number): Promise<void> {
+  return sidebar.evaluate(
+    (w) => (globalThis as unknown as { zeo: ZeoBridge }).zeo.chrome.setSidebarWidth(w),
+    px,
+  );
+}
+
+function chromeState(sidebar: Page): Promise<ChromeState> {
+  return sidebar.evaluate(() => (globalThis as unknown as { zeo: ZeoBridge }).zeo.chrome.state());
+}
+
+/** The native bounds of the window's child view whose URL contains `sub`. */
+function nativeBounds(app: ElectronApplication, sub: string): Promise<Rect | null> {
+  return app.evaluate(({ BrowserWindow }, s) => {
+    const win = BrowserWindow.getAllWindows()[0];
+    for (const child of win.contentView.children) {
+      const wc = (child as { webContents?: { getURL(): string } }).webContents;
+      if (wc != null && wc.getURL().includes(s)) {
+        return child.getBounds();
+      }
+    }
+    return null;
+  }, sub);
+}
+
+/** Box of every `.window-card` element, in document order. */
+function cardBoxes(sidebar: Page): Promise<Rect[]> {
+  return sidebar.locator(".window-card").evaluateAll((els) =>
+    els.map((el) => {
+      const r = el.getBoundingClientRect();
+      return { x: r.x, y: r.y, width: r.width, height: r.height };
+    }),
+  );
+}
+
+/** Create a `data:` tab carrying `token`, make it active, and wait for its view. */
+async function activeTokenTab(
+  app: ElectronApplication,
+  sidebar: Page,
+  token: string,
+): Promise<string> {
+  const id = await sidebar.evaluate(async (t) => {
+    const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+    const tab = await zeo.tabs.create("data:text/html," + t);
+    await zeo.tabs.activate(tab.id);
+    return tab.id;
+  }, token);
+  await waitForViewUrl(app, token);
+  return id;
+}
+
+function splitWith(sidebar: Page, tabId: string): Promise<void> {
+  return sidebar.evaluate((id) => {
+    const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+    return zeo.splitView.splitWith(id);
+  }, tabId);
+}
+
+function setRatio(sidebar: Page, ratio: number): Promise<void> {
+  return sidebar.evaluate((r) => {
+    const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+    return zeo.splitView.setRatio(r);
+  }, ratio);
+}
+
+test.describe("PRD 10.7 polish — geometry", () => {
+  test("the active view and .window-card equal contentRect across content sizes and sidebar widths", async () => {
+    const userDataDir = mkdtempSync(join(tmpdir(), "zeo-polish-geo-single-"));
+    const { app, sidebar } = await launch(userDataDir);
+    try {
+      const TOKEN = "ZEOPOLISH_ACTIVE";
+      await activeTokenTab(app, sidebar, TOKEN);
+
+      for (const [w, h] of [
+        [1280, 800],
+        [1024, 700],
+        [640, 400],
+      ] as const) {
+        await setContentSize(app, w, h);
+        for (const width of [200, 240, 360]) {
+          await setSidebarWidth(sidebar, width);
+          await expect
+            .poll(async () => {
+              const { width: cw, height: ch } = await contentSize(app);
+              const want = contentRect(cw, ch, await chromeState(sidebar));
+              const bounds = await nativeBounds(app, TOKEN);
+              const cards = await cardBoxes(sidebar);
+              return JSON.stringify(bounds) === JSON.stringify(want) &&
+                JSON.stringify(cards) === JSON.stringify([want])
+                ? "ok"
+                : JSON.stringify({ bounds, cards, want });
+            }, { message: `geometry at ${w}x${h}, sidebar ${width}` })
+            .toBe("ok");
+        }
+
+        // Collapsed sidebar.
+        await runCommand(sidebar, "view.toggleSidebar");
+        await expect.poll(async () => (await chromeState(sidebar)).sidebarCollapsed).toBe(true);
+        await expect
+          .poll(async () => {
+            const { width: cw, height: ch } = await contentSize(app);
+            const want = contentRect(cw, ch, await chromeState(sidebar));
+            const bounds = await nativeBounds(app, TOKEN);
+            const cards = await cardBoxes(sidebar);
+            return JSON.stringify(bounds) === JSON.stringify(want) &&
+              JSON.stringify(cards) === JSON.stringify([want])
+              ? "ok"
+              : JSON.stringify({ bounds, cards, want });
+          }, { message: `collapsed geometry at ${w}x${h}` })
+          .toBe("ok");
+        await runCommand(sidebar, "view.toggleSidebar");
+        await expect.poll(async () => (await chromeState(sidebar)).sidebarCollapsed).toBe(false);
+      }
+    } finally {
+      await app.close();
+      rmSync(userDataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("split-view panes and .window-card rects equal splitPaneBounds at ratios 0.5 and 0.3", async () => {
+    const userDataDir = mkdtempSync(join(tmpdir(), "zeo-polish-geo-split-"));
+    const { app, sidebar } = await launch(userDataDir);
+    try {
+      // Two distinct, identifiable tabs (tokens embedded in their `data:` URL,
+      // not their ids — `nativeBounds` below matches by live WebContents URL).
+      const LEFT_TOKEN = "ZEOPOLISH_LEFT";
+      const RIGHT_TOKEN = "ZEOPOLISH_RIGHT";
+      const leftId = await sidebar.evaluate(async (token) => {
+        const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+        return (await zeo.tabs.create("data:text/html," + token)).id;
+      }, LEFT_TOKEN);
+      await waitForViewUrl(app, LEFT_TOKEN);
+      const rightId = await sidebar.evaluate(async (token) => {
+        const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+        return (await zeo.tabs.create("data:text/html," + token)).id;
+      }, RIGHT_TOKEN);
+      await waitForViewUrl(app, RIGHT_TOKEN);
+      // `tabs.create` activates the new tab, so the left tab must be
+      // re-activated before `splitWith` — otherwise the active tab IS the
+      // right tab and the call rejects with "cannot split a tab with itself".
+      await sidebar.evaluate((id) => {
+        const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+        return zeo.tabs.activate(id);
+      }, leftId);
+      await splitWith(sidebar, rightId);
+      await waitForViewUrl(app, "view=divider");
+
+      for (const ratio of [0.5, 0.3]) {
+        await setRatio(sidebar, ratio);
+        await expect
+          .poll(async () => {
+            const { width, height } = await contentSize(app);
+            const chrome = await chromeState(sidebar);
+            const want = splitPaneBounds(width, height, chrome, ratio);
+            const leftBounds = await nativeBounds(app, LEFT_TOKEN);
+            const rightBounds = await nativeBounds(app, RIGHT_TOKEN);
+            const dividerBounds = await nativeBounds(app, "view=divider");
+            const cards = await cardBoxes(sidebar);
+            const cardsMatch =
+              cards.length === 2 &&
+              JSON.stringify(cards[0]) === JSON.stringify(want.left) &&
+              JSON.stringify(cards[1]) === JSON.stringify(want.right);
+            return JSON.stringify(leftBounds) === JSON.stringify(want.left) &&
+              JSON.stringify(rightBounds) === JSON.stringify(want.right) &&
+              JSON.stringify(dividerBounds) === JSON.stringify(want.divider) &&
+              cardsMatch
+              ? "ok"
+              : JSON.stringify({ leftBounds, rightBounds, dividerBounds, cards, want });
+          }, { message: `split geometry at ratio ${ratio}` })
+          .toBe("ok");
+      }
+    } finally {
+      await app.close();
+      rmSync(userDataDir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ================================================================================
+// §6/§7 — focus ring and hit targets
+// ================================================================================
+
+/** The exempt inputs whose `outline: none` PRD 10.7 §6 keeps. */
+const FOCUS_EXEMPT_TESTIDS = ["command-bar-input", "find-input"];
+
+/**
+ * Sweeps every visible, enabled, non-exempt control on `page` matching the same
+ * `:where(...)` universe base.css's focus-ring rule targets, focusing each one
+ * directly with `el.focus({ focusVisible: true })` rather than a real Tab-key
+ * walk: under xvfb a WebContentsView-hosted page can fail to take keyboard
+ * focus at all (a known flake noted for this PRD), so a per-control synthetic
+ * focus is the reliable oracle here. Every focused control's computed outline
+ * must be the 2px solid `--focus-ring` ring, offset 1px (PRD 10.7 §6).
+ * Returns the number of controls checked, so a caller can assert it saw at
+ * least one (a state with zero eligible controls would otherwise pass vacuously).
+ */
+async function assertFocusRings(page: Page): Promise<number> {
+  const focusRing = await tokenBackground(page, "--focus-ring");
+  const probeIds: { index: number; label: string }[] = await page.evaluate(
+    (exempt) => {
+      const selector =
+        'button, a[href], input, select, textarea, summary, [tabindex]:not([tabindex="-1"])';
+      function isVisible(el: Element): boolean {
+        const rect = el.getBoundingClientRect();
+        if (rect.width <= 0 || rect.height <= 0) return false;
+        const style = getComputedStyle(el);
+        return style.visibility !== "hidden" && style.display !== "none";
+      }
+      const out: { index: number; label: string }[] = [];
+      let i = 0;
+      for (const el of Array.from(document.querySelectorAll(selector))) {
+        const testid = el.getAttribute("data-testid");
+        if (testid !== null && exempt.includes(testid)) continue;
+        if ((el as HTMLButtonElement | HTMLInputElement).disabled === true) continue;
+        if (!isVisible(el)) continue;
+        el.setAttribute("data-zeo-focus-probe", String(i));
+        out.push({ index: i, label: testid ?? (el.className || el.tagName.toLowerCase()) });
+        i += 1;
+      }
+      return out;
+    },
+    FOCUS_EXEMPT_TESTIDS,
+  );
+
+  for (const probe of probeIds) {
+    const locator = page.locator(`[data-zeo-focus-probe="${probe.index}"]`);
+    await locator.evaluate((el) => {
+      const target = el as HTMLElement;
+      // Blur first: a prior real click (e.g. selecting a settings section)
+      // can leave `target` already the active element WITHOUT focus-visible,
+      // and re-focusing an already-focused element is a no-op in the DOM
+      // focus model — no new focus transition, so `focusVisible: true` would
+      // never take effect. Blurring guarantees the next focus() is a genuine
+      // transition.
+      target.blur();
+      target.focus({ focusVisible: true } as unknown as FocusOptions);
+    });
+    const style = await locator.evaluate((el) => {
+      const s = getComputedStyle(el);
+      return {
+        outlineStyle: s.outlineStyle,
+        outlineWidth: s.outlineWidth,
+        outlineOffset: s.outlineOffset,
+        outlineColor: s.outlineColor,
+      };
+    });
+    expect(style, `focus ring on ${probe.label}`).toEqual({
+      outlineStyle: "solid",
+      outlineWidth: "2px",
+      outlineOffset: "1px",
+      outlineColor: focusRing,
+    });
+  }
+
+  await page.evaluate(() => {
+    for (const el of Array.from(document.querySelectorAll("[data-zeo-focus-probe]"))) {
+      el.removeAttribute("data-zeo-focus-probe");
+    }
+  });
+  return probeIds.length;
+}
+
+/** A trivial same-origin fixture page, for zoom (host-keyed) and downloads. */
+async function startFixtureServer(): Promise<{ base: string; close: () => Promise<void> }> {
+  const body = Buffer.alloc(4096, 0x7a);
+  const server: Server = createServer((req, res) => {
+    const pathname = (req.url ?? "").split("?")[0];
+    if (pathname === "/page.html") {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
+      res.end("<!doctype html><meta charset=utf-8><title>zeo-polish-fixture</title><p>fixture</p>");
+      return;
+    }
+    if (pathname === "/file.bin") {
+      res.writeHead(200, {
+        "Content-Disposition": 'attachment; filename="polish.bin"',
+        "Content-Type": "application/octet-stream",
+        "Content-Length": String(body.length),
+        "Cache-Control": "no-store",
+      });
+      res.end(body);
+      return;
+    }
+    res.writeHead(404);
+    res.end();
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  if (address === null || typeof address === "string") {
+    throw new Error("fixture server did not bind to an inet address");
+  }
+  const port = (address as AddressInfo).port;
+  return {
+    base: `http://127.0.0.1:${port}`,
+    close: () => new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve()))),
+  };
+}
+
+test.describe("PRD 10.7 polish — sidebar and overlay focus ring and hit targets", () => {
+  test("with a zoomed tab, the archived view, a download, a rename and ThemePicker open", async () => {
+    // This setup chains a real download, a real zoom (host-keyed, so it needs a
+    // live fixture page), and two full focus-ring sweeps; under xvfb it can run
+    // past the config's default 60s.
+    test.setTimeout(120_000);
+    const userDataDir = mkdtempSync(join(tmpdir(), "zeo-polish-sidebar-"));
+    const downloadsDir = mkdtempSync(join(tmpdir(), "zeo-polish-dl-"));
+    const server = await startFixtureServer();
+    const { app, sidebar } = await launch(userDataDir, downloadsDir);
+    try {
+      // --- A zoomed tab (host-keyed, so it needs a real same-origin page). ---
+      const zoomedTab = await sidebar.evaluate(async (base) => {
+        const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+        const tab = await zeo.tabs.create(base + "/page.html");
+        await zeo.tabs.activate(tab.id);
+        return tab.id;
+      }, server.base);
+      await waitForViewUrl(app, "page.html");
+      await sidebar.evaluate(() => {
+        const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+        return zeo.zoom.zoomIn();
+      });
+      await expect.poll(() => sidebar.getByTestId("tab-zoom").count()).toBeGreaterThan(0);
+
+      // --- A favorite tile. ---
+      await sidebar.evaluate(
+        (id) => {
+          const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+          return zeo.favorites.add(id);
+        },
+        zoomedTab,
+      );
+      await expect.poll(() => sidebar.getByTestId("favorite-tile").count()).toBeGreaterThan(0);
+
+      // --- A download, completed against the loopback fixture. ---
+      await sidebar.evaluate(async (base) => {
+        const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+        const tab = await zeo.tabs.create(base + "/file.bin");
+        await zeo.tabs.activate(tab.id);
+      }, server.base);
+      await waitForViewsIdle(app);
+
+      // --- Archive today's tabs (the seeded tab and the fixture tabs), then
+      // open the archived view so archived-item / archived-delete render. ---
+      await runCommand(sidebar, "tabs.clearToday");
+      await sidebar.getByTestId("archived-toggle").click();
+      await expect(sidebar.getByTestId("archived-view")).toBeVisible();
+      await expect.poll(() => sidebar.getByTestId("archived-item").count()).toBeGreaterThan(0);
+
+      // --- Rename the active space: dblclick the space dot to show its input. ---
+      const activeSpaceId = (await readSpaces(sidebar)).activeSpaceId;
+      await sidebar
+        .locator(`[data-testid="space-item"][data-space-id="${activeSpaceId}"]`)
+        .dblclick();
+      await expect(sidebar.getByTestId("space-name-input")).toBeVisible();
+
+      // --- ThemePicker open. ---
+      await runCommand(sidebar, "space.editTheme");
+      await expect(sidebar.getByTestId("theme-picker")).toBeVisible();
+
+      // The sweep runs while the picker (a modal-ish overlay) sits over the
+      // rest of the sidebar, matching what a user can actually focus right now.
+      const sidebarChecked = await assertFocusRings(sidebar);
+      expect(sidebarChecked).toBeGreaterThan(0);
+      await assertHitTargets(sidebar);
+
+      // Close the picker and re-run the sweep over the rest of the sidebar
+      // (space-name-input, archived-item, tab-zoom, favorite-tile, etc.),
+      // which the picker occluded above.
+      await sidebar.getByTestId("theme-intensity").press("Escape");
+      await expect(sidebar.getByTestId("theme-picker")).toHaveCount(0);
+      const restChecked = await assertFocusRings(sidebar);
+      expect(restChecked).toBeGreaterThan(0);
+      await assertHitTargets(sidebar);
+
+      // --- Overlay: find pill open, with a page to search. ---
+      const overlay = await overlayWindow(app);
+      await sidebar.evaluate(() => {
+        const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+        return zeo.find.open();
+      });
+      await expect(overlay.getByTestId("find-bar")).toBeVisible();
+      const overlayChecked = await assertFocusRings(overlay);
+      expect(overlayChecked).toBeGreaterThan(0);
+      await assertHitTargets(overlay);
+    } finally {
+      await app.close();
+      await server.close();
+      rmSync(userDataDir, { recursive: true, force: true });
+      rmSync(downloadsDir, { recursive: true, force: true });
+    }
+  });
+});
+
+test.describe("PRD 10.7 polish — settings focus ring and hit targets", () => {
+  test("every settings section, plus the history-clear dialog", async () => {
+    test.setTimeout(90_000);
+    const userDataDir = mkdtempSync(join(tmpdir(), "zeo-polish-settings-"));
+    const { app, sidebar } = await launch(userDataDir);
+    try {
+      const settings = await openSettings(app, sidebar);
+
+      for (const section of ["general", "blocking", "profiles", "history", "about"]) {
+        await settings.getByTestId(`settings-section-${section}`).click();
+        await expect(
+          settings.locator(`[data-testid="settings-section-${section}"][aria-current="page"]`),
+        ).toHaveCount(1);
+        const checked = await assertFocusRings(settings);
+        expect(checked, `section ${section}`).toBeGreaterThan(0);
+        await assertHitTargets(settings);
+      }
+
+      // The history-clear confirmation dialog.
+      await settings.getByTestId("settings-section-history").click();
+      await expect(settings.getByTestId("settings-history-stats")).toBeVisible();
+      await settings.getByTestId("settings-history-clear").click();
+      await expect(settings.getByTestId("settings-history-clear-dialog")).toBeVisible();
+      const dialogChecked = await assertFocusRings(settings);
+      expect(dialogChecked).toBeGreaterThan(0);
+      await assertHitTargets(settings);
+      await settings.getByTestId("settings-history-clear-cancel").click();
+
+      await settings.getByTestId("settings-close").click();
+    } finally {
+      await app.close();
+      rmSync(userDataDir, { recursive: true, force: true });
+    }
+  });
+});
