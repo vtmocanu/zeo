@@ -380,11 +380,23 @@ test.describe("PRD 10.7 polish — geometry", () => {
       const TOKEN = "ZEOPOLISH_ACTIVE";
       await activeTokenTab(app, sidebar, TOKEN);
 
-      for (const [w, h] of [
-        [1280, 800],
-        [1024, 700],
+      // Every size must fit the runner's display: the GitHub macOS runner
+      // clamps a 1280x800 request to a 677 px tall content area, so the
+      // matrix stays under that (and at or above MIN_WINDOW_SIZE, 640x400).
+      const SIZES = [
+        [1200, 640],
+        [1024, 600],
         [640, 400],
-      ] as const) {
+      ] as const;
+      const workArea = await app.evaluate(({ screen }) => screen.getPrimaryDisplay().workAreaSize);
+      for (const [w, h] of SIZES) {
+        expect(
+          w <= workArea.width && h <= workArea.height,
+          `runner display too small for ${w}x${h}: work area ${workArea.width}x${workArea.height}`,
+        ).toBe(true);
+      }
+
+      for (const [w, h] of SIZES) {
         await setContentSize(app, w, h);
         for (const width of [200, 240, 360]) {
           await setSidebarWidth(sidebar, width);
@@ -848,6 +860,11 @@ test.describe("PRD 10.7 polish — settings focus ring and hit targets", () => {
         await expect(
           settings.locator(`[data-testid="settings-section-${section}"][aria-current="page"]`),
         ).toHaveCount(1);
+        if (section === "history") {
+          // The trigger is disabled while the async stats read is loading;
+          // sweeping before it settles would skip it as disabled.
+          await expect(settings.getByTestId("settings-history-clear")).toBeEnabled();
+        }
         const required = SETTINGS_SECTION_REQUIRED[section];
         const checked = await assertFocusRings(settings, required);
         expect(checked.size, `section ${section}`).toBeGreaterThan(0);
