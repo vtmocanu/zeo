@@ -380,12 +380,12 @@ test.describe("PRD 10.7 polish — geometry", () => {
       const TOKEN = "ZEOPOLISH_ACTIVE";
       await activeTokenTab(app, sidebar, TOKEN);
 
-      // Every size must fit the runner's display: the GitHub macOS runner
-      // clamps a 1280x800 request to a 677 px tall content area, so the
-      // matrix stays under that (and at or above MIN_WINDOW_SIZE, 640x400).
+      // Every size must fit the runner's work area: the GitHub macOS runner
+      // clamped a 1280x800 request to 677 px tall (its width is unverified, so
+      // assume a 1024-wide display). Sizes stay at or above MIN_WINDOW_SIZE.
       const SIZES = [
-        [1200, 640],
-        [1024, 600],
+        [1024, 640],
+        [900, 520],
         [640, 400],
       ] as const;
       const workArea = await app.evaluate(({ screen }) => screen.getPrimaryDisplay().workAreaSize);
