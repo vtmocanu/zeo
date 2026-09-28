@@ -121,6 +121,17 @@ export function useEnterMotion<T extends HTMLElement>(
   return ref;
 }
 
+/**
+ * Backstop for the outgoing tint layer while its `animationstart` has not
+ * yet fired (PRD 10.7 §4). Fixed, NOT derived from `motionMs`: a layer whose
+ * animation has never started has never painted, so it can linger far
+ * longer than any motion duration without being visible, and a slow first
+ * frame (e.g. CI under load) must not be mistaken for a stranded layer.
+ * Once `animationstart` fires, App re-arms the tight
+ * `motionMs("--motion-space") + 50` timeout instead.
+ */
+export const OUTGOING_TINT_START_BACKSTOP_MS = 1500;
+
 export interface OutgoingTint {
   tint: string;
   opacity: number;

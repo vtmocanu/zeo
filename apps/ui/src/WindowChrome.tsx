@@ -90,9 +90,15 @@ export function WindowBackdrop(props: {
    *  switch (PRD 10.7 §4), or null between switches. */
   outgoingTint: { key: string; tint: string; opacity: number } | null;
   /** Called with the outgoing layer's key when its fade finishes, so App can
-   *  drop it even if `animationend` never fires (motion off, the window
-   *  losing focus mid-fade). */
+   *  drop it even if `animationend` never fires (the window losing focus
+   *  mid-fade). React's DOM types don't expose `onAnimationCancel`, so a
+   *  cancelled animation (e.g. the layer's `display` changing) relies on
+   *  App's own timers instead. */
   onOutgoingTintEnd: (key: string) => void;
+  /** Called with the outgoing layer's key when its fade-out animation
+   *  actually starts painting, so App can swap from its generous
+   *  never-started backstop to the tight post-start timeout. */
+  onOutgoingTintStart: (key: string) => void;
   /** Bumped by App on every switch that changes the tint, so `.window-tint`
    *  replays its `window-tint--enter` fade-in without remounting. */
   tintReplayKey: number;
@@ -123,6 +129,7 @@ export function WindowBackdrop(props: {
           className="window-tint-outgoing"
           aria-hidden="true"
           style={{ background: outgoingTint.tint, opacity: outgoingTint.opacity }}
+          onAnimationStart={() => props.onOutgoingTintStart(outgoingTint.key)}
           onAnimationEnd={() => props.onOutgoingTintEnd(outgoingTint.key)}
         />
       )}

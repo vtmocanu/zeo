@@ -38,6 +38,7 @@ import {
   motionDisabled,
   motionMs,
   outgoingTintDecision,
+  OUTGOING_TINT_START_BACKSTOP_MS,
   replaySpaceMotion,
   spaceSwitchDirectionClass,
 } from "./motion.js";
@@ -676,17 +677,48 @@ export function App() {
   }, []);
 
   // The outgoing tint layer unmounts on `animationend` (handled by
-  // WindowBackdrop) or at `motionMs("--motion-space") + 50` ms, whichever
-  // comes first, so a dropped animationend (motion off, or the tab losing
-  // focus mid-fade) can never strand the layer.
+  // WindowBackdrop) or on a fallback timer, whichever comes first. Until
+  // the layer's fade-out animation actually starts painting
+  // (see `handleOutgoingTintStart` below) it is armed with the generous
+  // `OUTGOING_TINT_START_BACKSTOP_MS`, since a layer that has never started
+  // has never painted and can linger unseen; once `animationstart` fires it
+  // is re-armed with the tight `motionMs("--motion-space") + 50` ms, so a
+  // dropped `animationend` (e.g. the tab losing focus mid-fade) can't strand
+  // a layer that IS visible. (With motion off the layer never mounts at
+  // all: `!motionDisabled()` guards the switch effect above.)
+  const outgoingTintTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     if (!outgoingTint) {
       return;
     }
     const key = outgoingTint.key;
-    const timer = setTimeout(() => clearOutgoingTint(key), motionMs("--motion-space") + 50);
-    return () => clearTimeout(timer);
+    outgoingTintTimerRef.current = setTimeout(
+      () => clearOutgoingTint(key),
+      OUTGOING_TINT_START_BACKSTOP_MS,
+    );
+    return () => {
+      if (outgoingTintTimerRef.current !== null) {
+        clearTimeout(outgoingTintTimerRef.current);
+        outgoingTintTimerRef.current = null;
+      }
+    };
   }, [outgoingTint, clearOutgoingTint]);
+
+  const handleOutgoingTintStart = useCallback(
+    (key: string) => {
+      if (outgoingTint?.key !== key) {
+        return;
+      }
+      if (outgoingTintTimerRef.current !== null) {
+        clearTimeout(outgoingTintTimerRef.current);
+      }
+      outgoingTintTimerRef.current = setTimeout(
+        () => clearOutgoingTint(key),
+        motionMs("--motion-space") + 50,
+      );
+    },
+    [outgoingTint, clearOutgoingTint],
+  );
 
   // Frameless chrome (PRD 10.2): mirror the live sidebar width into a token so
   // CSS can read it, and drive the collapsed sidebar's edge reveal.
@@ -1098,6 +1130,7 @@ export function App() {
         chrome={state.chrome}
         layout={state.layout}
         outgoingTint={outgoingTint}
+        onOutgoingTintStart={handleOutgoingTintStart}
         onOutgoingTintEnd={clearOutgoingTint}
         tintReplayKey={tintReplayKey}
       />

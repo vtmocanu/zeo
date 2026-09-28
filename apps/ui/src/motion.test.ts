@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 import type { SpaceTheme } from "@zeo/core";
 import {
   enterStep,
+  OUTGOING_TINT_START_BACKSTOP_MS,
   outgoingTintDecision,
   parseDurationMs,
   replayClass,
@@ -126,5 +127,15 @@ describe("outgoingTintDecision (compares the theme actually on screen)", () => {
     expect(decision?.tint).not.toBe(
       outgoingTintDecision(iris, next, "light")?.tint,
     );
+  });
+});
+
+describe("OUTGOING_TINT_START_BACKSTOP_MS (PRD 10.7 §4)", () => {
+  test("is fixed and generous, not tied to any motion token's duration", () => {
+    // A layer whose animation has never started has never painted, so it
+    // can linger long after the shortest reduced-motion duration (120ms)
+    // without ever being visible; the backstop only needs to be well clear
+    // of a slow first frame, not derived from --motion-space.
+    expect(OUTGOING_TINT_START_BACKSTOP_MS).toBeGreaterThanOrEqual(1000);
   });
 });

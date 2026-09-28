@@ -323,6 +323,43 @@ function outgoingTintCount(sidebar: Page): Promise<number> {
 }
 
 /**
+ * Installs a `MutationObserver` in `sidebar` that, the first time a
+ * `.window-tint-outgoing` layer is inserted, busy-waits the main thread for
+ * `stallMs` before returning. This reproduces a renderer that stalls before
+ * the layer's first paint (e.g. a loaded CI runner), which is exactly the
+ * gap between App arming its unmount timer at mount and the layer's
+ * `animationstart` actually firing.
+ *
+ * `stallMs` must stay above the old bug's window (App used to unmount at
+ * `motionMs("--motion-space") + 50` = 170ms under reduced motion,
+ * regardless of whether the animation had started) and comfortably below
+ * `OUTGOING_TINT_START_BACKSTOP_MS` (1500ms), so the fixed code's
+ * never-started backstop can't fire either: only a correct start/backstop
+ * split makes this test pass deterministically.
+ */
+async function stallOutgoingTintFirstFrame(sidebar: Page, stallMs: number): Promise<void> {
+  await sidebar.evaluate((ms) => {
+    const observer = new MutationObserver((mutations) => {
+      for (const mutation of mutations) {
+        for (const node of mutation.addedNodes) {
+          if (node instanceof Element && node.classList.contains("window-tint-outgoing")) {
+            observer.disconnect();
+            const until = performance.now() + ms;
+            while (performance.now() < until) {
+              // Busy-wait: blocks the main thread so the layer's first
+              // frame (and thus its `animationstart`) is delayed, without
+              // relying on a timer that itself needs the event loop.
+            }
+            return;
+          }
+        }
+      }
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+  }, stallMs);
+}
+
+/**
  * The browser-normalized `background-color` `cssColor` resolves to, computed
  * through a throwaway element on `page` — so comparing two colors expressed in
  * different notations (a `#rrggbb` literal vs. what an inline style read-back
@@ -640,6 +677,12 @@ test.describe("PRD 10.7 motion — reduced motion", () => {
       await activateSpace(sidebar, a);
       await clearMotionLog(sidebar);
 
+      // Stall the outgoing tint layer's first frame for longer than the old
+      // bug's 170ms unmount window (regression coverage: apps/ui/src/App.tsx
+      // used to arm its unmount timer at mount, not at `animationstart`, so
+      // a stall here used to make the cross-fade vanish before it ever
+      // painted).
+      await stallOutgoingTintFirstFrame(sidebar, 400);
       await activateSpace(sidebar, c);
       // Under reduced motion the forward class still applies (direction is
       // unchanged), but its animation-name switches to zeo-fade-in.
