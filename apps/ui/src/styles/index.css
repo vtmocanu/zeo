@@ -2,6 +2,7 @@
    in the order their rules appeared in the former single stylesheet. */
 @import "./tokens.css";
 @import "./base.css";
+@import "./motion.css";
 @import "./window.css";
 @import "./sidebar.css";
 @import "./url-pill.css";

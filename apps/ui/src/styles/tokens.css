@@ -42,6 +42,11 @@
   --icon-button: 28px;
   --bottom-bar-height: 32px;
   --label-height: 22px;
+  /* PRD 10.7 §7: the minimum interactive hit target. Deliberately its own
+     token, not --icon-button, since some fixed controls (the Clear divider
+     row, the theme-picker slider) grow to this floor without becoming
+     28x28 icon buttons. */
+  --hit-target: 28px;
 
   /* Type. */
   --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
@@ -61,6 +66,26 @@
   --motion-base: 200ms;
   --motion-space: 320ms;
   --ease-standard: cubic-bezier(.2, .8, .2, 1);
+  --motion-enter-scale: 0.97;
+  --motion-space-shift: 28px;
+  --motion-press-scale: 0.96;
+  --transition-control: background-color var(--motion-fast) var(--ease-standard),
+    color var(--motion-fast) var(--ease-standard), opacity var(--motion-fast) var(--ease-standard),
+    box-shadow var(--motion-fast) var(--ease-standard), transform var(--motion-fast) var(--ease-standard);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --motion-base: 120ms;
+    --motion-space: 120ms;
+    --motion-press-scale: 1;
+  }
+}
+
+.zeo-motion-off {
+  --motion-fast: 0ms;
+  --motion-base: 0ms;
+  --motion-space: 0ms;
 }
 
 /* Semantic tokens, null theme, light appearance: themeTokens(null, "light"). */

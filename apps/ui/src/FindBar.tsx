@@ -7,6 +7,7 @@ import {
 } from "react";
 import { FIND_BAR_HEIGHT, FIND_BAR_SHADOW_MARGIN, type FindState } from "@zeo/core";
 import { Icon } from "./icons.js";
+import { useEnterMotion } from "./motion.js";
 
 /**
  * The find-in-page surface of the single overlay WebContentsView, mounted by
@@ -32,6 +33,10 @@ export function FindBar() {
   // The counter reflects the pushed find state, not local input state.
   const [activeMatch, setActiveMatch] = useState(0);
   const [matchCount, setMatchCount] = useState(0);
+  // PRD 10.7 §3, §5: FindBar is remounted on each open (Overlay.tsx), so this
+  // starts false and flips true from the first pushed/fetched find state,
+  // driving the pill's enter motion.
+  const [open, setOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   // Debounce timer for setQuery; cleared on each change and on unmount.
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -45,6 +50,7 @@ export function FindBar() {
     const applyCounter = (find: FindState): void => {
       setActiveMatch(find.activeMatch);
       setMatchCount(find.matchCount);
+      setOpen(find.open);
     };
     const unsubscribe = window.zeo.onStateChange((state) => {
       applyCounter(state.find);
@@ -122,9 +128,12 @@ export function FindBar() {
     }, 50);
   };
 
+  const pillRef = useEnterMotion<HTMLDivElement>(open);
+
   return (
     <div className="find-bar-frame" style={{ padding: FIND_BAR_SHADOW_MARGIN }}>
       <div
+        ref={pillRef}
         className="find-bar"
         data-testid="find-bar"
         role="search"

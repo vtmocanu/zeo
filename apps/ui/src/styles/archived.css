@@ -36,7 +36,7 @@
   height: var(--row-height);
   padding: 0 3px 0 var(--space-4);
   border-radius: var(--radius-tab);
-  transition: background-color var(--motion-fast) var(--ease-standard);
+  transition: var(--transition-control);
 }
 
 .archived-item:hover {
@@ -61,11 +61,6 @@
   cursor: pointer;
 }
 
-.archived-item__title:focus-visible {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 1px;
-}
-
 .archived-item__time {
   flex: 0 0 auto;
   font-size: var(--text-xs);
@@ -86,8 +81,3 @@
   opacity: 1;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .archived-item {
-    transition: none;
-  }
-}

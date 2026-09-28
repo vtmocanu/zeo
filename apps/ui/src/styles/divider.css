@@ -20,6 +20,7 @@
   border-radius: 2px;
   background: var(--hairline);
   pointer-events: none;
+  transition: var(--transition-control);
 }
 
 .divider-handle:hover .divider-handle__grip {

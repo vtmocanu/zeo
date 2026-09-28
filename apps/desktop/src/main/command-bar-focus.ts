@@ -103,12 +103,12 @@ export function onTabViewFocus(): void {
 }
 
 /**
- * Registered on the overlay's `WebContents` `blur` event (window.ts), replacing
- * a direct, synchronous {@link closeCommandBar} call. Electron delivers
- * focus/blur asynchronously and the ordering between a losing view's `blur` and
- * a gaining view's `focus` is not guaranteed, so the decision is deferred one
- * tick (`setTimeout(..., 0)`) to let a same-tick steal (see {@link
- * onTabViewFocus}) — or the OS finishing its focus handoff — settle first.
+ * The overlay blur handler, registered on the overlay's `WebContents` `blur`
+ * event (window.ts). Electron delivers focus/blur asynchronously and the
+ * ordering between a losing view's `blur` and a gaining view's `focus` is not
+ * guaranteed, so the decision is deferred one tick (`setTimeout(..., 0)`) to
+ * let a same-tick steal (see {@link onTabViewFocus}) — or the OS finishing
+ * its focus handoff — settle first.
  *
  * In the deferred callback: a bar that is no longer open, or moved off the
  * `"bar"` surface, needs no action beyond clearing the steal flag. A destroyed
@@ -170,15 +170,14 @@ export function onOverlayBlur(): void {
  * {@link doFocusOther}, {@link doUnsplit} — or {@link activateTab}'s focus
  * return) would otherwise blur the overlay and let {@link onOverlayBlur}'s
  * deferred check decide whether to close it — racy and unnecessary when the
- * caller already knows it means to move focus away from the bar. Closing
- * first here keeps that existing "focusing a tab view closes the bar"
- * behavior, just synchronous and deliberate instead of blur-driven. Use ONLY
- * for a user-initiated focus move; any other layout pass (e.g. the idle sweep
- * archiving a background tab, or a non-pane tab closing) must use
- * {@link focusTabViewPassively} instead so it never steals focus away from an
- * open command bar. Note {@link doUnsplit}
- * and a split-collapsing {@link activateTab} pass `"deliberate"` too, but it
- * is a no-op there: the resulting single-mode branch never focuses a view.
+ * caller already knows it means to move focus away from the bar. Closes the
+ * bar synchronously before focusing. Use ONLY for a user-initiated focus
+ * move; any other layout pass (e.g. the idle sweep archiving a background
+ * tab, or a non-pane tab closing) must use {@link focusTabViewPassively}
+ * instead so it never steals focus away from an open command bar. Note
+ * {@link doUnsplit} and a split-collapsing {@link activateTab} pass
+ * `"deliberate"` too, but it is a no-op there: the resulting single-mode
+ * branch never focuses a view.
  */
 export function focusTabViewDeliberately(wc: Electron.WebContents): void {
   if (commandBarOwnsFocus()) {

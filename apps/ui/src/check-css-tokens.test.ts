@@ -76,7 +76,7 @@ describe("check-css-tokens.mjs", () => {
     const dir = makeTempDir();
     writeFileSync(
       join(dir, "names.css"),
-      ".red,\n.mark {\n  animation: highlight 1s;\n  grid-area: mark;\n" +
+      ".red,\n.mark {\n  animation: highlight var(--motion-base);\n  grid-area: mark;\n" +
         '  content: "white";\n  background-image: url(icons/white.svg);\n' +
         "  color: currentColor;\n  background: transparent;\n}\n",
     );
@@ -142,7 +142,7 @@ describe("check-css-tokens.mjs", () => {
     const dir = makeTempDir();
     writeFileSync(
       join(dir, "transition.css"),
-      ".a { transition: background 120ms ease; outline-color: var(--webkit-focus-ring-color); }\n",
+      ".a { transition: background var(--motion-fast) var(--ease-standard); outline-color: var(--webkit-focus-ring-color); }\n",
     );
 
     const { status, stderr } = run(dir);
@@ -192,5 +192,124 @@ describe("check-css-tokens.mjs", () => {
     expect(status).toBe(1);
     expect(stderr).not.toContain("ok-crlf.css");
     expect(stderr).toMatch(/bad-crlf-comment\.css:2: literal color "red"/);
+  });
+
+  test("exits 1 on a literal duration and easing in a transition", () => {
+    const dir = makeTempDir();
+    writeFileSync(join(dir, "bad-motion.css"), ".a { transition: opacity 0.1s ease-in-out; }\n");
+
+    const { status, stderr } = run(dir);
+    expect(status).toBe(1);
+    expect(stderr).toContain('literal motion "0.1s"');
+    expect(stderr).toContain('literal motion "ease-in-out"');
+  });
+
+  test("exits 1 on a literal duration in an animation", () => {
+    const dir = makeTempDir();
+    writeFileSync(join(dir, "bad-anim.css"), ".a { animation: x 200ms; }\n");
+
+    const { status, stderr } = run(dir);
+    expect(status).toBe(1);
+    expect(stderr).toContain('literal motion "200ms"');
+  });
+
+  test("exits 0 on a transition that reads a token", () => {
+    const dir = makeTempDir();
+    writeFileSync(
+      join(dir, "ok-transition.css"),
+      ".a { transition: var(--transition-control); }\n",
+    );
+
+    const { status, stderr } = run(dir);
+    expect(stderr).toBe("");
+    expect(status).toBe(0);
+  });
+
+  test("exits 0 on an animation that reads tokens", () => {
+    const dir = makeTempDir();
+    writeFileSync(
+      join(dir, "ok-anim.css"),
+      ".a { animation: zeo-fade-in var(--motion-base) var(--ease-standard) both; }\n",
+    );
+
+    const { status, stderr } = run(dir);
+    expect(stderr).toBe("");
+    expect(status).toBe(0);
+  });
+
+  test("does not flag literal motion inside tokens.css", () => {
+    const dir = makeTempDir();
+    writeFileSync(join(dir, "tokens.css"), ".a { transition: opacity 0.1s ease-in-out; }\n");
+
+    const { status, stderr } = run(dir);
+    expect(stderr).toBe("");
+    expect(status).toBe(0);
+  });
+
+  test("pins the exact file:line for a literal on a continuation line", () => {
+    const dir = makeTempDir();
+    writeFileSync(
+      join(dir, "bad-motion-multiline.css"),
+      ".a {\n  transition:\n    opacity\n    120ms\n    var(--ease-standard);\n}\n",
+    );
+
+    const { status, stderr } = run(dir);
+    expect(status).toBe(1);
+    expect(stderr).toMatch(/bad-motion-multiline\.css:4: literal motion "120ms"/);
+  });
+
+  test("exits 1 on a leading-dot duration", () => {
+    const dir = makeTempDir();
+    writeFileSync(join(dir, "bad-dot.css"), ".a { transition: opacity .5s; }\n");
+
+    const { status, stderr } = run(dir);
+    expect(status).toBe(1);
+    expect(stderr).toContain('literal motion ".5s"');
+  });
+
+  test("exits 1 on a negative delay and reports it whole", () => {
+    const dir = makeTempDir();
+    writeFileSync(
+      join(dir, "bad-negative.css"),
+      ".a { animation-delay: -200ms; }\n.b { transition-delay: -.5s; }\n",
+    );
+
+    const { status, stderr } = run(dir);
+    expect(status).toBe(1);
+    expect(stderr).toMatch(/bad-negative\.css:1: literal motion "-200ms"/);
+    expect(stderr).toMatch(/bad-negative\.css:2: literal motion "-\.5s"/);
+  });
+
+  test("does not flag a duration-shaped custom property name", () => {
+    const dir = makeTempDir();
+    writeFileSync(
+      join(dir, "ok-var-name.css"),
+      ".a { transition: var(--dur-2s); }\n.b { transition: var(--2s); }\n.c { animation: a--2s var(--motion-base); }\n",
+    );
+
+    const { status, stderr } = run(dir);
+    expect(stderr).toBe("");
+    expect(status).toBe(0);
+  });
+
+  test("exits 1 on an uppercase duration unit", () => {
+    const dir = makeTempDir();
+    writeFileSync(join(dir, "bad-upper.css"), ".a { transition: opacity 200MS; }\n");
+
+    const { status, stderr } = run(dir);
+    expect(status).toBe(1);
+    expect(stderr).toContain('literal motion "200MS"');
+  });
+
+  test("exits 1 on a literal transition-timing-function", () => {
+    const dir = makeTempDir();
+    writeFileSync(
+      join(dir, "bad-timing-function.css"),
+      ".a { transition-timing-function: ease-in; }\n",
+    );
+
+    const { status, stderr } = run(dir);
+    expect(status).toBe(1);
+    expect(stderr).toContain('literal motion "ease-in"');
   });
 });

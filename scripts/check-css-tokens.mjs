@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-// Literal-color lint for the UI stylesheets (PRD 10.1 §4).
+// Literal-color and literal-motion lint for the UI stylesheets (PRD 10.1 §4,
+// PRD 10.7 §9).
 //
 // Every color in a component stylesheet must read a semantic token; only
 // tokens.css may hold literal colors. Scans every *.css file under the target
@@ -12,6 +13,15 @@
 // values, outside strings and `url(...)`, and not in properties whose values
 // are author-chosen names (animation, grid-area, font-family, ...), where a
 // word such as `highlight` is a name rather than a color.
+//
+// Every duration and easing must also read a semantic token. The same files
+// have their `transition`, `transition-duration`, `transition-delay`,
+// `transition-timing-function`, `animation`, `animation-duration`,
+// `animation-delay` and `animation-timing-function` declarations (and their
+// `-webkit-` prefixed forms) checked for a literal time (`0.1s`, `200ms`,
+// case-insensitively), a `cubic-bezier(` call, or a bare `ease`, `ease-in`,
+// `ease-out`, `ease-in-out` or `linear` keyword (matched whole-word, so
+// `--ease-standard` and a name such as `zeo-fade-in` are not flagged).
 //
 // Usage: node scripts/check-css-tokens.mjs [dir]
 // Exit code 1 on any finding, 0 otherwise, 2 when the target is not a directory.
@@ -70,6 +80,40 @@ const NAMED_COLORS = new Set(
 // selector, and not a function name.
 const IDENT = /(?<![\w.#:-])[a-z]+(?![\w-]|\()|(?<![\w-])-webkit-focus-ring-color(?![\w-])/gi;
 const STRING = /"(?:[^"\\\n]|\\(?:\r\n|[\s\S]))*"|'(?:[^'\\\n]|\\(?:\r\n|[\s\S]))*'/g;
+
+// Properties whose declaration values must read tokens for duration and
+// easing, not a literal (PRD 10.7 §9).
+const MOTION_PROPERTIES = new Set([
+  "transition",
+  "transition-duration",
+  "transition-delay",
+  "transition-timing-function",
+  "animation",
+  "animation-duration",
+  "animation-delay",
+  "animation-timing-function",
+  "-webkit-transition",
+  "-webkit-transition-duration",
+  "-webkit-transition-delay",
+  "-webkit-transition-timing-function",
+  "-webkit-animation",
+  "-webkit-animation-duration",
+  "-webkit-animation-delay",
+  "-webkit-animation-timing-function",
+]);
+// A bare time literal, e.g. `0.1s`, `.5s` or `200ms` (matched
+// case-insensitively, so `200MS` counts too), matched as a whole token so
+// `0.1s` is not reported as just `1s` and `var(--dur-2s)` is not reported as
+// `2s`: the lookbehind, placed before the optional sign, bars a preceding word
+// character, dot or hyphen (so a custom-property or identifier tail such as
+// `--2s` or `a--2s` never matches, while a negative delay such as `-200ms` is
+// reported whole), and the trailing `\b` bars a following word character.
+const TIME_LITERAL = /(?<![\w.-])-?\d*\.?\d+m?s\b/gi;
+const CUBIC_BEZIER = /cubic-bezier\(/gi;
+// The bare easing keywords, longest alternative first so `ease-in-out` wins
+// over `ease-in` at the same position. Word-bounded on hyphens too, so
+// `--ease-standard` and `zeo-fade-in` never match.
+const MOTION_KEYWORD = /(?<![\w-])(?:ease-in-out|ease-in|ease-out|ease|linear)(?![\w-])/gi;
 
 /** Recursively list *.css files under `dir`, skipping tokens.css. */
 function cssFiles(dir) {
@@ -133,10 +177,13 @@ const IDENT_PROPERTIES = new Set([
 ]);
 
 /**
- * Every declaration value in `source` (comments already blanked), with the
- * line each character sits on. Tracks braces across lines, so selectors,
- * at-rule preludes and property names are never returned, while a value that
- * wraps over several lines (a font stack, a multi-layer shadow) is.
+ * Every declaration in `source` (comments already blanked), with its
+ * lowercased property name, its value text and the line each value
+ * character sits on. Tracks braces across lines, so selectors, at-rule
+ * preludes and property names are never returned as values, while a value
+ * that wraps over several lines (a font stack, a multi-layer shadow) is.
+ * Callers filter by `property` for their own purposes (color findings skip
+ * `IDENT_PROPERTIES`, motion findings keep only `MOTION_PROPERTIES`).
  */
 function declarationValues(source) {
   const values = [];
@@ -151,9 +198,7 @@ function declarationValues(source) {
     const colon = text.indexOf(":");
     if (stack.at(-1) === "rule" && colon !== -1) {
       const property = text.slice(0, colon).trim().toLowerCase();
-      if (!IDENT_PROPERTIES.has(property)) {
-        values.push({ text: text.slice(colon + 1), lines: lines.slice(colon + 1) });
-      }
+      values.push({ property, text: text.slice(colon + 1), lines: lines.slice(colon + 1) });
     }
     text = "";
     lines = [];
@@ -214,6 +259,7 @@ function findings(file) {
   // Named colors only count in declaration values, so selectors such as
   // `.tab-item` or `:hover` and property names never trip the check.
   for (const value of declarationValues(source)) {
+    if (IDENT_PROPERTIES.has(value.property)) continue;
     const scanned = value.text
       .replace(STRING, (s) => " ".repeat(s.length))
       .replace(/\burl\([^)]*\)/gi, (s) => " ".repeat(s.length));
@@ -221,6 +267,26 @@ function findings(file) {
       if (NAMED_COLORS.has(m[0].toLowerCase())) {
         found.push({ line: value.lines[m.index], match: m[0] });
       }
+    }
+  }
+  return found.sort((a, b) => a.line - b.line);
+}
+
+/** Literal motion (durations, easings) in `transition`/`animation` family declarations. */
+function motionFindings(file) {
+  const source = stripComments(readFileSync(file, "utf8"));
+  const found = [];
+  for (const value of declarationValues(source)) {
+    if (!MOTION_PROPERTIES.has(value.property)) continue;
+    const scanned = value.text.replace(STRING, (s) => " ".repeat(s.length));
+    for (const m of scanned.matchAll(TIME_LITERAL)) {
+      found.push({ line: value.lines[m.index], match: m[0] });
+    }
+    for (const m of scanned.matchAll(CUBIC_BEZIER)) {
+      found.push({ line: value.lines[m.index], match: m[0] });
+    }
+    for (const m of scanned.matchAll(MOTION_KEYWORD)) {
+      found.push({ line: value.lines[m.index], match: m[0] });
     }
   }
   return found.sort((a, b) => a.line - b.line);
@@ -242,6 +308,10 @@ for (const file of cssFiles(target)) {
   for (const { line, match } of findings(file)) {
     failures += 1;
     console.error(`${relative(process.cwd(), file)}:${line}: literal color "${match}"`);
+  }
+  for (const { line, match } of motionFindings(file)) {
+    failures += 1;
+    console.error(`${relative(process.cwd(), file)}:${line}: literal motion "${match}"`);
   }
 }
 process.exit(failures > 0 ? 1 : 0);

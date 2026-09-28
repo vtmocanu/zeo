@@ -9,6 +9,35 @@ milestone, a minor bump only for very large breakthroughs.
 
 ## [Unreleased]
 
+## [0.0.36] - 2026-09-28
+
+### Added
+
+- Motion. Buttons, rows, tiles and space dots cross-fade on hover over 120 ms,
+  and icon buttons, tiles, space dots and theme swatches shrink slightly while
+  pressed. The command bar, find pill, settings sheet, theme picker and dialogs
+  open with a 200 ms scale-and-fade, and the dimmed backdrops behind the
+  command bar, settings and dialogs fade in. Closing stays instant.
+- Switching spaces slides the space's title and tab list in from the side of
+  the new space's dot over 320 ms, and the window tint cross-fades from the old
+  space's color to the new one. Deleting the active space fades the next one
+  in. Page content still switches instantly.
+- Reduced motion. With the system's Reduce Motion setting on, opens and space
+  switches become short fades with no movement, pressed controls no longer
+  shrink, and the text caret stops blinking.
+
+### Changed
+
+- Keyboard focus shows the same 2 px accent ring on every control in the
+  sidebar, settings, find pill and quick-browse window. The sidebar resize
+  handle also lights its own bar in that focus color when focused from the
+  keyboard.
+- Small controls grew to at least 28 × 28 px: the tab zoom badge, the update
+  banner's action button, the Clear button, settings link buttons and the theme
+  picker's intensity slider.
+- The selected command-bar row's secondary text and shortcut hint are checked
+  to meet 4.5:1 contrast in every space theme, in both light and dark.
+
 ## [0.0.35] - 2026-09-27
 
 ### Fixed

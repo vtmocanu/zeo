@@ -63,11 +63,7 @@ body,
   font: inherit;
   line-height: 1;
   cursor: pointer;
-  transition:
-    background-color var(--motion-fast) var(--ease-standard),
-    color var(--motion-fast) var(--ease-standard),
-    opacity var(--motion-fast) var(--ease-standard),
-    transform var(--motion-fast) var(--ease-standard);
+  transition: var(--transition-control);
 }
 
 .icon-button:hover {
@@ -76,20 +72,12 @@ body,
 }
 
 .icon-button:active {
-  transform: scale(0.92);
+  transform: scale(var(--motion-press-scale));
 }
 
-.icon-button:focus-visible {
+/* Focus ring (PRD 10.7 §6): one rule for every focusable control. Exempt:
+   .command-bar__input, .find-bar__input and .dialog, which keep outline: none. */
+:where(button, a[href], input, select, textarea, summary, [tabindex]:not([tabindex="-1"])):focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: 1px;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .icon-button {
-    transition: none;
-  }
-
-  .icon-button:active {
-    transform: none;
-  }
 }

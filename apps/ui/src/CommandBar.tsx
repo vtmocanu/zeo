@@ -18,6 +18,7 @@ import {
 } from "@zeo/core";
 import type { CommandBarMode, CommandBarState, Suggestion } from "@zeo/core";
 import { Icon } from "./icons.js";
+import { useEnterMotion } from "./motion.js";
 
 /** The slice of `window` that {@link subscribeViewportSize} reads. */
 export interface ViewportTarget {
@@ -115,6 +116,10 @@ export function CommandBar() {
     token: number;
     mode: CommandBarMode;
   } | null>(null);
+  // PRD 10.7 §3, §5: drives the panel's and scrim's enter motion. A mode
+  // change while already open must not replay it, so this tracks `open`
+  // only, separately from `openSeed` (which also bumps on a mode change).
+  const [open, setOpen] = useState(false);
 
   useEffect(() => {
     // Guard so a bare browser dev-open (no bridge) doesn't throw. In Electron
@@ -128,6 +133,7 @@ export function CommandBar() {
         state.open && prevOpenRef.current && state.mode !== prevModeRef.current;
       prevOpenRef.current = state.open;
       prevModeRef.current = state.mode;
+      setOpen(state.open);
       // The suggestions and selection are pushed on every broadcast (main
       // recomputes them on each keystroke), not only on open.
       setSuggestions(state.suggestions);
@@ -315,17 +321,23 @@ export function CommandBar() {
     "--command-bar-list-padding-bottom": `${COMMAND_BAR_LIST_PADDING_BOTTOM}px`,
   } as CSSProperties;
   const hasList = suggestions.length > 0;
+  const scrimRef = useEnterMotion<HTMLDivElement>(open, "motion-fade");
+  const panelRef = useEnterMotion<HTMLDivElement>(open);
 
   return (
     <div className="command-bar-overlay">
       <div
+        ref={scrimRef}
         className="command-bar-scrim"
         data-testid="command-bar-scrim"
         aria-hidden="true"
         onMouseDown={onScrimMouseDown}
       />
       <div
-        className={hasList ? "command-bar command-bar--has-list" : "command-bar"}
+        ref={panelRef}
+        className={
+          hasList ? "command-bar motion-enter command-bar--has-list" : "command-bar motion-enter"
+        }
         data-testid="command-bar"
         role="dialog"
         aria-modal="true"

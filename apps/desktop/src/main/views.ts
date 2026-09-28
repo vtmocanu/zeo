@@ -286,7 +286,7 @@ export function createViewFor(tab: Tab, spaceId: string, urlOverride?: string): 
 
   // A loading tab view can steal native focus from the full-window overlay even
   // though the user's click never left the command bar; hand focus straight
-  // back when the bar currently owns it (PRD 10.5 follow-up, issue #179 M2).
+  // back when the bar currently owns it.
   view.webContents.on("focus", onTabViewFocus);
 
   // Track load failure so activation can retry it; a later success clears it.

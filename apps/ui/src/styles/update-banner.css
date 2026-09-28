@@ -37,7 +37,7 @@
 
 .update-banner__action {
   appearance: none;
-  height: 24px;
+  min-height: var(--hit-target);
   padding: 0 9px;
   border: none;
   border-radius: var(--radius-control);
@@ -48,20 +48,9 @@
   font-weight: var(--weight-semibold);
   white-space: nowrap;
   cursor: pointer;
-  transition: background-color var(--motion-fast) var(--ease-standard);
+  transition: var(--transition-control);
 }
 
 .update-banner__action:hover {
   background: color-mix(in srgb, var(--accent) 88%, var(--ink-primary));
-}
-
-.update-banner__action:focus-visible {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 1px;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .update-banner__action {
-    transition: none;
-  }
 }

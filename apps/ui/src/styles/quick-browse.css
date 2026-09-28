@@ -61,6 +61,7 @@
   font: inherit;
   cursor: pointer;
   -webkit-app-region: no-drag;
+  transition: var(--transition-control);
 }
 
 .quick-browse__button {
@@ -99,10 +100,4 @@
 .quick-browse__icon-button:hover {
   background: var(--popover-hover);
   color: var(--ink-popover);
-}
-
-.quick-browse__button:focus-visible,
-.quick-browse__icon-button:focus-visible {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 1px;
 }

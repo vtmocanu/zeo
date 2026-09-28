@@ -26,8 +26,6 @@
   font-size: var(--text-sm);
   -webkit-backdrop-filter: blur(20px) saturate(1.4);
   backdrop-filter: blur(20px) saturate(1.4);
-  /* Opacity only: a transform would move the box that geometry checks read. */
-  animation: theme-picker-fade var(--motion-base) var(--ease-standard);
 }
 
 .theme-picker__title {
@@ -64,9 +62,7 @@
   font: inherit;
   font-weight: var(--weight-medium);
   cursor: pointer;
-  transition:
-    background-color var(--motion-fast) var(--ease-standard),
-    color var(--motion-fast) var(--ease-standard);
+  transition: var(--transition-control);
 }
 
 .theme-picker__segment-button:hover {
@@ -104,13 +100,15 @@
   border-radius: 50%;
   background: var(--swatch);
   cursor: pointer;
-  transition:
-    transform var(--motion-fast) var(--ease-standard),
-    box-shadow var(--motion-fast) var(--ease-standard);
+  transition: var(--transition-control);
 }
 
 .theme-picker__swatch:hover {
   transform: scale(1.08);
+}
+
+.theme-picker__swatch:active {
+  transform: scale(var(--motion-press-scale));
 }
 
 .theme-picker__swatch[aria-pressed="true"] {
@@ -139,6 +137,7 @@
 
 .theme-picker__slider {
   width: 100%;
+  height: var(--hit-target);
   margin: 0;
   accent-color: var(--accent);
 }
@@ -184,30 +183,8 @@
   font-variant-numeric: tabular-nums;
 }
 
-.theme-picker__segment-button:focus-visible,
-.theme-picker__swatch:focus-visible,
-.theme-picker__slider:focus-visible {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 1px;
-}
-
 @media (prefers-reduced-motion: reduce) {
-  .theme-picker {
-    animation-duration: var(--motion-fast);
-  }
-
-  .theme-picker__swatch,
-  .theme-picker__segment-button {
-    transition: none;
-  }
-
   .theme-picker__swatch:hover {
     transform: none;
-  }
-}
-
-@keyframes theme-picker-fade {
-  from {
-    opacity: 0;
   }
 }

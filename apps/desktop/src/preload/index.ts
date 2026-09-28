@@ -187,6 +187,8 @@ const api = {
     showContextMenu: (favoriteId: string, x: number, y: number): Promise<FavoriteContextMenuResult> =>
       ipcRenderer.invoke(IPC.favoritesContextMenu, favoriteId, x, y),
   },
+  motion:
+    process.env.ZEO_E2E === "1" && process.env.ZEO_E2E_MOTION !== "1" ? "off" : "system",
   onStateChange: (listener: (state: TabsState) => void): (() => void) => {
     const handler = (_event: Electron.IpcRendererEvent, state: TabsState): void => listener(state);
     ipcRenderer.on(IPC.stateChange, handler);

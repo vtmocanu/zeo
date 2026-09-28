@@ -12,6 +12,13 @@ if (!container) {
   throw new Error("Root container #root not found");
 }
 
+// PRD 10.7 §5: the preload sets `motion: "off"` under `ZEO_E2E=1` without
+// `ZEO_E2E_MOTION`. Add the class before the first render, so nothing ever
+// animates in that mode, not even the first paint.
+if (window.zeo?.motion === "off") {
+  document.documentElement.classList.add("zeo-motion-off");
+}
+
 // The command-bar overlay, the settings view, the quick-browse chrome, the
 // split divider, and the main sidebar share this bundle; the hosting
 // WebContentsView picks which to mount via the `view` query param (main injects

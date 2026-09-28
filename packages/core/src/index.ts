@@ -321,3 +321,17 @@ export {
   belowPinnedClip,
 } from "./sidebar.js";
 export type { SidebarSections, TileBox } from "./sidebar.js";
+export {
+  MOTION_FAST_MS,
+  MOTION_BASE_MS,
+  MOTION_SPACE_MS,
+  MOTION_REDUCED_MS,
+  EASE_STANDARD,
+  ENTER_SCALE_FROM,
+  SPACE_SHIFT_PX,
+  PRESS_SCALE,
+  detectSpaceSwitch,
+} from "./motion.js";
+export type { SpaceSwitchDirection, SpaceSwitch } from "./motion.js";
+export { parseCssColor, contrastAudit } from "./contrast-audit.js";
+export type { ContrastCheckId, ContrastCheck } from "./contrast-audit.js";

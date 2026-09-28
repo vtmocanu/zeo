@@ -7,6 +7,12 @@ import { join } from "node:path";
 import { createServer } from "node:http";
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
+// PRD 10.7 §6/§7 — the shared focus-ring and hit-target audits, run here with
+// the update banner shown (its `update-banner-action` and
+// `.update-banner__dismiss` controls are §6 sidebar-row controls that no
+// other spec's sweep can reach, since they only render while a banner is
+// shown).
+import { assertFocusRings, assertHitTargets } from "./helpers/a11y";
 
 // PRD 9.6 — in-app update check, driven end to end against a loopback releases
 // feed. Nothing here touches the network beyond 127.0.0.1.
@@ -307,7 +313,13 @@ test.describe("PRD 9.6 in-app update check (offline fixture feed)", () => {
   test("a newer feed release shows the sidebar banner and fills update.state()", async () => {
     const server = await startFixtureServer(release("9.9.9"));
     const userDataDir = tempUserData();
-    const { app, sidebar } = await launch(userDataDir, { feedUrl: server.feedUrl });
+    // origin: "direct" (rather than leaving it to the Caskroom probe) makes
+    // update-open-release's render condition (§8: origin !== "homebrew")
+    // deterministic, so the settings sweep below can rely on it.
+    const { app, sidebar } = await launch(userDataDir, {
+      feedUrl: server.feedUrl,
+      origin: "direct",
+    });
     try {
       const banner = sidebar.getByTestId("update-banner");
       await expect(banner).toBeVisible();
@@ -324,6 +336,37 @@ test.describe("PRD 9.6 in-app update check (offline fixture feed)", () => {
       // The same slice rides the TabsState broadcast.
       const snapshot = await tabsList(sidebar);
       expect(snapshot.update.available?.version).toBe("9.9.9");
+
+      // PRD 10.7 §6/§7 — the sidebar's focus-ring and hit-target audits, with
+      // the update banner (update-banner-action, .update-banner__dismiss)
+      // visible, requiring the sweep to actually have reached both.
+      const bannerRequired = [
+        '[data-testid="update-banner-action"]',
+        ".icon-button.update-banner__dismiss",
+      ];
+      await assertFocusRings(sidebar, bannerRequired);
+      await assertHitTargets(sidebar, bannerRequired);
+
+      // PRD 10.7 §7 names `.settings__link-button` explicitly, and its only
+      // instance is update-dismiss in Settings.tsx's General section, which
+      // (like update-open-release, a sibling `.settings__button--primary`
+      // control) renders only while an update is available — no other spec
+      // ever has an update available while settings is open, so this is the
+      // only place either control is ever swept. settings.openGeneral opens
+      // settings straight to the section that renders them.
+      await sidebar.evaluate(() => {
+        const zeo = (globalThis as unknown as { zeo: ZeoBridge }).zeo;
+        return zeo.commands.run("settings.openGeneral");
+      });
+      const settings = await settingsWindow(app);
+      await expect(settings.getByTestId("update-open-release")).toBeVisible();
+      await expect(settings.getByTestId("update-dismiss")).toBeVisible();
+      const settingsUpdateRequired = [
+        '[data-testid="update-open-release"]',
+        '[data-testid="update-dismiss"]',
+      ];
+      await assertFocusRings(settings, settingsUpdateRequired);
+      await assertHitTargets(settings, settingsUpdateRequired);
     } finally {
       await app.close();
       await server.close();

@@ -20,16 +20,11 @@
   font-weight: var(--weight-medium);
   text-align: left;
   cursor: text;
-  transition: background-color var(--motion-fast) var(--ease-standard);
+  transition: var(--transition-control);
 }
 
 .url-pill:hover {
   background: var(--surface-hover);
-}
-
-.url-pill:focus-visible {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 1px;
 }
 
 .url-pill__label {
@@ -42,10 +37,4 @@
 
 .url-pill__label--placeholder {
   color: var(--ink-secondary);
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .url-pill {
-    transition: none;
-  }
 }

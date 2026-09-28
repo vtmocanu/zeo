@@ -33,10 +33,7 @@
   color: var(--ink-primary);
   font: inherit;
   cursor: pointer;
-  transition:
-    background-color var(--motion-fast) var(--ease-standard),
-    box-shadow var(--motion-fast) var(--ease-standard),
-    transform var(--motion-fast) var(--ease-standard);
+  transition: var(--transition-control);
 }
 
 .favorite-tile:hover {
@@ -44,12 +41,7 @@
 }
 
 .favorite-tile:active {
-  transform: scale(0.96);
-}
-
-.favorite-tile:focus-visible {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 1px;
+  transform: scale(var(--motion-press-scale));
 }
 
 /* The favorite whose tab is the active tab: raised like the active row. */
@@ -125,14 +117,4 @@
 
 .favorite-tile--drop-after::before {
   right: -4px;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .favorite-tile {
-    transition: none;
-  }
-
-  .favorite-tile:active {
-    transform: none;
-  }
 }

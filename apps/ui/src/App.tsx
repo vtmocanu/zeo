@@ -18,6 +18,7 @@ import {
   cardLeft,
   clearableTabIds,
   defaultSpaceName,
+  detectSpaceSwitch,
   formatRelativeArchived,
   formatZoomPercent,
   hostMatchesAllowlist,
@@ -33,6 +34,14 @@ import { Favicon } from "./Favicon.js";
 import { DRAG_THRESHOLD, suppressNextClick } from "./drag.js";
 import { FavoritesGrid } from "./FavoritesGrid.js";
 import { Icon } from "./icons.js";
+import {
+  motionDisabled,
+  motionMs,
+  outgoingTintDecision,
+  OUTGOING_TINT_START_BACKSTOP_MS,
+  replaySpaceMotion,
+  spaceSwitchDirectionClass,
+} from "./motion.js";
 import { UrlPill } from "./UrlPill.js";
 import {
   SidebarResizeHandle,
@@ -41,7 +50,7 @@ import {
   useSidebarReveal,
 } from "./WindowChrome.js";
 import { ThemePicker } from "./ThemePicker.js";
-import { useThemeTokens } from "./theme.js";
+import { useAppearance, useThemeTokens } from "./theme.js";
 
 type DragSection = "pinned" | "unpinned";
 
@@ -363,7 +372,7 @@ function TabRow({
             void window.zeo?.commands.run("zoom.reset").catch(() => {});
           }}
         >
-          {formatZoomPercent(zoomFactor)}
+          <span className="tab-item__zoom-label">{formatZoomPercent(zoomFactor)}</span>
         </button>
       ) : null}
       {allowlisted ? (
@@ -598,6 +607,119 @@ export function App() {
   useThemeTokens(activeSpaceTheme(state));
   const [showArchived, setShowArchived] = useState(false);
   const [now, setNow] = useState(() => Date.now());
+
+  // Space switch (PRD 10.7 §4): the sidebar-scoped block slides in and the
+  // window tint cross-fades on every switch path (dots, ⌃1–9, command-bar
+  // space rows, cross-space activate/restore, deleting the active space).
+  // `previousRef` holds what the LAST render committed, so the layout effect
+  // below always compares against the id/theme that were on screen a moment
+  // ago, not the one about to be rendered.
+  const appearance = useAppearance();
+  const previousRef = useRef<{ activeSpaceId: string; theme: SpaceTheme | null }>({
+    activeSpaceId: "",
+    theme: null,
+  });
+  const spaceRef = useRef<HTMLDivElement>(null);
+  const [outgoingTint, setOutgoingTint] = useState<{
+    key: string;
+    tint: string;
+    opacity: number;
+  } | null>(null);
+  const [tintReplayKey, setTintReplayKey] = useState(0);
+  const tintKeyRef = useRef(0);
+
+  useLayoutEffect(() => {
+    const nextTheme = activeSpaceTheme(state);
+    const switchResult = detectSpaceSwitch(
+      previousRef.current.activeSpaceId,
+      state.activeSpaceId,
+      state.spaces.map((s) => s.id),
+    );
+    if (switchResult && !motionDisabled()) {
+      const element = spaceRef.current;
+      if (element) {
+        const directionClass = spaceSwitchDirectionClass(switchResult.direction);
+        element.dataset.spaceMotion = switchResult.direction ?? "fade";
+        replaySpaceMotion(element, directionClass);
+      }
+      // Read `previousRef.current.theme` before the refresh effect below (in
+      // its own, later-declared useLayoutEffect) overwrites it: effects run
+      // in declaration order within a commit, so this always compares
+      // against the theme that was actually on screen, even when it was
+      // edited (not switched) since the last switch.
+      const decision = outgoingTintDecision(previousRef.current.theme, nextTheme, appearance);
+      if (decision) {
+        tintKeyRef.current += 1;
+        setOutgoingTint({ key: String(tintKeyRef.current), tint: decision.tint, opacity: decision.opacity });
+        setTintReplayKey((key) => key + 1);
+      }
+    }
+    previousRef.current = { activeSpaceId: state.activeSpaceId, theme: nextTheme };
+    // Deliberately keyed only on activeSpaceId (PRD 10.7 §4 step 1): this
+    // must run once per switch, not on every appearance flip or unrelated
+    // state broadcast; `state` and `appearance` are read fresh each time it
+    // does run.
+  }, [state.activeSpaceId]);
+
+  // Refreshes `previousRef.current.theme` on every commit where the active
+  // space's OWN theme changes (editing it in ThemePicker, not switching
+  // spaces), so a later switch's outgoing tint compares against what was
+  // actually last painted rather than a theme from before the edit (PRD
+  // 10.7 §4). Declared after the switch effect above so it always runs
+  // after it within the same commit.
+  const activeTheme = activeSpaceTheme(state);
+  useLayoutEffect(() => {
+    previousRef.current = { activeSpaceId: state.activeSpaceId, theme: activeTheme };
+  }, [state.activeSpaceId, activeTheme]);
+
+  const clearOutgoingTint = useCallback((key: string) => {
+    setOutgoingTint((current) => (current?.key === key ? null : current));
+  }, []);
+
+  // The outgoing tint layer unmounts on `animationend` (handled by
+  // WindowBackdrop) or on a fallback timer, whichever comes first. From mount
+  // until its fade-out's `animationstart` it is armed with the generous
+  // `OUTGOING_TINT_START_BACKSTOP_MS`, so a renderer that is slow to produce
+  // its first frame cannot remove the layer before the fade-out runs;
+  // `handleOutgoingTintStart` then re-arms it at
+  // `motionMs("--motion-space") + 50` ms, so a dropped `animationend` (e.g.
+  // the tab losing focus mid-fade) can't strand a visible layer. With motion
+  // off the layer never mounts: `!motionDisabled()` guards the switch effect.
+  // One ref serves both: `setOutgoingTint` is a sync-lane update, so this
+  // effect always runs before the new layer's `animationstart`.
+  const outgoingTintTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (!outgoingTint) {
+      return;
+    }
+    const key = outgoingTint.key;
+    outgoingTintTimerRef.current = setTimeout(
+      () => clearOutgoingTint(key),
+      OUTGOING_TINT_START_BACKSTOP_MS,
+    );
+    return () => {
+      if (outgoingTintTimerRef.current !== null) {
+        clearTimeout(outgoingTintTimerRef.current);
+        outgoingTintTimerRef.current = null;
+      }
+    };
+  }, [outgoingTint, clearOutgoingTint]);
+
+  const handleOutgoingTintStart = useCallback(
+    (key: string) => {
+      if (outgoingTint?.key !== key) {
+        return;
+      }
+      if (outgoingTintTimerRef.current !== null) {
+        clearTimeout(outgoingTintTimerRef.current);
+      }
+      outgoingTintTimerRef.current = setTimeout(
+        () => clearOutgoingTint(key),
+        motionMs("--motion-space") + 50,
+      );
+    },
+    [outgoingTint, clearOutgoingTint],
+  );
 
   // Frameless chrome (PRD 10.2): mirror the live sidebar width into a token so
   // CSS can read it, and drive the collapsed sidebar's edge reveal.
@@ -860,50 +982,55 @@ export function App() {
         openFavoriteIds={openFavoriteIds}
         sidebarWidth={sidebarWidth}
       />
-      <h1 className="sidebar__title">{activeSpace?.name ?? ""}</h1>
+      {/* PRD 10.7 §4: the space-scoped block that slides on a switch. A plain
+          flex column so .sidebar__sections stays the only scroll container
+          and the pinned section stays sticky inside it. */}
+      <div className="sidebar__space" ref={spaceRef}>
+        <h1 className="sidebar__title">{activeSpace?.name ?? ""}</h1>
 
-      <div className="sidebar__sections">
-        {showPinned && (
-          <section
-            className="sidebar__section sidebar__section--pinned"
-            data-testid="pinned-section"
-            aria-label="Pinned tabs"
-          >
-            {renderList(pinned, "pinned", pinnedListRef)}
-          </section>
-        )}
-        <div className="sidebar__below-pinned" ref={belowPinnedRef}>
-          <div className="sidebar__divider">
-            <button
-              type="button"
-              className="sidebar__clear"
-              data-testid="clear-today-button"
-              aria-label="Clear today's tabs"
-              title="Archive today's tabs"
-              disabled={clearable.length === 0}
-              onClick={() => void window.zeo?.commands.run("tabs.clearToday").catch(() => {})}
+        <div className="sidebar__sections">
+          {showPinned && (
+            <section
+              className="sidebar__section sidebar__section--pinned"
+              data-testid="pinned-section"
+              aria-label="Pinned tabs"
             >
-              <Icon name="chevron-down" size={12} />
-              Clear
-            </button>
+              {renderList(pinned, "pinned", pinnedListRef)}
+            </section>
+          )}
+          <div className="sidebar__below-pinned" ref={belowPinnedRef}>
+            <div className="sidebar__divider">
+              <button
+                type="button"
+                className="sidebar__clear"
+                data-testid="clear-today-button"
+                aria-label="Clear today's tabs"
+                title="Archive today's tabs"
+                disabled={clearable.length === 0}
+                onClick={() => void window.zeo?.commands.run("tabs.clearToday").catch(() => {})}
+              >
+                <Icon name="chevron-down" size={12} />
+                Clear
+              </button>
+            </div>
+            <section
+              className="sidebar__section"
+              data-testid="unpinned-section"
+              aria-label="Today's tabs"
+            >
+              <button
+                type="button"
+                className="sidebar__new-tab"
+                data-testid="new-tab-button"
+                onClick={() => void window.zeo?.commandBar.open("new-tab").catch(() => {})}
+              >
+                <Icon name="plus" size={14} />
+                <span className="sidebar__new-tab-label">New Tab</span>
+              </button>
+              {renderList(today, "unpinned", unpinnedListRef)}
+              {state.tabs.length === 0 && <p className="sidebar__empty">No open tabs</p>}
+            </section>
           </div>
-          <section
-            className="sidebar__section"
-            data-testid="unpinned-section"
-            aria-label="Today's tabs"
-          >
-            <button
-              type="button"
-              className="sidebar__new-tab"
-              data-testid="new-tab-button"
-              onClick={() => void window.zeo?.commandBar.open("new-tab").catch(() => {})}
-            >
-              <Icon name="plus" size={14} />
-              <span className="sidebar__new-tab-label">New Tab</span>
-            </button>
-            {renderList(today, "unpinned", unpinnedListRef)}
-            {state.tabs.length === 0 && <p className="sidebar__empty">No open tabs</p>}
-          </section>
         </div>
       </div>
 
@@ -1000,7 +1127,14 @@ export function App() {
   // sidebar surface; the other ?view= surfaces mount different roots.
   return (
     <>
-      <WindowBackdrop chrome={state.chrome} layout={state.layout} />
+      <WindowBackdrop
+        chrome={state.chrome}
+        layout={state.layout}
+        outgoingTint={outgoingTint}
+        onOutgoingTintStart={handleOutgoingTintStart}
+        onOutgoingTintEnd={clearOutgoingTint}
+        tintReplayKey={tintReplayKey}
+      />
       {sidebar}
     </>
   );
