@@ -16,8 +16,8 @@ milestone, a minor bump only for very large breakthroughs.
 - Motion. Buttons, rows, tiles and space dots cross-fade on hover over 120 ms,
   and icon buttons, tiles, space dots and theme swatches shrink slightly while
   pressed. The command bar, find pill, settings sheet, theme picker and dialogs
-  open with a 200 ms scale-and-fade, and their dimmed backdrops fade in. Closing
-  stays instant.
+  open with a 200 ms scale-and-fade, and the dimmed backdrops behind the
+  command bar, settings and dialogs fade in. Closing stays instant.
 - Switching spaces slides the space's title and tab list in from the side of
   the new space's dot over 320 ms, and the window tint cross-fades from the old
   space's color to the new one. Deleting the active space fades the next one
@@ -29,12 +29,13 @@ milestone, a minor bump only for very large breakthroughs.
 ### Changed
 
 - Keyboard focus shows the same 2 px accent ring on every control in the
-  sidebar, settings, find pill and quick-browse window.
+  sidebar, settings, find pill and quick-browse window, including the sidebar
+  resize handle, which previously highlighted its edge instead.
 - Small controls grew to at least 28 × 28 px: the tab zoom badge, the update
   banner's action button, the Clear button, settings link buttons and the theme
   picker's intensity slider.
-- The selected command-bar row's secondary text is confirmed to meet 4.5:1
-  contrast. A new contrast audit checks every space theme in both appearances.
+- The selected command-bar row's secondary text and shortcut hint are checked
+  to meet 4.5:1 contrast in every space theme, in both light and dark.
 
 ## [0.0.34] - 2026-09-27
 
