@@ -8,6 +8,7 @@ vi.mock("electron", () => ({
       loadFile: () => Promise.resolve(),
       focus: () => {},
       isDestroyed: () => false,
+      send: () => {},
     };
     setBackgroundColor(_color: string) {}
     setBounds(_bounds: unknown) {}
@@ -38,8 +39,18 @@ vi.mock("./overlay.js", () => ({
   layoutOverlay: h.layoutOverlay,
 }));
 
+import { SpaceStore } from "@zeo/core";
 import { runtime } from "./state.js";
-import { applyLayout, doFocusPane } from "./layout.js";
+import {
+  activateTab,
+  applyLayout,
+  doFocusOther,
+  doFocusPane,
+  doSplit,
+  doSplitWith,
+  doSwap,
+  reconcileAndApply,
+} from "./layout.js";
 
 describe("applyLayout", () => {
   const originalWin = runtime.win;
@@ -121,5 +132,184 @@ describe("applyLayout", () => {
 
     expect(closeFind).toHaveBeenCalledTimes(1);
     expect(runtime.find.open).toBe(false);
+  });
+
+  describe("focus mode (passive vs. deliberate)", () => {
+    const originalCommandBar = runtime.commandBar;
+    const originalOverlay = runtime.overlay;
+    const originalCloseHook = runtime.closeCommandBarHook;
+
+    const closeCommandBarHook = vi.fn();
+
+    /** Stub pane views for `left`/`right`, tracked in `runtime.views`. */
+    function stubPaneViews(left: string, right: string): void {
+      for (const id of [left, right]) {
+        runtime.views.set(id, {
+          webContents: {
+            isDestroyed: () => false,
+            focus: vi.fn(),
+          },
+          setBounds: () => {},
+          setVisible: () => {},
+        } as unknown as ReturnType<typeof runtime.views.get> & object);
+      }
+    }
+
+    beforeEach(() => {
+      closeCommandBarHook.mockClear();
+      runtime.closeCommandBarHook = closeCommandBarHook;
+      runtime.commandBar = {
+        open: true,
+        mode: "navigate",
+        initialText: "",
+        query: "",
+        suggestions: [],
+        selectedIndex: -1,
+        revision: 0,
+        surface: "bar",
+      };
+      runtime.overlay = {
+        webContents: { isDestroyed: () => false, focus: () => {}, isFocused: () => false },
+        getVisible: () => true,
+      } as unknown as typeof runtime.overlay;
+    });
+
+    afterEach(() => {
+      runtime.commandBar = originalCommandBar;
+      runtime.overlay = originalOverlay;
+      runtime.closeCommandBarHook = originalCloseHook;
+      runtime.views.clear();
+    });
+
+    test("passive applyLayout() does not close the bar or move focus while it owns focus", () => {
+      const { left, right } = split("left");
+      stubPaneViews(left, right);
+
+      applyLayout();
+
+      expect(closeCommandBarHook).not.toHaveBeenCalled();
+      const focusedView = runtime.views.get(left)!;
+      expect(focusedView.webContents.focus).not.toHaveBeenCalled();
+    });
+
+    test("passive reconcileAndApply() does not close the bar or move focus while it owns focus", () => {
+      const { left, right } = split("left");
+      stubPaneViews(left, right);
+
+      reconcileAndApply();
+
+      expect(closeCommandBarHook).not.toHaveBeenCalled();
+      const focusedView = runtime.views.get(left)!;
+      expect(focusedView.webContents.focus).not.toHaveBeenCalled();
+    });
+
+    test("doFocusPane closes the bar (deliberate) then focuses the newly focused pane", () => {
+      const { left, right } = split("left");
+      stubPaneViews(left, right);
+
+      doFocusPane("right");
+
+      expect(closeCommandBarHook).toHaveBeenCalledTimes(1);
+      const focusedView = runtime.views.get(right)!;
+      expect(focusedView.webContents.focus).toHaveBeenCalledTimes(1);
+    });
+
+    test("passive applyLayout() leaves focus alone while the bar is open behind a hidden overlay", () => {
+      runtime.overlay = {
+        webContents: { isDestroyed: () => false, focus: () => {}, isFocused: () => false },
+        getVisible: () => false,
+      } as unknown as typeof runtime.overlay;
+      const { left, right } = split("left");
+      stubPaneViews(left, right);
+
+      applyLayout();
+
+      expect(closeCommandBarHook).not.toHaveBeenCalled();
+      const focusedView = runtime.views.get(left)!;
+      expect(focusedView.webContents.focus).not.toHaveBeenCalled();
+    });
+
+    test("a passive applyLayout() still focuses the pane once the bar is closed", () => {
+      runtime.commandBar = { ...runtime.commandBar, open: false };
+      const { left, right } = split("left");
+      stubPaneViews(left, right);
+
+      applyLayout();
+
+      expect(closeCommandBarHook).not.toHaveBeenCalled();
+      const focusedView = runtime.views.get(left)!;
+      expect(focusedView.webContents.focus).toHaveBeenCalledTimes(1);
+    });
+
+    test("doSwap closes the bar (deliberate) then focuses the still-focused pane", () => {
+      const { left, right } = split("left");
+      stubPaneViews(left, right);
+
+      doSwap();
+
+      expect(closeCommandBarHook).toHaveBeenCalledTimes(1);
+      // Swap keeps the same tab focused (it just moves to the other pane).
+      const focusedView = runtime.views.get(left)!;
+      expect(focusedView.webContents.focus).toHaveBeenCalledTimes(1);
+    });
+
+    test("doFocusOther closes the bar (deliberate) then focuses the newly focused pane", () => {
+      const { left, right } = split("left");
+      stubPaneViews(left, right);
+
+      doFocusOther();
+
+      expect(closeCommandBarHook).toHaveBeenCalledTimes(1);
+      const focusedView = runtime.views.get(right)!;
+      expect(focusedView.webContents.focus).toHaveBeenCalledTimes(1);
+    });
+
+    test("activateTab of the other pane tab closes the bar (deliberate) and moves focus to it", () => {
+      const { left, right } = split("left");
+      stubPaneViews(left, right);
+
+      activateTab(right);
+
+      expect(runtime.layout).toMatchObject({ mode: "split", focused: "right" });
+      expect(closeCommandBarHook).toHaveBeenCalledTimes(1);
+      const focusedView = runtime.views.get(right)!;
+      expect(focusedView.webContents.focus).toHaveBeenCalledTimes(1);
+    });
+
+    test("doSplit closes the bar (deliberate) then focuses the newly-split active tab", () => {
+      // A fresh store keeps `mostRecentOtherTabId` (used by doSplit) from
+      // picking up a tab created by an earlier test in this file.
+      const originalStore = runtime.store;
+      runtime.store = new SpaceStore();
+      try {
+        const left = runtime.store.create({ url: "https://left.test", title: "Left" }).id;
+        const right = runtime.store.create({ url: "https://right.test", title: "Right" }).id;
+        runtime.store.activate(left);
+        stubPaneViews(left, right);
+
+        void doSplit();
+
+        expect(runtime.layout).toMatchObject({ mode: "split", left, right, focused: "left" });
+        expect(closeCommandBarHook).toHaveBeenCalledTimes(1);
+        const focusedView = runtime.views.get(left)!;
+        expect(focusedView.webContents.focus).toHaveBeenCalledTimes(1);
+      } finally {
+        runtime.store = originalStore;
+      }
+    });
+
+    test("doSplitWith closes the bar (deliberate) then focuses the newly-split active tab", () => {
+      const left = runtime.store.create({ url: "https://left.test", title: "Left" }).id;
+      const right = runtime.store.create({ url: "https://right.test", title: "Right" }).id;
+      runtime.store.activate(left);
+      stubPaneViews(left, right);
+
+      void doSplitWith(right);
+
+      expect(runtime.layout).toMatchObject({ mode: "split", left, right, focused: "left" });
+      expect(closeCommandBarHook).toHaveBeenCalledTimes(1);
+      const focusedView = runtime.views.get(left)!;
+      expect(focusedView.webContents.focus).toHaveBeenCalledTimes(1);
+    });
   });
 });

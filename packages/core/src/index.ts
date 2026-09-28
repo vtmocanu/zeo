@@ -93,7 +93,13 @@ export type {
   SearchEngineId,
   SearchEngine,
 } from "./settings.js";
-export type { CommandBarMode, CommandBarState } from "./command-bar.js";
+export {
+  suggestionKey,
+  reselectIndex,
+  resolveAcceptIndex,
+  MAX_PREVIOUS_SUGGESTION_LISTS,
+} from "./command-bar.js";
+export type { CommandBarMode, CommandBarState, RevisionedSuggestions } from "./command-bar.js";
 export {
   openFind,
   setFindQuery,

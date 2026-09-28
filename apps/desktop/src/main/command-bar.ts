@@ -9,6 +9,9 @@ import {
   resolveInput,
   historyTerms,
   promoteQuickBrowse,
+  reselectIndex,
+  resolveAcceptIndex,
+  MAX_PREVIOUS_SUGGESTION_LISTS,
 } from "@zeo/core";
 import type {
   CommandBarMode,
@@ -27,6 +30,7 @@ import { activateTab, doSplitWith } from "./layout.js";
 import { teardownQuickBrowse } from "./quick-browse.js";
 import { openDownloadById } from "./downloads.js";
 import { logHistoryError } from "./history.js";
+import { resetCommandBarFocusSteal } from "./command-bar-focus.js";
 
 /**
  * Snapshots the store into the plain, store-free {@link SuggestCatalog} that
@@ -100,11 +104,19 @@ export function historyCandidates(): HistoryEntry[] {
 
 /**
  * Recomputes {@link commandBar}'s `suggestions` from the current `query` and a
- * fresh {@link buildCatalog} snapshot, then resets `selectedIndex` to the first
- * row (or `-1` for an empty list). Mutates state only — callers push and lay out.
+ * fresh {@link buildCatalog} snapshot. With `keepSelection` (a background
+ * re-rank, e.g. {@link refreshCommandState} on a load/title/broadcast tick),
+ * `selectedIndex` is remapped by {@link reselectIndex} so a row the user arrowed
+ * to stays selected across the re-rank; otherwise (a fresh query) it resets to
+ * the first row (or `-1` for an empty list), matching a user's typed input.
+ * Mutates state only — callers push and lay out.
  */
-export function recomputeSuggestions(): void {
+export function recomputeSuggestions({
+  keepSelection = false,
+}: { keepSelection?: boolean } = {}): void {
   const previous = runtime.commandBar.suggestions;
+  const previousIndex = runtime.commandBar.selectedIndex;
+  const previousRevision = runtime.commandBar.revision;
   // Grouped into display order (Go to, Tabs, Spaces, …), so selectedIndex and
   // accept(index) keep meaning "the n-th visible row".
   runtime.commandBar.suggestions = groupSuggestions(
@@ -114,12 +126,26 @@ export function recomputeSuggestions(): void {
       searchEngine: runtime.settings.searchEngine,
     }),
   );
-  runtime.commandBar.selectedIndex = runtime.commandBar.suggestions.length > 0 ? 0 : -1;
+  runtime.commandBar.selectedIndex = keepSelection
+    ? reselectIndex(previous, previousIndex, runtime.commandBar.suggestions)
+    : runtime.commandBar.suggestions.length > 0
+      ? 0
+      : -1;
   // A CHANGED list gets a fresh revision so a click bound to a prior list is
   // recognized as stale by acceptCommandBar. An identical list keeps its
   // revision, so an unrelated broadcast (title/favicon/navigation) that re-ranks
-  // to the same suggestions never invalidates a pending row click.
+  // to the same suggestions never invalidates a pending row click. A BACKGROUND
+  // re-rank (keepSelection) saves the outgoing list in commandBarPrevious so a
+  // click already in flight against it can still be remapped by
+  // resolveAcceptIndex; a user-driven change (a typed query) clears them, since
+  // a click rendered for an older query must never act on the new one.
   if (JSON.stringify(previous) !== JSON.stringify(runtime.commandBar.suggestions)) {
+    runtime.commandBarPrevious = keepSelection
+      ? [
+          ...runtime.commandBarPrevious,
+          { revision: previousRevision, suggestions: previous },
+        ].slice(-MAX_PREVIOUS_SUGGESTION_LISTS)
+      : [];
     runtime.commandBar.revision = ++runtime.commandBarRevision;
   }
 }
@@ -158,6 +184,11 @@ export function openCommandBar(mode: CommandBarMode): void {
     revision: runtime.commandBar.revision,
     surface: "bar",
   };
+  // A fresh session has no prior list a click could have been rendered against.
+  runtime.commandBarPrevious = [];
+  // A steal recorded just before this open (e.g. from the PREVIOUS session's
+  // teardown) must never leak into this session's first blur decision.
+  resetCommandBarFocusSteal();
   // Rank the initial suggestions before showing the overlay so the first pushed
   // state already carries them — a `Cmd+T` with empty text opens on the
   // recent-tabs list.
@@ -190,6 +221,11 @@ export function closeCommandBar(): void {
     revision: ++runtime.commandBarRevision,
     surface: "bar",
   };
+  // No session to remap a stray click against once the bar is closed.
+  runtime.commandBarPrevious = [];
+  // A steal recorded during this session must never outlive its close and be
+  // read by some unrelated later blur.
+  resetCommandBarFocusSteal();
   runtime.overlay?.setVisible(false);
   pushCommandBar();
   const activeTabId = runtime.store.activeTabId;
@@ -364,35 +400,72 @@ export function performSuggestion(s: Suggestion): void {
 
 /**
  * Accepts a suggestion and closes the bar. The target row is the explicit
- * `index` (a clicked row) when given, else the current `selectedIndex`, resolved
- * against the CURRENT `suggestions`. An explicit `index` outside
- * `0 .. suggestions.length - 1` throws — the invoke rejects and the bar is left
- * untouched (not closed, not mutated). With no index and an empty list
- * (`selectedIndex === -1`) it submits the raw query like the Enter action
- * ({@link submitCommandBar} closes the open bar) — except in `commands` mode,
- * which has no text action: it is a no-op there, leaving the bar open (submit
- * rejects in commands mode). The text kinds (`navigate`/`search`) also route
- * through {@link submitCommandBar} (which closes the bar itself, so no extra
- * close); a `command` kind runs {@link executeCommand} and then closes, except
- * `tab.new`, `bar.open-location`, and `bar.open-commands`, whose handlers
- * re-open or switch the bar and so are left open; every other kind runs
- * {@link performSuggestion} and then closes.
+ * `index` (a clicked row) when given, else the current `selectedIndex`. With no
+ * `revision` (the keyboard path, which always acts on `selectedIndex` against the
+ * current list), an explicit `index` outside `0 .. suggestions.length - 1`
+ * throws — the invoke rejects and the bar is left untouched (not closed, not
+ * mutated). With no index and an empty list (`selectedIndex === -1`) it submits
+ * the raw query like the Enter action ({@link submitCommandBar} closes the open
+ * bar) — except in `commands` mode, which has no text action: it is a no-op
+ * there, leaving the bar open (submit rejects in commands mode). The text kinds
+ * (`navigate`/`search`) also route through {@link submitCommandBar} (which
+ * closes the bar itself, so no extra close); a `command` kind runs
+ * {@link executeCommand} and then closes, except `tab.new`,
+ * `bar.open-location`, `bar.open-commands`, `history.open` and
+ * `downloads.open`, whose handlers re-open or switch the bar and so are left
+ * open; every other kind runs {@link performSuggestion} and then closes, except
+ * in `downloads` mode, where the bar stays open.
  *
  * `revision` is the {@link CommandBarState.revision} the renderer rendered the
- * clicked row against. When an explicit `index` is paired with a `revision` that
- * no longer matches the current list, the click raced a newer suggestion list;
- * it is rejected (thrown, so the invoke rejects) with the bar left untouched,
- * exactly like the out-of-range guard. The keyboard path passes no `revision`
- * (it acts on `selectedIndex` against the current list), so the guard is skipped.
+ * clicked row against. When an explicit `index` is paired with a `revision`, it
+ * is resolved by {@link resolveAcceptIndex} against the current list and, when
+ * `revision` instead matches one of the lists background re-ranks replaced
+ * since the last user-driven change ({@link runtime.commandBarPrevious}),
+ * remapped by suggestion identity to where that row now sits — so a click that
+ * raced a re-rank still lands on the row the user saw, rather than being
+ * rejected outright, EVEN THOUGH that row may no longer sit at the same index
+ * (or any index) in the current `suggestions`. A `null` resolution throws (so
+ * the invoke rejects) with the bar left untouched, with one of three messages
+ * naming whichever guard actually failed:
+ *   - `accept revision stale: ...` — `revision` is neither the current
+ *     revision nor one of the saved background revisions, so the click cannot
+ *     be resolved against anything;
+ *   - `accept index out of range: ...` — `index` was out of range for the list
+ *     it was rendered against (the current list when `revision` matches it, or
+ *     the saved list at that `revision` otherwise);
+ *   - `accept row gone: ...` — `index` was valid for the list it was rendered
+ *     against (a saved background revision), but that row's suggestion has
+ *     since left the current list entirely (e.g. the tab it named was closed).
  */
 export function acceptCommandBar(index?: number, revision?: number): void {
-  if (index !== undefined && revision !== undefined && revision !== runtime.commandBar.revision) {
-    throw new Error(`accept revision stale: ${revision} !== ${runtime.commandBar.revision}`);
+  let idx: number;
+  if (index !== undefined && revision !== undefined) {
+    const resolved = resolveAcceptIndex(
+      index,
+      revision,
+      { revision: runtime.commandBar.revision, suggestions: runtime.commandBar.suggestions },
+      runtime.commandBarPrevious,
+    );
+    if (resolved === null) {
+      if (revision === runtime.commandBar.revision) {
+        throw new Error(`accept index out of range: ${index}`);
+      }
+      const rendered = runtime.commandBarPrevious.find((p) => p.revision === revision);
+      if (rendered === undefined) {
+        throw new Error(`accept revision stale: ${revision} !== ${runtime.commandBar.revision}`);
+      }
+      if (index < 0 || index >= rendered.suggestions.length) {
+        throw new Error(`accept index out of range: ${index}`);
+      }
+      throw new Error(`accept row gone: ${index}`);
+    }
+    idx = resolved;
+  } else {
+    if (index !== undefined && (index < 0 || index >= runtime.commandBar.suggestions.length)) {
+      throw new Error(`accept index out of range: ${index}`);
+    }
+    idx = index ?? runtime.commandBar.selectedIndex;
   }
-  if (index !== undefined && (index < 0 || index >= runtime.commandBar.suggestions.length)) {
-    throw new Error(`accept index out of range: ${index}`);
-  }
-  const idx = index ?? runtime.commandBar.selectedIndex;
   if (idx === -1) {
     // Commands, promote, split, and downloads modes have no text action: a
     // no-match query simply leaves the bar open rather than routing to submit
@@ -447,13 +520,15 @@ export function acceptCommandBar(index?: number, revision?: number): void {
  * pin/unpin label and enabled flags change with context) and, when the bar is
  * open, its suggestions/layout/state (so enablement like Go Back updates without
  * retyping; the revision bumps to reject a stale click only when the re-ranked
- * list actually changes). Never calls {@link broadcast} — {@link broadcast}
- * calls it — so there is no recursion.
+ * list actually changes). This is a BACKGROUND re-rank, not a typed query, so it
+ * passes `keepSelection: true` — a row the user arrowed to must not jump back to
+ * row 0 just because a page finished loading. Never calls {@link broadcast} —
+ * {@link broadcast} calls it — so there is no recursion.
  */
 export function refreshCommandState(): void {
   runtime.rebuildMenu?.();
   if (runtime.commandBar.open) {
-    recomputeSuggestions();
+    recomputeSuggestions({ keepSelection: true });
     layoutOverlay();
     pushCommandBar();
   }
@@ -462,6 +537,12 @@ export function refreshCommandState(): void {
 // Register the onStateApplied hook: broadcast() and createViewFor's
 // did-finish-load listener call it to refresh the menu and open bar.
 runtime.onStateApplied = refreshCommandState;
+
+// Register the closeCommandBarHook: command-bar-focus.ts calls it instead of
+// importing closeCommandBar directly, since command-bar.ts imports layout.ts
+// and both layout.ts and views.ts import command-bar-focus.ts (madge cycle
+// guard — see the field's doc comment in state.ts).
+runtime.closeCommandBarHook = closeCommandBar;
 
 // --- Command bar --------------------------------------------------------------
 // The command-bar handlers drive the single overlay controller; commandBarState

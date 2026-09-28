@@ -213,7 +213,6 @@ test.describe("PRD 10.4 sidebar", () => {
       env: { ...process.env, ELECTRON_RENDERER_URL: "", ZEO_E2E: "1" },
     });
     sidebar = await sidebarWindow(app);
-    await waitForViewsIdle(app);
   });
 
   test.afterEach(async () => {
@@ -235,7 +234,6 @@ test.describe("PRD 10.4 sidebar", () => {
         await zeo.tabs.create(url);
       }, `${server.base}/page.html?probe=${token}`);
       await waitForViewUrl(app, token);
-      await waitForViewsIdle(app);
 
       const pill = sidebar.getByTestId("sidebar-url-pill");
       // Domain only: no port, no path, no query.
@@ -407,6 +405,9 @@ test.describe("PRD 10.4 sidebar", () => {
       const extra = await zeo.tabs.create("data:text/html,<title>cap-extra</title>cap-extra");
       return { favs, extra: extra.id };
     }, FAVORITES_MAX);
+    // Not a command-bar guard: let the 13 data: tabs finish loading so their
+    // title/favicon updates have landed and the grid is in its final render
+    // before the assertions below.
     await waitForViewsIdle(app);
     await expect(sidebar.getByTestId("favorite-tile")).toHaveCount(FAVORITES_MAX);
     expect(await favoriteIds(sidebar)).toEqual(created.favs);
@@ -473,6 +474,9 @@ test.describe("PRD 10.4 sidebar", () => {
     }
     const [a, b, c] = favs;
     await expect(sidebar.getByTestId("favorite-tile")).toHaveCount(3);
+    // Not a command-bar guard: let every load finish (these data: tabs and the
+    // seeded tab) before the drags, so no late title/favicon update re-renders
+    // the grid or the rows between measuring a box and dropping on it.
     await waitForViewsIdle(app);
     const todayBefore = await rowIds(sidebar, "unpinned-section");
     expect(todayBefore).toHaveLength(1);
@@ -569,6 +573,9 @@ test.describe("PRD 10.4 sidebar", () => {
       await zeo.tabs.activate(a);
       return { p, a, b, f, fav, c, secondId: second.id };
     });
+    // Not a command-bar guard: let the data: tabs finish loading so their
+    // title/favicon updates have landed and the rows are in their final render
+    // before the section assertions and the Clear click.
     await waitForViewsIdle(app);
     await expect.poll(() => rowIds(sidebar, "unpinned-section")).toEqual([setup.a, setup.b]);
     await expect.poll(() => rowIds(sidebar, "pinned-section")).toEqual([setup.p]);

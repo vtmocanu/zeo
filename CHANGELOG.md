@@ -9,7 +9,7 @@ milestone, a minor bump only for very large breakthroughs.
 
 ## [Unreleased]
 
-## [0.0.35] - 2026-09-27
+## [0.0.36] - 2026-09-28
 
 ### Added
 
@@ -37,6 +37,19 @@ milestone, a minor bump only for very large breakthroughs.
   picker's intensity slider.
 - The selected command-bar row's secondary text and shortcut hint are checked
   to meet 4.5:1 contrast in every space theme, in both light and dark.
+
+## [0.0.35] - 2026-09-27
+
+### Fixed
+
+- A tab finishing its page load no longer disturbs an open command bar. The
+  row you arrowed to stays selected when the results re-rank (it follows the
+  same tab, space or command even if it moves), a click that raced the
+  re-rank lands on the row you clicked instead of being dropped, and a loading
+  tab can no longer take focus from the bar and close it. The bar now closes
+  only when the window loses focus or you dismiss it, in split view too: a
+  background layout update, such as an idle tab being archived, no longer
+  closes it.
 
 ## [0.0.34] - 2026-09-27
 
