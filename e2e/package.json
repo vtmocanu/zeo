@@ -13,6 +13,6 @@
     "@zeo/core": "workspace:*",
     "electron": "^44.0.0",
     "playwright": "^1.55.0",
-    "typescript": "^5.9.2"
+    "typescript": "^7.0.0"
   }
 }
