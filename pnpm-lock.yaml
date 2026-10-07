@@ -163,7 +163,7 @@ settings:
   excludeLinksFromLockfile: false
 
 overrides:
-  electron: 44.4.5
+  electron: 44.7.0
 
 importers:
 
@@ -198,7 +198,7 @@ importers:
     dependencies:
       '@ghostery/adblocker-electron':
         specifier: ^2.11.3
-        version: 2.18.2(electron@44.4.5(supports-color@7.2.0))
+        version: 2.18.2(electron@44.7.0(supports-color@7.2.0))
       better-sqlite3:
         specifier: ^13.0.3
         version: 13.0.3
@@ -219,8 +219,8 @@ importers:
         specifier: workspace:*
         version: link:../ui
       electron:
-        specifier: 44.4.5
-        version: 44.4.5(supports-color@7.2.0)
+        specifier: 44.7.0
+        version: 44.7.0(supports-color@7.2.0)
       electron-builder:
         specifier: ^26.15.3
         version: 26.15.3(electron-builder-squirrel-windows@26.15.3)(supports-color@7.2.0)
@@ -283,8 +283,8 @@ importers:
         specifier: workspace:*
         version: link:../packages/core
       electron:
-        specifier: 44.4.5
-        version: 44.4.5(supports-color@7.2.0)
+        specifier: 44.7.0
+        version: 44.7.0(supports-color@7.2.0)
       playwright:
         specifier: ^1.55.0
         version: 1.63.0
@@ -296,14 +296,14 @@ importers:
     dependencies:
       '@ghostery/adblocker-electron':
         specifier: ^2.11.3
-        version: 2.18.2(electron@44.4.5(supports-color@7.2.0))
+        version: 2.18.2(electron@44.7.0(supports-color@7.2.0))
     devDependencies:
       '@types/node':
         specifier: ^24.5.2
         version: 24.19.0
       electron:
-        specifier: 44.4.5
-        version: 44.4.5(supports-color@7.2.0)
+        specifier: 44.7.0
+        version: 44.7.0(supports-color@7.2.0)
       typescript:
         specifier: ^5.9.2
         version: 5.9.3
@@ -817,12 +817,12 @@ packages:
   '@ghostery/adblocker-electron-preload@2.18.2':
     resolution: {integrity: sha512-l941hNABXsUMx1oqVSHjRMQXWFCmlC/DF8rHBBOH+A0uxLjL6r62Fl6KsL7F4hxlg3dyWrDPEIcKzaxWqRdfOg==}
     peerDependencies:
-      electron: 44.4.5
+      electron: 44.7.0
 
   '@ghostery/adblocker-electron@2.18.2':
     resolution: {integrity: sha512-lpPh7EmFLDIW+OyUKaYCUUUHwVfVXpwlwfxzo6Ilc+oH6N+rCTViT08olX4jXsfxezZ6zfyCG5SL9iLBU1wrng==}
     peerDependencies:
-      electron: 44.4.5
+      electron: 44.7.0
 
   '@ghostery/adblocker-extended-selectors@2.18.2':
     resolution: {integrity: sha512-doKNShBk3+czQL08UkrysHkCPeG/kNPlXvz3DH7SXxD9Y78ovWkEAhjeR+upoan3fomJJuK3dD+IrlofnjckYw==}
@@ -1651,8 +1651,8 @@ packages:
     resolution: {integrity: sha512-bO3y10YikuUwUuDUQRM4KfwNkKhnpVO7IPdbsrejwN9/AABJzzTQ4GeHwyzNSrVO+tEH3/Np255a3sVZpZDjvg==}
     engines: {node: '>=8.0.0'}
 
-  electron@44.4.5:
-    resolution: {integrity: sha512-SjgoaeYsSWZfJzubgQU7juvuXMTvn6/e1gAHdGFA/yuMbpF+I+skYqIJ6DdXBXHeWbkbpNpmwZCTpiivtlWZSw==}
+  electron@44.7.0:
+    resolution: {integrity: sha512-aUq9/zLAAFYc+a9gy6cd0C3Y/N/RmovLCD8TV8LhIzNhuND6HEgsu96jJz9cbAxvckSPv+Trf2PKEjktoZgFkw==}
     engines: {node: '>= 22.12.0'}
     hasBin: true
 
@@ -3419,16 +3419,16 @@ snapshots:
     dependencies:
       '@ghostery/adblocker-extended-selectors': 2.18.2
 
-  '@ghostery/adblocker-electron-preload@2.18.2(electron@44.4.5(supports-color@7.2.0))':
+  '@ghostery/adblocker-electron-preload@2.18.2(electron@44.7.0(supports-color@7.2.0))':
     dependencies:
       '@ghostery/adblocker-content': 2.18.2
-      electron: 44.4.5(supports-color@7.2.0)
+      electron: 44.7.0(supports-color@7.2.0)
 
-  '@ghostery/adblocker-electron@2.18.2(electron@44.4.5(supports-color@7.2.0))':
+  '@ghostery/adblocker-electron@2.18.2(electron@44.7.0(supports-color@7.2.0))':
     dependencies:
       '@ghostery/adblocker': 2.18.2
-      '@ghostery/adblocker-electron-preload': 2.18.2(electron@44.4.5(supports-color@7.2.0))
-      electron: 44.4.5(supports-color@7.2.0)
+      '@ghostery/adblocker-electron-preload': 2.18.2(electron@44.7.0(supports-color@7.2.0))
+      electron: 44.7.0(supports-color@7.2.0)
       tldts-experimental: 7.4.11
 
   '@ghostery/adblocker-extended-selectors@2.18.2': {}
@@ -4348,7 +4348,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  electron@44.4.5(supports-color@7.2.0):
+  electron@44.7.0(supports-color@7.2.0):
     dependencies:
       '@electron-internal/extract-zip': 1.0.5
       '@electron/get': 5.1.0(supports-color@7.2.0)
